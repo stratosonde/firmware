@@ -22,7 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stm32wlxx_hal_pwr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,7 +43,7 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc;
 
-I2C_HandleTypeDef hi2c3;
+I2C_HandleTypeDef hi2c2;
 
 RTC_HandleTypeDef hrtc;
 
@@ -59,7 +59,7 @@ DMA_HandleTypeDef hdma_usart1_tx;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C3_Init(void);
+static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 void system_sleep(void);
 void leds_boot_seq(void);
@@ -69,22 +69,22 @@ void leds_boot_seq(void);
 /* USER CODE BEGIN 0 */
 void system_sleep(void)
 {
-	HAL_GPIO_WritePin(LED2_GPIO_Port, LED1_Pin, 0);
-	HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, 0);
-	HAL_I2C_DeInit(&hi2c3);
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0); /* Turn off the actual LED on PA0 */
+	HAL_I2C_DeInit(&hi2c2);
 	HAL_ADC_DeInit(&hadc);
 	HAL_UART_DeInit(&huart1);
 }
 void leds_boot_seq(void)
 {
-  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, 1);
-  HAL_Delay(1000);
-  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, 0);
-  HAL_Delay(1000);
-  HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, 1);
-  HAL_Delay(1000);
-  HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, 0);
-  HAL_Delay(1000);
+  /* Use the actual LED on PA0 for boot sequence */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
+  HAL_Delay(500);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0);
+  HAL_Delay(500);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
+  HAL_Delay(500);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0);
+  HAL_Delay(500);
 }
 /* USER CODE END 0 */
 
@@ -118,11 +118,12 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_LoRaWAN_Init();
-  MX_I2C3_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   leds_boot_seq();
 
-  system_sleep();
+  /* Removed system_sleep() call to keep I2C and UART active for debug */
+  /* system_sleep() call commented out to ensure I2C remains active for SHT31 sensor */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -132,8 +133,13 @@ int main(void)
 
     /* USER CODE END WHILE */
     MX_LoRaWAN_Process();
-
+    
     /* USER CODE BEGIN 3 */
+    /* Enable proper sleep mode for power saving */
+    /* Brief LED flash on PA0 only during active processing */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET); /* Turn on LED on PA0 */
+    HAL_Delay(10); /* Very brief flash */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET); /* Turn off LED */
   }
   /* USER CODE END 3 */
 }
@@ -234,50 +240,52 @@ void MX_ADC_Init(void)
 }
 
 /**
-  * @brief I2C3 Initialization Function
+  * @brief I2C2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C3_Init(void)
+static void MX_I2C2_Init(void)
 {
 
-  /* USER CODE BEGIN I2C3_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-  /* USER CODE END I2C3_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-  /* USER CODE BEGIN I2C3_Init 1 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-  /* USER CODE END I2C3_Init 1 */
-  hi2c3.Instance = I2C3;
-  hi2c3.Init.Timing = 0x00B07CB4;
-  hi2c3.Init.OwnAddress1 = 0;
-  hi2c3.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c3.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c3.Init.OwnAddress2 = 0;
-  hi2c3.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-  hi2c3.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c3.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c3) != HAL_OK)
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  /* Use a very conservative timing value for maximum reliability */
+  hi2c2.Init.Timing = 0x10909CEC; /* Very slow 10kHz I2C speed for maximum reliability */
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  /* Ensure clock stretching is enabled - critical for SHT31 with clock stretching commands */
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
 
   /** Configure Analogue filter
   */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c3, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
   {
     Error_Handler();
   }
 
   /** Configure Digital filter
   */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c3, 0) != HAL_OK)
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C3_Init 2 */
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-  /* USER CODE END I2C3_Init 2 */
+  /* USER CODE END I2C2_Init 2 */
 
 }
 
@@ -450,30 +458,47 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LED2_Pin|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|LED2_Pin|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, GPIO_PIN_RESET);
+  
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
+  
+  /* Configure PA0 as output for the actual LED on the hardware */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  
+  /* Configure PB5 as output for debug LED */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LED2_Pin RF_CTRL1_Pin RF_CTRL2_Pin */
   GPIO_InitStruct.Pin = LED2_Pin|RF_CTRL1_Pin|RF_CTRL2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  //HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LED1_Pin */
   GPIO_InitStruct.Pin = LED1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
+  //HAL_GPIO_Init(LED1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SOS_Button_Pin */
   GPIO_InitStruct.Pin = SOS_Button_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(SOS_Button_GPIO_Port, &GPIO_InitStruct);
+  //HAL_GPIO_Init(SOS_Button_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);

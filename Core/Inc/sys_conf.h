@@ -42,17 +42,17 @@ extern "C" {
   * @brief Temperature and pressure values are retrieved from sensors shield
   *        (instead of sending dummy values). It requires MEMS IKS shield
   */
-#define SENSOR_ENABLED                       0
+#define SENSOR_ENABLED                       1
 
 /**
   * @brief  Verbose level for all trace logs
   */
-#define VERBOSE_LEVEL                        VLEVEL_L
+#define VERBOSE_LEVEL                        VLEVEL_H
 
 /**
   * @brief Enable trace logs
   */
-#define APP_LOG_ENABLED                      0
+#define APP_LOG_ENABLED                      1
 
 /**
   * @brief Activate monitoring (probes) of some internal RF signals for debug purpose

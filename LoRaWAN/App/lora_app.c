@@ -364,17 +364,43 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
+  APP_LOG(TS_ON, VLEVEL_M, "Preparing to send data using Cayenne LPP format...\r\n");
 
-
-	uint8_t Data[100] = {'\0'};
-	static uint32_t cntr = 0;
-	uint16_t bat = SYS_GetBatteryLevel();
-	int len = sprintf((char *)Data,"RadioSonde: BAT:%d,#:%ld",bat,cntr++);
-	LmHandlerAppData_t Data_t;
-	Data_t.Port = 1 ;
-	Data_t.BufferSize = len ;
-	Data_t.Buffer = Data;
-	LmHandlerSend(&Data_t, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0 );
+  // Get sensor data
+  sensor_t sensor_data;
+  EnvSensors_Read(&sensor_data);
+  
+  // Initialize Cayenne LPP payload
+  CayenneLppReset();
+  
+  // Add temperature data (channel 1)
+  CayenneLppAddTemperature(1, sensor_data.temperature);
+  
+  // Add humidity data (channel 2)
+  CayenneLppAddRelativeHumidity(2, sensor_data.humidity);
+  
+  // Add pressure data (channel 3)
+  CayenneLppAddBarometricPressure(3, sensor_data.pressure);
+  
+  // Log the data being sent
+  APP_LOG(TS_ON, VLEVEL_M, "Cayenne LPP data prepared (len=%d), Temp: %.1f°C, Humidity: %.1f%%, Pressure: %.1fmbar\r\n", 
+          CayenneLppGetSize(), sensor_data.temperature, sensor_data.humidity, sensor_data.pressure);
+  
+  // Debug: Print the raw buffer contents
+  APP_LOG(TS_ON, VLEVEL_M, "Buffer contents: ");
+  for (uint8_t i = 0; i < CayenneLppGetSize(); i++) {
+    APP_LOG(TS_OFF, VLEVEL_M, "%02X ", CayenneLppGetBuffer()[i]);
+  }
+  APP_LOG(TS_OFF, VLEVEL_M, "\r\n");
+  
+  // Prepare and send the LoRaWAN packet
+  LmHandlerAppData_t appData;
+  appData.Port = LORAWAN_USER_APP_PORT;
+  appData.BufferSize = CayenneLppGetSize();
+  appData.Buffer = CayenneLppGetBuffer();
+  
+  LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+  APP_LOG(TS_ON, VLEVEL_M, "LmHandlerSend status: %d\r\n", status);
   /* USER CODE END SendTxData_1 */
 }
 
@@ -399,12 +425,22 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
+  APP_LOG(TS_ON, VLEVEL_M, "OnTxData: status = %d, datarate = %d, power = %d\r\n", 
+          params->Status, params->Datarate, params->TxPower);
   /* USER CODE END OnTxData_1 */
 }
 
 static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
 {
   /* USER CODE BEGIN OnJoinRequest_1 */
+  if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
+  {
+    APP_LOG(TS_ON, VLEVEL_M, "Join Success! DevAddr: %08X\r\n", joinParams->CommissioningParams->DevAddr);
+  }
+  else
+  {
+    APP_LOG(TS_ON, VLEVEL_M, "Join Failed! Status: %d\r\n", joinParams->Status);
+  }
   /* USER CODE END OnJoinRequest_1 */
 }
 
@@ -611,4 +647,3 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
 
   /* USER CODE END OnRestoreContextRequest_Last */
 }
-

@@ -39,13 +39,13 @@ extern "C" {
 /* Exported constants --------------------------------------------------------*/
 
 /* LoraWAN application configuration (Mw is configured by lorawan_conf.h) */
-#define ACTIVE_REGION                               LORAMAC_REGION_EU868
+#define ACTIVE_REGION                               LORAMAC_REGION_US915
 
 /* USER CODE BEGIN EC_CAYENNE_LPP */
 /*!
  * CAYENNE_LPP is myDevices Application server.
  */
-/*#define CAYENNE_LPP*/
+#define CAYENNE_LPP
 /* USER CODE END EC_CAYENNE_LPP */
 
 /*!
@@ -85,7 +85,7 @@ extern "C" {
  * LoRaWAN Default Data Rate
  * @note Please note that LORAWAN_DEFAULT_DATA_RATE is used only when LORAWAN_ADR_STATE is disabled
  */
-#define LORAWAN_DEFAULT_DATA_RATE                   DR_0
+#define LORAWAN_DEFAULT_DATA_RATE                   DR_1
 
 /*!
  * LoRaWAN Default Tx output power

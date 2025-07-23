@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stdint.h"
+#include "string.h"
 #include "platform.h"
 #include "sys_conf.h"
 #include "sys_sensors.h"
@@ -29,6 +30,9 @@
 
 /* USER CODE BEGIN Includes */
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+#include "sht31.h"
+#include "ms5607.h"
+#include "sys_app.h" /* For APP_LOG */
 #if defined (X_NUCLEO_IKS01A2)
 #warning "IKS drivers are today available for several families but not stm32WL"
 #warning "up to the user adapt IKS low layer to map it on WL board driver"
@@ -61,7 +65,7 @@
 #warning "IKS drivers are today available for several families but not stm32WL, follow steps defined in sys_sensors.c"
 #include "iks01a3_env_sensors.h"
 #else  /* not X_IKS01xx */
-#error "user to include its sensor drivers"
+/* Using custom SHT31 driver, no error needed */
 #endif  /* X_NUCLEO_IKS01xx */
 #elif !defined (SENSOR_ENABLED)
 #error SENSOR_ENABLED not defined
@@ -98,6 +102,90 @@
 
 /* USER CODE BEGIN PV */
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+/* SHT31 sensor handle */
+SHT31_HandleTypeDef hsht31;
+
+/* MS5607 sensor handle */
+MS5607_HandleTypeDef hms5607;
+
+/* I2C handle - declared in main.c but we need to access it here */
+extern I2C_HandleTypeDef hi2c2;
+
+/* Function to scan I2C bus for devices with enhanced debugging */
+static void ScanI2CBus(I2C_HandleTypeDef *hi2c)
+{
+  printf("Scanning I2C bus for devices with enhanced debugging...\r\n");
+  
+  uint8_t devices_found = 0;
+  HAL_StatusTypeDef status;
+  
+  /* Try all possible 7-bit addresses with more detailed debugging */
+  for (uint8_t address = 1; address < 128; address++)
+  {
+    /* Add a delay between scans to give the I2C bus time to recover */
+    HAL_Delay(5);
+    
+    printf("Trying address 0x%02X: ", address);
+    
+    /* Try multiple times for each address */
+    for (uint8_t retry = 0; retry < 3; retry++)
+    {
+      /* The HAL_I2C_IsDeviceReady function expects the address to be shifted left by 1 */
+      /* This is because the LSB is used for read/write bit */
+      status = HAL_I2C_IsDeviceReady(hi2c, (address << 1), 1, 100);
+      
+      if (status == HAL_OK)
+      {
+        printf("FOUND on retry %d!\r\n", retry);
+        
+        /* Print additional debug info */
+        printf("  - Device found at address 0x%02X (7-bit address)\r\n", address);
+        printf("  - This corresponds to 0x%02X (8-bit address) for write operations\r\n", (address << 1));
+        printf("  - This corresponds to 0x%02X (8-bit address) for read operations\r\n", (address << 1) | 0x01);
+        
+        /* Blink LED to indicate device found */
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+        
+        devices_found++;
+        break; /* Device found, break out of retry loop */
+      }
+      
+      /* Small delay between retries */
+      HAL_Delay(5);
+    }
+    
+    if (status != HAL_OK)
+    {
+      printf("not found\r\n");
+    }
+  }
+  
+  if (devices_found == 0)
+  {
+    printf("No I2C devices found on the bus\r\n");
+    printf("Possible issues:\r\n");
+    printf("1. Check physical connections (SDA, SCL, VDD, GND)\r\n");
+    printf("2. Verify pull-up resistors on SDA and SCL lines\r\n");
+    printf("3. Ensure sensor has proper power supply\r\n");
+    printf("4. Try different I2C timing settings\r\n");
+    
+    /* Blink LED rapidly to indicate no devices found */
+    for (int i = 0; i < 5; i++)
+    {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+      HAL_Delay(50);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+      HAL_Delay(50);
+    }
+  }
+  else
+  {
+    printf("Total I2C devices found: %d\r\n", devices_found);
+  }
+}
+
 #if defined (X_NUCLEO_IKS01A2)
 #warning "IKS drivers are today available for several families but not stm32WL"
 #warning "up to the user adapt IKS low layer to map it on WL board driver"
@@ -105,8 +193,6 @@
 IKS01A2_ENV_SENSOR_Capabilities_t EnvCapabilities;
 #elif defined (X_NUCLEO_IKS01A3)
 IKS01A3_ENV_SENSOR_Capabilities_t EnvCapabilities;
-#else  /* not X_IKS01Ax */
-#error "user to include its sensor drivers"
 #endif  /* X_NUCLEO_IKS01 */
 #elif !defined (SENSOR_ENABLED)
 #error SENSOR_ENABLED not defined
@@ -127,6 +213,137 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   float PRESSURE_Value = PRESSURE_DEFAULT_VAL;
 
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+  /* Read from SHT31 sensor */
+  int32_t temp, hum;
+  SHT31_StatusTypeDef sht31_status;
+  MS5607_StatusTypeDef ms5607_status;
+  uint8_t retry_count = 0;
+  const uint8_t MAX_RETRIES = 3;
+  
+  /* Turn on LED on PA0 briefly to indicate start of sensor reading */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+  HAL_Delay(50);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+  
+  /* Try to read temperature and humidity from SHT31 with retries */
+  while (retry_count < MAX_RETRIES) {
+    /* If this is a retry, indicate with LED pattern */
+    if (retry_count > 0) {
+      printf("SHT31 read retry #%d\r\n", retry_count);
+      
+      /* Blink LED to indicate retry attempt */
+      for (int i = 0; i < retry_count; i++) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_Delay(50);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_Delay(50);
+      }
+      
+      /* Reset the I2C bus before retry */
+      HAL_I2C_DeInit(&hi2c2);
+      HAL_Delay(10);
+      HAL_I2C_Init(&hi2c2);
+      HAL_Delay(10);
+      
+      /* Re-initialize the SHT31 sensor */
+      SHT31_Init(&hsht31);
+      HAL_Delay(50);
+    }
+    
+    /* Read temperature and humidity from SHT31 */
+    sht31_status = SHT31_ReadTempAndHumidity(&hsht31, &temp, &hum);
+    
+    if (sht31_status == SHT31_OK) {
+      /* Convert from int32_t (°C*100, %*100) to float */
+      TEMPERATURE_Value = (float)temp / 100.0f;
+      HUMIDITY_Value = (float)hum / 100.0f;
+      
+      /* Print debug info to console */
+      printf("SHT31 read successful: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
+              TEMPERATURE_Value, HUMIDITY_Value);
+      
+      /* Blink LED twice to indicate successful reading */
+      for (int i = 0; i < 2; i++) {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_Delay(100);
+      }
+      
+      /* Success - break out of retry loop */
+      break;
+    } else {
+      /* Print error to console */
+      printf("SHT31 read failed with error code: %d (retry %d/%d)\r\n", 
+              sht31_status, retry_count + 1, MAX_RETRIES);
+      
+      /* Increment retry counter */
+      retry_count++;
+      
+      /* If we've exhausted all retries, use default values */
+      if (retry_count >= MAX_RETRIES) {
+        /* Blink LED in pattern to indicate all retries failed */
+        for (int i = 0; i < 5; i++) {
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+          HAL_Delay(100);
+          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+          HAL_Delay(100);
+        }
+        
+        /* Use default values since reading failed */
+        TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
+        HUMIDITY_Value = HUMIDITY_DEFAULT_VAL;
+        printf("Using default values: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
+                TEMPERATURE_Value, HUMIDITY_Value);
+      } else {
+        /* Wait before retry */
+        HAL_Delay(100 * retry_count); /* Increasing delay with each retry */
+      }
+    }
+  }
+  
+  /* Read pressure and temperature from MS5607 sensor */
+  if (hms5607.IsInitialized)
+  {
+    float ms5607_temp, ms5607_press;
+    ms5607_status = MS5607_ReadPressureAndTemperature(&hms5607, &ms5607_temp, &ms5607_press);
+    
+    if (ms5607_status == MS5607_OK)
+    {
+      /* Use MS5607 pressure value */
+      PRESSURE_Value = ms5607_press;
+      
+      /* 3 quick blinks = MS5607 read successful */
+      for (int i = 0; i < 3; i++)
+      {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_Delay(100);
+      }
+    }
+    else
+    {
+      /* 2 quick blinks = MS5607 initialized but read failed */
+      for (int i = 0; i < 2; i++)
+      {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+        HAL_Delay(100);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+        HAL_Delay(100);
+      }
+      PRESSURE_Value = PRESSURE_DEFAULT_VAL;
+    }
+  }
+  else
+  {
+    /* 1 quick blink = MS5607 not initialized */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+    HAL_Delay(100);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+    PRESSURE_Value = PRESSURE_DEFAULT_VAL;
+  }
+  
 #if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
   IKS01A2_ENV_SENSOR_GetValue(HTS221_0, ENV_HUMIDITY, &HUMIDITY_Value);
   IKS01A2_ENV_SENSOR_GetValue(HTS221_0, ENV_TEMPERATURE, &TEMPERATURE_Value);
@@ -145,14 +362,13 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
 #endif /* USE_IKS01A3_ENV_SENSOR_LPS22HH_0 */
 #else
   TEMPERATURE_Value = (SYS_GetTemperatureLevel() >> 8);
-#endif  /* SENSOR_ENABLED */
+#endif /* SENSOR_ENABLED */
 
   sensor_data->humidity    = HUMIDITY_Value;
   sensor_data->temperature = TEMPERATURE_Value;
   sensor_data->pressure    = PRESSURE_Value;
-
-  sensor_data->latitude  = (int32_t)((STSOP_LATTITUDE  * MAX_GPS_POS) / 90);
-  sensor_data->longitude = (int32_t)((STSOP_LONGITUDE  * MAX_GPS_POS) / 180);
+  sensor_data->latitude    = (int32_t)((STSOP_LATTITUDE  * MAX_GPS_POS) / 90);
+  sensor_data->longitude   = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
 
   return 0;
   /* USER CODE END EnvSensors_Read */
@@ -163,6 +379,146 @@ int32_t EnvSensors_Init(void)
   int32_t ret = 0;
   /* USER CODE BEGIN EnvSensors_Init */
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+  ScanI2CBus(&hi2c2);
+  
+  /* Try both possible I2C addresses for the SHT31 sensor */
+  /* First try address 0x44 (ADDR pin pulled low) - this is the most common configuration */
+  hsht31.hi2c = &hi2c2;
+  hsht31.Address = SHT31_I2C_ADDRESS_A; /* Address when ADDR is pulled low (0x44) */
+  hsht31.Mode = SHT31_MODE_HIGH_PRECISION;
+  
+  /* Print debug info */
+  printf("Initializing SHT31 with address 0x%02X\r\n", hsht31.Address);
+  
+  /* Initialize the SHT31 sensor with LED debugging */
+  ret = SHT31_Init(&hsht31);
+  
+  /* If initialization fails with address 0x44, try address 0x45 */
+  if (ret != SHT31_OK)
+  {
+    printf("SHT31 initialization failed with address 0x44, trying address 0x45...\r\n");
+    
+    /* Blink LED to indicate trying alternate address */
+    for (int i = 0; i < 2; i++)
+    {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+      HAL_Delay(200);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+      HAL_Delay(200);
+    }
+    
+    /* Try with address 0x45 (ADDR pin pulled high) */
+    hsht31.Address = SHT31_I2C_ADDRESS_B; /* Address when ADDR is pulled high (0x45) */
+    ret = SHT31_Init(&hsht31);
+    
+    if (ret == SHT31_OK)
+    {
+      printf("SHT31 initialization successful with address 0x45\r\n");
+    }
+  }
+  else
+  {
+    printf("SHT31 initialization successful with address 0x44\r\n");
+  }
+  
+  /* If initialization fails, blink the LED on PA0 to indicate error */
+  if (ret != SHT31_OK)
+  {
+    /* Blink LED on PA0 to indicate SHT31 initialization error */
+    for (int i = 0; i < 5; i++)
+    {
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+      HAL_Delay(200);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+      HAL_Delay(200);
+    }
+    
+    /* Continue anyway to avoid system crash, but log the error */
+    printf("SHT31 initialization failed with error code: %d\r\n", ret);
+    /* Don't call Error_Handler() to avoid system crash */
+  }
+  else
+  {
+    /* Blink LED once to indicate successful initialization */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+    HAL_Delay(500);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+    
+    printf("SHT31 initialized successfully\r\n");
+  }
+  
+  /* Initialize MS5607 pressure sensor */
+  printf("Initializing MS5607 pressure sensor...\r\n");
+  
+  /* IMPORTANT: Make sure the PS pin is pulled HIGH for I2C mode */
+  printf("REMINDER: MS5607 PS pin must be HIGH for I2C mode, LOW for SPI mode\r\n");
+  
+  /* Zero-initialize the handle to ensure clean state */
+  memset(&hms5607, 0, sizeof(hms5607));
+  
+  /* User confirmed CSB is low, so we should use address 0x77 */
+  hms5607.hi2c = &hi2c2;
+  hms5607.Address = MS5607_I2C_ADDRESS_B; /* 0x77 when CSB is connected to GND (low) */
+  /* When shifted for I2C operations: 0xEE for write, 0xEF for read */
+  hms5607.PressureOsr = MS5607_OSR_4096;  /* Highest precision */
+  hms5607.TemperatureOsr = MS5607_OSR_4096; /* Highest precision */
+  
+  /* Don't reset I2C bus since SHT31 is already working on it */
+  /* Just add a small delay before initializing */
+  HAL_Delay(100);
+  
+  printf("Trying MS5607 with address 0x77 (CSB low)...\r\n");
+  
+  /* Initialize the MS5607 sensor with multiple attempts */
+  MS5607_StatusTypeDef ms5607_status = MS5607_ERROR;
+  uint8_t init_attempts = 0;
+  const uint8_t MAX_INIT_ATTEMPTS = 5;
+  
+  while (init_attempts < MAX_INIT_ATTEMPTS && ms5607_status != MS5607_OK) {
+    printf("MS5607 initialization attempt %d with address 0x%02X\r\n", 
+           init_attempts + 1, hms5607.Address);
+    
+    /* Reset the sensor before each attempt */
+    MS5607_Reset(&hms5607);
+    HAL_Delay(20); /* Wait for reset to complete */
+    
+    /* Initialize the sensor */
+    ms5607_status = MS5607_Init(&hms5607);
+    
+    if (ms5607_status != MS5607_OK) {
+      printf("MS5607 initialization failed, error code: %d\r\n", ms5607_status);
+      
+      /* Blink LED to indicate retry */
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+      HAL_Delay(200);
+      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+      HAL_Delay(200);
+      
+      /* Try alternate address if we've tried a few times with the current address */
+      if (init_attempts == 2 && hms5607.Address == MS5607_I2C_ADDRESS_B) {
+        printf("Switching to alternate MS5607 address 0x76 (CSB high)...\r\n");
+        hms5607.Address = MS5607_I2C_ADDRESS_A;
+      }
+      
+      /* Don't reset I2C bus since SHT31 is already working on it */
+      /* Just add a small delay before next attempt */
+      HAL_Delay(100);
+      
+      init_attempts++;
+    }
+  }
+  
+  /* Check if initialization was successful */
+  if (ms5607_status != MS5607_OK)
+  {
+    printf("MS5607 initialization failed with error code: %d\r\n", ms5607_status);
+    /* Continue anyway to avoid system crash */
+  }
+  else
+  {
+    printf("MS5607 initialized successfully\r\n");
+  }
+  
   /* Init */
 #if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
   ret = IKS01A2_ENV_SENSOR_Init(HTS221_0, ENV_TEMPERATURE | ENV_HUMIDITY);

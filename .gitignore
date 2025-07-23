@@ -1,0 +1,33 @@
+# Build artifacts
+Debug/
+*.o
+*.elf
+*.map
+*.list
+*.su
+*.d
+*.cyclo
+
+# IDE files
+.settings/
+*.launch
+
+# Temporary files
+*.tmp
+*.temp
+fix_instructions.txt
+
+# Documentation files (should be in docs/)
+*.pdf
+
+# Reference materials
+Reference/
+datasheets/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# STM32CubeIDE specific
+.metadata/
+.recommenders/
