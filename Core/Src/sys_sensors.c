@@ -220,128 +220,41 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   uint8_t retry_count = 0;
   const uint8_t MAX_RETRIES = 3;
   
-  /* Turn on LED on PA0 briefly to indicate start of sensor reading */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-  HAL_Delay(50);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-  
-  /* Try to read temperature and humidity from SHT31 with retries */
-  while (retry_count < MAX_RETRIES) {
-    /* If this is a retry, indicate with LED pattern */
-    if (retry_count > 0) {
-      printf("SHT31 read retry #%d\r\n", retry_count);
-      
-      /* Blink LED to indicate retry attempt */
-      for (int i = 0; i < retry_count; i++) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(50);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(50);
-      }
-      
-      /* Reset the I2C bus before retry */
-      HAL_I2C_DeInit(&hi2c2);
-      HAL_Delay(10);
-      HAL_I2C_Init(&hi2c2);
-      HAL_Delay(10);
-      
-      /* Re-initialize the SHT31 sensor */
-      SHT31_Init(&hsht31);
-      HAL_Delay(50);
-    }
-    
-    /* Read temperature and humidity from SHT31 */
-    sht31_status = SHT31_ReadTempAndHumidity(&hsht31, &temp, &hum);
-    
-    if (sht31_status == SHT31_OK) {
-      /* Convert from int32_t (°C*100, %*100) to float */
-      TEMPERATURE_Value = (float)temp / 100.0f;
-      HUMIDITY_Value = (float)hum / 100.0f;
-      
-      /* Print debug info to console */
-      printf("SHT31 read successful: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
-              TEMPERATURE_Value, HUMIDITY_Value);
-      
-      /* Blink LED twice to indicate successful reading */
-      for (int i = 0; i < 2; i++) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
-      }
-      
-      /* Success - break out of retry loop */
-      break;
-    } else {
-      /* Print error to console */
-      printf("SHT31 read failed with error code: %d (retry %d/%d)\r\n", 
-              sht31_status, retry_count + 1, MAX_RETRIES);
-      
-      /* Increment retry counter */
-      retry_count++;
-      
-      /* If we've exhausted all retries, use default values */
-      if (retry_count >= MAX_RETRIES) {
-        /* Blink LED in pattern to indicate all retries failed */
-        for (int i = 0; i < 5; i++) {
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-          HAL_Delay(100);
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-          HAL_Delay(100);
-        }
-        
-        /* Use default values since reading failed */
-        TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
-        HUMIDITY_Value = HUMIDITY_DEFAULT_VAL;
-        printf("Using default values: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
-                TEMPERATURE_Value, HUMIDITY_Value);
-      } else {
-        /* Wait before retry */
-        HAL_Delay(100 * retry_count); /* Increasing delay with each retry */
-      }
-    }
+  /* Read temperature and humidity from SHT31 */
+  sht31_status = SHT31_ReadTempAndHumidity(&hsht31, &temp, &hum);
+  if (sht31_status == SHT31_OK) {
+    TEMPERATURE_Value = (float)temp / 100.0f;
+    HUMIDITY_Value = (float)hum / 100.0f;
   }
   
-  /* Read pressure and temperature from MS5607 sensor */
-  if (hms5607.IsInitialized)
+  /* MS5607: Read PROM, temperature, and pressure every cycle */
   {
     float ms5607_temp, ms5607_press;
-    ms5607_status = MS5607_ReadPressureAndTemperature(&hms5607, &ms5607_temp, &ms5607_press);
     
-    if (ms5607_status == MS5607_OK)
-    {
-      /* Use MS5607 pressure value */
-      PRESSURE_Value = ms5607_press;
+    /* Ensure handle is properly configured (in case it wasn't set during init) */
+    hms5607.hi2c = &hi2c2;
+    hms5607.Address = 0x77;
+    hms5607.PressureOsr = MS5607_OSR_4096;
+    hms5607.TemperatureOsr = MS5607_OSR_4096;
+    
+    /* Read calibration data from PROM */
+    ms5607_status = MS5607_ReadCalibration(&hms5607);
+    
+    if (ms5607_status == MS5607_OK) {
+      /* Set initialized flag so read function works */
+      hms5607.IsInitialized = 1;
       
-      /* 3 quick blinks = MS5607 read successful */
-      for (int i = 0; i < 3; i++)
-      {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
+      /* Read pressure and temperature */
+      ms5607_status = MS5607_ReadPressureAndTemperature(&hms5607, &ms5607_temp, &ms5607_press);
+      
+      if (ms5607_status == MS5607_OK) {
+        PRESSURE_Value = ms5607_press;
+      } else {
+        PRESSURE_Value = PRESSURE_DEFAULT_VAL;
       }
-    }
-    else
-    {
-      /* 2 quick blinks = MS5607 initialized but read failed */
-      for (int i = 0; i < 2; i++)
-      {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
-      }
+    } else {
       PRESSURE_Value = PRESSURE_DEFAULT_VAL;
     }
-  }
-  else
-  {
-    /* 1 quick blink = MS5607 not initialized */
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(100);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-    PRESSURE_Value = PRESSURE_DEFAULT_VAL;
   }
   
 #if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
@@ -448,76 +361,12 @@ int32_t EnvSensors_Init(void)
   }
   
   /* Initialize MS5607 pressure sensor */
-  printf("Initializing MS5607 pressure sensor...\r\n");
-  
-  /* IMPORTANT: Make sure the PS pin is pulled HIGH for I2C mode */
-  printf("REMINDER: MS5607 PS pin must be HIGH for I2C mode, LOW for SPI mode\r\n");
-  
-  /* Zero-initialize the handle to ensure clean state */
+  /* Note: Handle will be re-initialized on every read cycle for reliability */
   memset(&hms5607, 0, sizeof(hms5607));
-  
-  /* User confirmed CSB is low, so we should use address 0x77 */
   hms5607.hi2c = &hi2c2;
-  hms5607.Address = MS5607_I2C_ADDRESS_B; /* 0x77 when CSB is connected to GND (low) */
-  /* When shifted for I2C operations: 0xEE for write, 0xEF for read */
-  hms5607.PressureOsr = MS5607_OSR_4096;  /* Highest precision */
-  hms5607.TemperatureOsr = MS5607_OSR_4096; /* Highest precision */
-  
-  /* Don't reset I2C bus since SHT31 is already working on it */
-  /* Just add a small delay before initializing */
-  HAL_Delay(100);
-  
-  printf("Trying MS5607 with address 0x77 (CSB low)...\r\n");
-  
-  /* Initialize the MS5607 sensor with multiple attempts */
-  MS5607_StatusTypeDef ms5607_status = MS5607_ERROR;
-  uint8_t init_attempts = 0;
-  const uint8_t MAX_INIT_ATTEMPTS = 5;
-  
-  while (init_attempts < MAX_INIT_ATTEMPTS && ms5607_status != MS5607_OK) {
-    printf("MS5607 initialization attempt %d with address 0x%02X\r\n", 
-           init_attempts + 1, hms5607.Address);
-    
-    /* Reset the sensor before each attempt */
-    MS5607_Reset(&hms5607);
-    HAL_Delay(20); /* Wait for reset to complete */
-    
-    /* Initialize the sensor */
-    ms5607_status = MS5607_Init(&hms5607);
-    
-    if (ms5607_status != MS5607_OK) {
-      printf("MS5607 initialization failed, error code: %d\r\n", ms5607_status);
-      
-      /* Blink LED to indicate retry */
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-      HAL_Delay(200);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-      HAL_Delay(200);
-      
-      /* Try alternate address if we've tried a few times with the current address */
-      if (init_attempts == 2 && hms5607.Address == MS5607_I2C_ADDRESS_B) {
-        printf("Switching to alternate MS5607 address 0x76 (CSB high)...\r\n");
-        hms5607.Address = MS5607_I2C_ADDRESS_A;
-      }
-      
-      /* Don't reset I2C bus since SHT31 is already working on it */
-      /* Just add a small delay before next attempt */
-      HAL_Delay(100);
-      
-      init_attempts++;
-    }
-  }
-  
-  /* Check if initialization was successful */
-  if (ms5607_status != MS5607_OK)
-  {
-    printf("MS5607 initialization failed with error code: %d\r\n", ms5607_status);
-    /* Continue anyway to avoid system crash */
-  }
-  else
-  {
-    printf("MS5607 initialized successfully\r\n");
-  }
+  hms5607.Address = 0x77;  /* CSB pin is LOW */
+  hms5607.PressureOsr = MS5607_OSR_4096;
+  hms5607.TemperatureOsr = MS5607_OSR_4096;
   
   /* Init */
 #if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)

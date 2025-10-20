@@ -217,10 +217,11 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   int64_t off, sens;
   int64_t p;
   
-  /* Check if sensor is initialized */
+  /* DIAGNOSTIC MODE: Skip initialization check to force I2C communication attempts */
+  /* This allows us to see what's happening on the I2C bus even if init failed */
   if (!hms5607->IsInitialized)
   {
-    return MS5607_ERROR;
+    APP_LOG(TS_ON, VLEVEL_M, "MS5607 WARNING: Sensor not initialized, attempting read anyway for diagnostics\r\n");
   }
   
   /* Start D2 (temperature) conversion */
@@ -308,13 +309,15 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
     /* Continue anyway and see if we get reasonable values */
   }
   
-  /* Calculate temperature - using reference implementation approach */
+  /* Calculate temperature per datasheet (page 8, Figure 2) */
   dt = (int32_t)d2 - ((int32_t)hms5607->CalData.c5 << 8);
   temp = 2000 + (((int64_t)dt * hms5607->CalData.c6) >> 23);
   
-  /* Calculate temperature compensated pressure - using reference implementation approach */
-  off = ((int64_t)hms5607->CalData.c2 << 16) + (((int64_t)hms5607->CalData.c4 * dt) >> 7);
-  sens = ((int64_t)hms5607->CalData.c1 << 15) + (((int64_t)hms5607->CalData.c3 * dt) >> 8);
+  /* Calculate temperature compensated pressure per datasheet (page 8, Figure 2) */
+  /* OFF = C2 × 2^17 + (C4 × dT) / 2^6 */
+  /* SENS = C1 × 2^16 + (C3 × dT) / 2^7 */
+  off = ((int64_t)hms5607->CalData.c2 << 17) + (((int64_t)hms5607->CalData.c4 * dt) >> 6);
+  sens = ((int64_t)hms5607->CalData.c1 << 16) + (((int64_t)hms5607->CalData.c3 * dt) >> 7);
   
   /* Second order temperature compensation */
   if (temp < 2000)
@@ -405,8 +408,6 @@ static MS5607_StatusTypeDef MS5607_RecoverI2C(MS5607_HandleTypeDef *hms5607)
   uint32_t error = HAL_I2C_GetError(hms5607->hi2c);
   if (error != HAL_I2C_ERROR_NONE)
   {
-    printf("MS5607: I2C error detected: 0x%08lX, attempting recovery\r\n", error);
-    
     /* Clear the error flags */
     __HAL_I2C_CLEAR_FLAG(hms5607->hi2c, I2C_FLAG_BERR | I2C_FLAG_ARLO | I2C_FLAG_OVR);
     
@@ -415,8 +416,6 @@ static MS5607_StatusTypeDef MS5607_RecoverI2C(MS5607_HandleTypeDef *hms5607)
     HAL_Delay(10);
     HAL_I2C_Init(hms5607->hi2c);
     HAL_Delay(10);
-    
-    printf("MS5607: I2C recovery completed\r\n");
   }
   
   return MS5607_OK;
@@ -445,10 +444,6 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
   /* Prepare command */
   cmd = MS5607_CMD_PROM_READ | (address << 1);
   
-  /* Print debug info */
-  printf("MS5607_ReadProm: Reading PROM address %d (cmd 0x%02X) from I2C address 0x%02X (shifted: 0x%02X)\r\n", 
-         address, cmd, hms5607->Address, hms5607->Address << 1);
-  
   /* Send command with retry on failure */
   uint8_t retry_count = 0;
   const uint8_t MAX_RETRIES = 3;
@@ -458,8 +453,6 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
     hal_status = HAL_I2C_Master_Transmit(hms5607->hi2c, hms5607->Address << 1, &cmd, 1, MS5607_I2C_TIMEOUT);
     if (hal_status == HAL_OK)
       break;
-      
-    printf("MS5607_ReadProm: Command transmit failed with HAL status %d (retry %d)\r\n", hal_status, retry_count);
     
     /* Attempt I2C recovery */
     MS5607_RecoverI2C(hms5607);
@@ -469,7 +462,6 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
   
   if (hal_status != HAL_OK)
   {
-    printf("MS5607_ReadProm: Command transmit failed after %d retries\r\n", MAX_RETRIES);
     return MS5607_ERROR;
   }
   
@@ -483,8 +475,6 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
     hal_status = HAL_I2C_Master_Receive(hms5607->hi2c, hms5607->Address << 1, data, 2, MS5607_I2C_TIMEOUT);
     if (hal_status == HAL_OK)
       break;
-      
-    printf("MS5607_ReadProm: Data receive failed with HAL status %d (retry %d)\r\n", hal_status, retry_count);
     
     /* Attempt I2C recovery */
     MS5607_RecoverI2C(hms5607);
@@ -494,14 +484,11 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
   
   if (hal_status != HAL_OK)
   {
-    printf("MS5607_ReadProm: Data receive failed after %d retries\r\n", MAX_RETRIES);
     return MS5607_ERROR;
   }
   
   /* Combine bytes into 16-bit value (big endian) */
   *value = ((uint16_t)data[0] << 8) | data[1];
-  
-  printf("MS5607_ReadProm: Read successful, value = 0x%04X\r\n", *value);
   
   return MS5607_OK;
 }
@@ -516,15 +503,10 @@ static MS5607_StatusTypeDef MS5607_StartConversion(MS5607_HandleTypeDef *hms5607
 {
   HAL_StatusTypeDef hal_status;
   
-  /* Print debug info */
-  printf("MS5607_StartConversion: Sending command 0x%02X to address 0x%02X (shifted: 0x%02X)\r\n", 
-         command, hms5607->Address, hms5607->Address << 1);
-  
   /* Send command */
   hal_status = HAL_I2C_Master_Transmit(hms5607->hi2c, hms5607->Address << 1, &command, 1, MS5607_I2C_TIMEOUT);
   if (hal_status != HAL_OK)
   {
-    printf("MS5607_StartConversion: HAL_I2C_Master_Transmit failed with status %d\r\n", hal_status);
     return MS5607_ERROR;
   }
   
@@ -543,42 +525,25 @@ static MS5607_StatusTypeDef MS5607_ReadADC(MS5607_HandleTypeDef *hms5607, uint32
   uint8_t data[3];
   HAL_StatusTypeDef hal_status;
   
-  /* Print debug info */
-  printf("MS5607_ReadADC: Sending command 0x%02X to address 0x%02X (shifted: 0x%02X)\r\n", 
-         cmd, hms5607->Address, hms5607->Address << 1);
-  
   /* Send command */
   hal_status = HAL_I2C_Master_Transmit(hms5607->hi2c, hms5607->Address << 1, &cmd, 1, MS5607_I2C_TIMEOUT);
   if (hal_status != HAL_OK)
   {
-    printf("MS5607_ReadADC: I2C transmit failed with HAL status %d\r\n", hal_status);
     return MS5607_ERROR;
   }
   
   /* Add a small delay between transmit and receive */
   HAL_Delay(5);
   
-  /* Print debug info */
-  printf("MS5607_ReadADC: Reading 3 bytes from address 0x%02X (shifted: 0x%02X)\r\n", 
-         hms5607->Address, hms5607->Address << 1);
-  
   /* Read data */
   hal_status = HAL_I2C_Master_Receive(hms5607->hi2c, hms5607->Address << 1, data, 3, MS5607_I2C_TIMEOUT);
   if (hal_status != HAL_OK)
   {
-    printf("MS5607_ReadADC: I2C receive failed with HAL status %d\r\n", hal_status);
     return MS5607_ERROR;
   }
   
-  /* Print raw data bytes */
-  printf("MS5607_ReadADC: Raw data bytes: 0x%02X 0x%02X 0x%02X\r\n", data[0], data[1], data[2]);
-  
   /* Combine bytes into 24-bit value (big endian) */
-  /* Fix based on reference implementation */
   *value = ((uint32_t)data[0]) << 16 | ((uint32_t)data[1]) << 8 | (uint32_t)data[2];
-  
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607_ReadADC: Raw bytes: 0x%02X 0x%02X 0x%02X, Combined value: %lu\r\n", 
-          data[0], data[1], data[2], *value);
   
   return MS5607_OK;
 }
