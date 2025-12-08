@@ -65,10 +65,6 @@ void MX_USART1_UART_Init(void);
 #define RTC_PREDIV_A ((1<<(15-RTC_N_PREDIV_S))-1)
 #define RTC_N_PREDIV_S 10
 #define RTC_PREDIV_S ((1<<RTC_N_PREDIV_S)-1)
-#define LED2_Pin GPIO_PIN_15
-#define LED2_GPIO_Port GPIOA
-#define LED1_Pin GPIO_PIN_15
-#define LED1_GPIO_Port GPIOB
 #define SOS_Button_Pin GPIO_PIN_3
 #define SOS_Button_GPIO_Port GPIOB
 #define SOS_Button_EXTI_IRQn EXTI3_IRQn

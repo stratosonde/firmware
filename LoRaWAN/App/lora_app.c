@@ -37,6 +37,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -364,24 +365,65 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
+  SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
   APP_LOG(TS_ON, VLEVEL_M, "Preparing to send data using Cayenne LPP format...\r\n");
 
   // Get sensor data
   sensor_t sensor_data;
+  SEGGER_RTT_WriteString(0, "Calling EnvSensors_Read...\r\n");
   EnvSensors_Read(&sensor_data);
+  
+  // Use integer output to bypass float printf issues
+  int temp_int = (int)(sensor_data.temperature * 10);
+  int hum_int = (int)(sensor_data.humidity * 10);
+  int press_int = (int)(sensor_data.pressure * 10);
+  SEGGER_RTT_printf(0, "Sensor: T=%d.%d C, H=%d.%d %%, P=%d.%d mbar\r\n", 
+                    temp_int/10, (temp_int >= 0 ? temp_int%10 : (-temp_int)%10),
+                    hum_int/10, hum_int%10,
+                    press_int/10, press_int%10);
   
   // Initialize Cayenne LPP payload
   CayenneLppReset();
+  SEGGER_RTT_printf(0, "CayenneLpp reset, size=%d\r\n", CayenneLppGetSize());
   
   // Add temperature data (channel 1)
   CayenneLppAddTemperature(1, sensor_data.temperature);
+  SEGGER_RTT_printf(0, "After temp, size=%d\r\n", CayenneLppGetSize());
   
   // Add humidity data (channel 2)
   CayenneLppAddRelativeHumidity(2, sensor_data.humidity);
+  SEGGER_RTT_printf(0, "After humidity, size=%d\r\n", CayenneLppGetSize());
   
   // Add pressure data (channel 3)
   CayenneLppAddBarometricPressure(3, sensor_data.pressure);
+  SEGGER_RTT_printf(0, "After pressure, size=%d\r\n", CayenneLppGetSize());
   
+  // Add GPS data (channel 4) - use zeros if GNSS fix is invalid
+  float lat, lon, alt;
+  if (sensor_data.gnss_valid) {
+    // Convert from binary format back to decimal degrees for Cayenne
+    lat = (sensor_data.latitude * 90.0f) / 8388607.0f;
+    lon = (sensor_data.longitude * 180.0f) / 8388607.0f;
+    alt = (float)sensor_data.altitudeGps;
+    
+    APP_LOG(TS_ON, VLEVEL_M, "GNSS data valid: Lat=%.6f, Lon=%.6f, Alt=%.1fm, Sats=%d\r\n",
+            lat, lon, alt, sensor_data.satellites);
+  } else {
+    // Use zeros when no valid GNSS fix
+    lat = 0.0f;
+    lon = 0.0f;
+    alt = 0.0f;
+    
+    APP_LOG(TS_ON, VLEVEL_M, "GNSS data invalid, sending zeros\r\n");
+  }
+  
+  CayenneLppAddGps(4, lat, lon, alt);
+  SEGGER_RTT_printf(0, "After GPS, size=%d\r\n", CayenneLppGetSize());
+  
+  // Add number of satellites as analog input (channel 5) - value 0-255
+  CayenneLppAddAnalogInput(5, (float)sensor_data.satellites);
+  SEGGER_RTT_printf(0, "After satellites, size=%d\r\n", CayenneLppGetSize());
+
   // Log the data being sent
   APP_LOG(TS_ON, VLEVEL_M, "Cayenne LPP data prepared (len=%d), Temp: %.1f°C, Humidity: %.1f%%, Pressure: %.1fmbar\r\n", 
           CayenneLppGetSize(), sensor_data.temperature, sensor_data.humidity, sensor_data.pressure);
@@ -399,8 +441,22 @@ static void SendTxData(void)
   appData.BufferSize = CayenneLppGetSize();
   appData.Buffer = CayenneLppGetBuffer();
   
+  // Force data rate before each send (DR2 = 125 bytes max for US915)
+  LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
+  SEGGER_RTT_printf(0, "Set DR=%d, Sending LoRaWAN: port=%d, size=%d\r\n", 
+                    LORAWAN_DEFAULT_DATA_RATE, appData.Port, appData.BufferSize);
+  
+  /* Print raw buffer via RTT */
+  SEGGER_RTT_WriteString(0, "Raw buffer: ");
+  for (uint8_t i = 0; i < appData.BufferSize; i++) {
+    SEGGER_RTT_printf(0, "%02X ", appData.Buffer[i]);
+  }
+  SEGGER_RTT_WriteString(0, "\r\n");
+  
   LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+  SEGGER_RTT_printf(0, "LmHandlerSend status: %d (0=OK)\r\n", status);
   APP_LOG(TS_ON, VLEVEL_M, "LmHandlerSend status: %d\r\n", status);
+  SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }
 
@@ -425,6 +481,8 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
+  SEGGER_RTT_printf(0, "OnTxData: status=%d, DR=%d, power=%d, ack=%d\r\n", 
+          params->Status, params->Datarate, params->TxPower, params->AckReceived);
   APP_LOG(TS_ON, VLEVEL_M, "OnTxData: status = %d, datarate = %d, power = %d\r\n", 
           params->Status, params->Datarate, params->TxPower);
   /* USER CODE END OnTxData_1 */
@@ -435,10 +493,12 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   /* USER CODE BEGIN OnJoinRequest_1 */
   if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
   {
+    SEGGER_RTT_printf(0, "JOIN SUCCESS! DevAddr: %08X\r\n", joinParams->CommissioningParams->DevAddr);
     APP_LOG(TS_ON, VLEVEL_M, "Join Success! DevAddr: %08X\r\n", joinParams->CommissioningParams->DevAddr);
   }
   else
   {
+    SEGGER_RTT_printf(0, "JOIN FAILED! Status: %d\r\n", joinParams->Status);
     APP_LOG(TS_ON, VLEVEL_M, "Join Failed! Status: %d\r\n", joinParams->Status);
   }
   /* USER CODE END OnJoinRequest_1 */

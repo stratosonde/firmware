@@ -78,14 +78,16 @@ extern "C" {
 /*!
  * LoRaWAN Adaptive Data Rate
  * @note Please note that when ADR is enabled the end-device should be static
+ * @note Disabled to allow fixed higher data rate for larger payloads
  */
-#define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_ON
+#define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_OFF
 
 /*!
  * LoRaWAN Default Data Rate
- * @note Please note that LORAWAN_DEFAULT_DATA_RATE is used only when LORAWAN_ADR_STATE is disabled
+ * @note For US915: DR0=11 bytes max, DR1=53 bytes max, DR2=125 bytes max, DR3=242 bytes max
+ * @note Using DR2 to accommodate 26-byte Cayenne LPP payload with GPS data
  */
-#define LORAWAN_DEFAULT_DATA_RATE                   DR_1
+#define LORAWAN_DEFAULT_DATA_RATE                   DR_2
 
 /*!
  * LoRaWAN Default Tx output power

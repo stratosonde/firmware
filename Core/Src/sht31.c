@@ -7,6 +7,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "sht31.h"
+#include "SEGGER_RTT.h"
 
 /* Private define ------------------------------------------------------------*/
 /* SHT31 Commands */
@@ -50,17 +51,24 @@ static uint32_t SHT31_GetMeasurementDelay(SHT31_HandleTypeDef *hsht31);
   */
 SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
 {
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Starting...\r\n");
+  
   /* Check the SHT31 handle allocation */
   if (hsht31 == NULL)
   {
+    SEGGER_RTT_WriteString(0, "  SHT31_Init: FAIL - handle NULL\r\n");
     return SHT31_ERROR;
   }
 
   /* Check the I2C handle allocation */
   if (hsht31->hi2c == NULL)
   {
+    SEGGER_RTT_WriteString(0, "  SHT31_Init: FAIL - I2C handle NULL\r\n");
     return SHT31_ERROR;
   }
+
+  SEGGER_RTT_printf(0, "  SHT31_Init: Using addr 0x%02X, I2C addr 0x%02X\r\n", 
+                    hsht31->Address, (hsht31->Address << 1));
 
   /* Check if I2C bus is ready by doing a simple I2C bus scan for the device */
   HAL_StatusTypeDef i2c_status;
@@ -69,6 +77,7 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
   /* Turn on LED to indicate initialization start */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET); // Using PA0 for LED
   
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Checking device ready...\r\n");
   while (i2c_retry > 0)
   {
     /* Try to communicate with the device */
@@ -77,6 +86,7 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
     {
       break;
     }
+    SEGGER_RTT_printf(0, "  SHT31_Init: DeviceReady retry %d, status=%d\r\n", 5-i2c_retry+1, i2c_status);
     i2c_retry--;
     HAL_Delay(10);
   }
@@ -86,28 +96,36 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
     /* Device not responding on I2C bus */
     /* Turn off LED to indicate failure */
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+    SEGGER_RTT_printf(0, "  SHT31_Init: FAIL - device not ready, HAL status=%d\r\n", i2c_status);
     return SHT31_ERROR; // Return error instead of OK
   }
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Device ready OK\r\n");
 
   /* Perform soft reset to ensure sensor is in a known state */
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Sending soft reset...\r\n");
   if (SHT31_SoftReset(hsht31) != SHT31_OK)
   {
     /* Soft reset failed */
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+    SEGGER_RTT_WriteString(0, "  SHT31_Init: FAIL - soft reset failed\r\n");
     return SHT31_ERROR;
   }
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Soft reset OK\r\n");
   
   /* Wait for sensor to initialize after reset */
   HAL_Delay(50);
   
   /* Read status register to verify communication */
   uint16_t status;
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: Reading status register...\r\n");
   if (SHT31_ReadStatus(hsht31, &status) != SHT31_OK)
   {
     /* Status read failed */
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+    SEGGER_RTT_WriteString(0, "  SHT31_Init: FAIL - status read failed\r\n");
     return SHT31_ERROR;
   }
+  SEGGER_RTT_printf(0, "  SHT31_Init: Status=0x%04X\r\n", status);
   
   /* Clear status register */
   SHT31_ClearStatus(hsht31);
@@ -115,6 +133,7 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
   /* Turn off LED to indicate successful initialization */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
   
+  SEGGER_RTT_WriteString(0, "  SHT31_Init: SUCCESS\r\n");
   return SHT31_OK;
 }
 

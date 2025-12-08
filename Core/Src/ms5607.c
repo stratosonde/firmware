@@ -8,6 +8,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "ms5607.h"
 #include "sys_app.h" /* For APP_LOG */
+#include "SEGGER_RTT.h" /* For RTT debug output */
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -56,23 +57,31 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   }
   
   /* Reset the sensor */
+  SEGGER_RTT_WriteString(0, "MS5607: Sending reset...\r\n");
   status = MS5607_Reset(hms5607);
   if (status != MS5607_OK)
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 reset failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: Reset FAILED\r\n");
     return status;
   }
+  SEGGER_RTT_WriteString(0, "MS5607: Reset OK\r\n");
   
   /* Wait for reset to complete - datasheet specifies minimum 2.8ms */
   HAL_Delay(20);
   
   /* Read calibration data */
+  SEGGER_RTT_WriteString(0, "MS5607: Reading PROM calibration...\r\n");
   status = MS5607_ReadCalibration(hms5607);
   if (status != MS5607_OK)
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 calibration read failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: PROM read FAILED\r\n");
     return status;
   }
+  
+  /* Print raw calibration values via RTT */
+  SEGGER_RTT_printf(0, "  C1=%u C2=%u C3=%u\r\n", hms5607->CalData.c1, hms5607->CalData.c2, hms5607->CalData.c3);
+  SEGGER_RTT_printf(0, "  C4=%u C5=%u C6=%u\r\n", hms5607->CalData.c4, hms5607->CalData.c5, hms5607->CalData.c6);
+  SEGGER_RTT_printf(0, "  CRC=0x%04X\r\n", hms5607->CalData.crc);
   
   /* Verify calibration data is valid (not all zeros or all ones) */
   if (hms5607->CalData.c1 == 0 || hms5607->CalData.c1 == 0xFFFF ||
@@ -82,7 +91,7 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
       hms5607->CalData.c5 == 0 || hms5607->CalData.c5 == 0xFFFF ||
       hms5607->CalData.c6 == 0 || hms5607->CalData.c6 == 0xFFFF)
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 calibration data invalid\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: Cal data INVALID (0 or 0xFFFF)\r\n");
     return MS5607_ERROR;
   }
   
@@ -97,18 +106,31 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   prom[6] = hms5607->CalData.c6;
   prom[7] = hms5607->CalData.crc;
   
+  /* Debug: print raw PROM values */
+  SEGGER_RTT_printf(0, "PROM[0]=0x%04X (reserved)\r\n", prom[0]);
+  SEGGER_RTT_printf(0, "PROM[7]=0x%04X (crc word)\r\n", prom[7]);
+  
   uint8_t crc = MS5607_CRC4(prom);
-  uint8_t stored_crc = hms5607->CalData.crc & 0x000F;
+  
+  /* Try different CRC extraction methods */
+  uint8_t stored_crc_low4 = hms5607->CalData.crc & 0x000F;           /* Lower 4 bits of PROM[7] */
+  uint8_t stored_crc_high4 = (hms5607->CalData.crc >> 12) & 0x000F;  /* Upper 4 bits of PROM[7] */
+  uint8_t stored_crc_prom0 = (hms5607->CalData.reserved >> 12) & 0x000F; /* Upper 4 bits of PROM[0] */
+  
+  SEGGER_RTT_printf(0, "CRC calc=%d, PROM7_low4=%d, PROM7_high4=%d, PROM0_high4=%d\r\n", 
+                    crc, stored_crc_low4, stored_crc_high4, stored_crc_prom0);
+  
+  /* CRC is stored in lower 4 bits of PROM[7] per AN520 CRC Notes */
+  uint8_t stored_crc = stored_crc_low4;
   
   if (crc != stored_crc)
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 CRC check failed: calculated=%d, stored=%d\r\n", crc, stored_crc);
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 CRC failure indicates possible communication error\r\n");
+    SEGGER_RTT_printf(0, "MS5607: CRC MISMATCH! calc=%d stored=%d\r\n", crc, stored_crc);
     return MS5607_ERROR;
   }
   else
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 CRC check passed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: CRC OK\r\n");
   }
   
   /* Log calibration coefficients */
@@ -549,21 +571,26 @@ static MS5607_StatusTypeDef MS5607_ReadADC(MS5607_HandleTypeDef *hms5607, uint32
 }
 
 /**
-  * @brief  Calculate CRC-4 for PROM values
+  * @brief  Calculate CRC-4 for PROM values (per AN520 official algorithm)
   * @param  n_prom Array of PROM values (8 words)
   * @retval CRC-4 value
   */
 static uint8_t MS5607_CRC4(uint16_t n_prom[])
 {
   uint16_t n_rem = 0;
+  uint16_t crc_read;
   uint8_t n_bit;
   
-  n_prom[0] = ((n_prom[0]) & 0x0FFF);  /* Clear the CRC byte */
-  n_prom[7] = 0;                        /* Substitute CRC byte with 0 */
+  /* AN520: Save original CRC from PROM[7] */
+  crc_read = n_prom[7];
+  
+  /* AN520: CRC byte (lower 8 bits of PROM[7]) is replaced by 0 */
+  /* Keep upper 8 bits, clear lower 8 bits */
+  n_prom[7] = (0xFF00 & n_prom[7]);
   
   for (uint8_t cnt = 0; cnt < 16; cnt++)
   {
-    /* Get bit 15 - 0 from PROM[0] to PROM[7] */
+    /* Choose LSB or MSB */
     if (cnt % 2 == 1)
     {
       n_rem ^= (n_prom[cnt >> 1]) & 0x00FF;
@@ -586,7 +613,11 @@ static uint8_t MS5607_CRC4(uint16_t n_prom[])
     }
   }
   
-  n_rem = ((n_rem >> 12) & 0x000F);
+  /* AN520: Final 4-bit remainder is CRC code */
+  n_rem = (0x000F & (n_rem >> 12));
+  
+  /* Restore the original PROM[7] value */
+  n_prom[7] = crc_read;
   
   return (uint8_t)n_rem;
 }

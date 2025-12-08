@@ -28,7 +28,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 
 /* USER CODE BEGIN Includes */
-
+#include <stdbool.h>
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -46,7 +46,10 @@ typedef struct
   int16_t altitudeBar;    /*!< in m * 10 */
   /**more may be added*/
   /* USER CODE BEGIN sensor_t */
-
+  uint8_t satellites;     /*!< number of satellites */
+  uint8_t gnss_fix_quality; /*!< GNSS fix quality (0=invalid, 1=GPS, 2=DGPS) */
+  float gnss_hdop;        /*!< horizontal dilution of precision */
+  bool gnss_valid;        /*!< GNSS data validity flag */
   /* USER CODE END sensor_t */
 } sensor_t;
 
