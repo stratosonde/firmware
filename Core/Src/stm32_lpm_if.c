@@ -30,7 +30,8 @@
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
-
+extern I2C_HandleTypeDef hi2c2;
+void SystemClock_Config(void);
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -110,7 +111,12 @@ void PWR_EnterStopMode(void)
 void PWR_ExitStopMode(void)
 {
   /* USER CODE BEGIN ExitStopMode_1 */
-
+  /* Restore system clock which may have been reset in STOP mode */
+  SystemClock_Config();
+  
+  /* Re-initialize I2C2 since registers are lost in STOP2 mode */
+  HAL_I2C_DeInit(&hi2c2);
+  HAL_I2C_Init(&hi2c2);
   /* USER CODE END ExitStopMode_1 */
   /* Resume sysTick : work around for debugger problem in dual core */
   HAL_ResumeTick();

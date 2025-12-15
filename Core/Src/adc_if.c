@@ -173,6 +173,35 @@ uint16_t SYS_GetBatteryLevel(void)
   /* USER CODE END SYS_GetBatteryLevel_2 */
 }
 
+uint16_t SYS_GetBatteryVoltage(void)
+{
+  /* USER CODE BEGIN SYS_GetBatteryVoltage_1 */
+
+  /* USER CODE END SYS_GetBatteryVoltage_1 */
+  uint16_t batteryVoltagemV = 0;
+  uint32_t measuredLevel = 0;
+
+  /* Read ADC channel 3 (PB4) with 0.5 voltage divider */
+  measuredLevel = ADC_ReadChannels(ADC_CHANNEL_3);
+
+  if (measuredLevel == 0)
+  {
+    batteryVoltagemV = 0;
+  }
+  else
+  {
+    /* Convert ADC value to voltage in mV
+       ADC is 12-bit (0-4095), VDDA = 3300 mV
+       Apply 2x scaling for 0.5 voltage divider */
+    batteryVoltagemV = (measuredLevel * 3300 / 4096) * 2;
+  }
+
+  return batteryVoltagemV;
+  /* USER CODE BEGIN SYS_GetBatteryVoltage_2 */
+
+  /* USER CODE END SYS_GetBatteryVoltage_2 */
+}
+
 /* Private Functions Definition -----------------------------------------------*/
 /* USER CODE BEGIN PrFD */
 

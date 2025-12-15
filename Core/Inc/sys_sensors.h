@@ -29,6 +29,7 @@ extern "C" {
 
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
+#include "atgm336h.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -50,6 +51,7 @@ typedef struct
   uint8_t gnss_fix_quality; /*!< GNSS fix quality (0=invalid, 1=GPS, 2=DGPS) */
   float gnss_hdop;        /*!< horizontal dilution of precision */
   bool gnss_valid;        /*!< GNSS data validity flag */
+  float battery_voltage;  /*!< battery voltage in volts */
   /* USER CODE END sensor_t */
 } sensor_t;
 
@@ -68,7 +70,7 @@ typedef struct
 
 /* External variables --------------------------------------------------------*/
 /* USER CODE BEGIN EV */
-
+extern GNSS_HandleTypeDef hgnss;
 /* USER CODE END EV */
 
 /* Exported macro ------------------------------------------------------------*/

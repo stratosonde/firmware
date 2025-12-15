@@ -24,6 +24,10 @@
 /* USER CODE BEGIN Includes */
 #include "stm32wlxx_hal_pwr.h"
 #include "SEGGER_RTT.h"
+#include "atgm336h.h"
+#include "sys_sensors.h"
+#include "sht31.h"
+#include "ms5607.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,9 +56,15 @@ SUBGHZ_HandleTypeDef hsubghz;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
+DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
-
+/* Note: RTT Virtual Terminal architecture:
+ * Channel 0 with virtual terminals (via 0xFF escape sequences):
+ *   - Virtual Terminal 0: System messages, sensors (default)
+ *   - Virtual Terminal 1: NMEA/GNSS sentences (via TerminalOut)
+ *   - Virtual Terminal 2: APP_LOG (LoRaWAN middleware)
+ * Requires advanced RTT viewer (J-Link RTT Viewer, Ozone, etc.) */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,6 +107,11 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  /* Configure RTT Terminal 0 for all debug output */
+  /* Everything goes to Terminal 0 for simple viewer compatibility */
+  SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL);
+  SEGGER_RTT_WriteString(0, "=== RTT Terminal 0 Configured ===\r\n");
+  SEGGER_RTT_WriteString(0, "All output: System, NMEA, APP_LOG\r\n");
 
   /* USER CODE END 1 */
 
@@ -118,16 +133,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();            /* DMA MUST be initialized BEFORE UART1 (which uses DMA) */
   MX_I2C2_Init();           /* I2C2 MUST be initialized BEFORE LoRaWAN (which calls EnvSensors_Init) */
-  MX_USART1_UART_Init();
+  MX_USART1_UART_Init();    /* UART1 for GNSS module communication */
   MX_LoRaWAN_Init();        /* This calls SystemApp_Init -> EnvSensors_Init which uses I2C2 */
   /* USER CODE BEGIN 2 */
-  /* Initialize Segger RTT for debug output via SWD */
-  SEGGER_RTT_Init();
-  SEGGER_RTT_WriteString(0, "\r\n\r\n==================================\r\n");
-  SEGGER_RTT_WriteString(0, "Radio Sonde E5 HF EU - Boot\r\n");
-  SEGGER_RTT_WriteString(0, "RTT Debug Console Active\r\n");
-  SEGGER_RTT_WriteString(0, "==================================\r\n\r\n");
+  /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
+
   
   leds_boot_seq();
   
@@ -139,18 +151,29 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  
+  /* LoRaWAN normal operation mode */
+  SEGGER_RTT_WriteString(0, "\r\n***** NORMAL LORAWAN MODE *****\r\n");
+  SEGGER_RTT_WriteString(0, "LPM debugging enabled - watch for [LPM] messages\r\n\r\n");
+  
+  /* Log to virtual terminal 1 for GNSS */
+  //SEGGER_RTT_SetTerminal(1);
+  //SEGGER_RTT_WriteString(0, "GNSS logging enabled on virtual terminal 1\r\n\r\n");
+  //SEGGER_RTT_SetTerminal(0);  /* Switch back to terminal 0 */
+  
   while (1)
   {
-
-    /* USER CODE END WHILE */
+    /* Process GNSS DMA buffer only if GNSS is powered and initialized */
+    /* Uncomment when ready to use GNSS processing: */
+    // if (hgnss.is_powered && hgnss.is_initialized) {
+    //   GNSS_ProcessDMABuffer(&hgnss);
+    // }
+    
     MX_LoRaWAN_Process();
 
-    /* USER CODE BEGIN 3 */
-    /* Enable proper sleep mode for power saving */
-    /* Brief LED flash on PA0 only during active processing */
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET); /* Turn on LED on PA0 */
-    HAL_Delay(10); /* Very brief flash */
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET); /* Turn off LED */
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+    HAL_Delay(10);
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
   }
   /* USER CODE END 3 */
 }
@@ -444,7 +467,11 @@ void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel2_IRQn interrupt configuration */
+  /* DMA1_Channel1_IRQn interrupt configuration (USART1_RX) */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+  
+  /* DMA1_Channel2_IRQn interrupt configuration (USART1_TX) */
   HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
 
@@ -497,6 +524,11 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* Configure PB4 as analog input for battery voltage measurement (ADC_CHANNEL_3) */
+  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 

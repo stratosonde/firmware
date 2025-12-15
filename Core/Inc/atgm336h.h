@@ -27,6 +27,17 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Exported constants --------------------------------------------------------*/
+#define GNSS_UART_BAUDRATE          9600
+#define GNSS_UART_TIMEOUT           1000
+#define GNSS_POWER_ON_DELAY         1000  // ms
+#define GNSS_FIX_TIMEOUT            60000 // ms
+#define GNSS_MAX_RETRIES            3
+
+/* DMA Circular Buffer Configuration */
+#define GNSS_DMA_BUFFER_SIZE        512   // Circular buffer for DMA reception
+#define GNSS_NMEA_MAX_LENGTH        128   // Maximum NMEA sentence length
+
 /* Exported types ------------------------------------------------------------*/
 
 /**
@@ -62,6 +73,7 @@ typedef struct
   float speed;              // Ground speed in km/h
   float course;             // Course in degrees from true north
   uint8_t satellites;       // Number of satellites used for fix
+  uint8_t satellites_in_view; // Number of satellites in view (from GSV)
   float hdop;               // Horizontal dilution of precision
   GNSS_FixQuality_t fix_quality;  // Fix quality
   uint32_t timestamp;       // UTC timestamp (HHMMSS format)
@@ -75,22 +87,25 @@ typedef struct
 typedef struct
 {
   UART_HandleTypeDef *huart;          // UART handle
-  GPIO_TypeDef *pwr_port;              // Power control GPIO port
-  uint16_t pwr_pin;                    // Power control GPIO pin
+  GPIO_TypeDef *pwr_port;              // Power control GPIO port (PB10)
+  uint16_t pwr_pin;                    // Power control GPIO pin (active low)
+  GPIO_TypeDef *en_port;               // Enable GPIO port (PB5)
+  uint16_t en_pin;                     // Enable GPIO pin
   bool is_powered;                     // Power state flag
   bool is_initialized;                 // Initialization flag
-  uint8_t rx_buffer[256];              // RX buffer for UART DMA
-  uint8_t nmea_buffer[128];            // Buffer for NMEA sentence parsing
-  uint8_t nmea_index;                  // Current index in NMEA buffer
+  
+  /* DMA Circular Buffer Management */
+  uint8_t dma_buffer[GNSS_DMA_BUFFER_SIZE]; // DMA circular buffer
+  volatile uint16_t dma_head;          // DMA write position (updated by hardware)
+  uint16_t dma_tail;                   // Application read position
+  volatile bool dma_data_ready;        // Flag set by DMA interrupts
+  
+  /* NMEA Sentence Processing */
+  char nmea_sentence[GNSS_NMEA_MAX_LENGTH];  // Current NMEA sentence being built
+  uint16_t nmea_length;                // Current sentence length
+  
   GNSS_Data_t data;                    // Latest GNSS data
 } GNSS_HandleTypeDef;
-
-/* Exported constants --------------------------------------------------------*/
-#define GNSS_UART_BAUDRATE          9600
-#define GNSS_UART_TIMEOUT           1000
-#define GNSS_POWER_ON_DELAY         1000  // ms
-#define GNSS_FIX_TIMEOUT            60000 // ms
-#define GNSS_MAX_RETRIES            3
 
 /* NMEA Sentence identifiers */
 #define NMEA_GGA                    "$GPGGA"
@@ -99,6 +114,13 @@ typedef struct
 #define NMEA_GSV                    "$GPGSV"
 #define NMEA_VTG                    "$GPVTG"
 #define NMEA_GLL                    "$GPGLL"
+
+/* ATGM336H PCAS Configuration Commands */
+#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,0,0,0*03\r\n"  // GGA + RMC + GSV
+#define GNSS_CMD_HIGH_ALT_MODE   "$PCAS04,5*1C\r\n"                // High altitude mode (CRITICAL!)
+#define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2B\r\n"             // 1 Hz update rate
+#define GNSS_CMD_SATELLITE_SYS   "$PCAS06,1,0,1,0*67\r\n"          // GPS + BeiDou
+#define GNSS_CMD_FIX_MODE        "$PCAS11,2*1E\r\n"                // Auto 2D/3D fix
 
 /* Exported macro ------------------------------------------------------------*/
 
@@ -126,6 +148,13 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss);
 GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss);
 
 /**
+  * @brief  Configure GNSS module with initialization commands
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss);
+
+/**
   * @brief  Get position data from GNSS module
   * @param  hgnss: Pointer to GNSS handle structure
   * @param  timeout: Timeout in milliseconds
@@ -149,7 +178,29 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
 bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss);
 
 /**
-  * @brief  Process received UART data
+  * @brief  Check if fix meets quality thresholds for production use
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval true if fix is good quality, false otherwise
+  */
+bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss);
+
+/**
+  * @brief  Validate GPS coordinates are within valid ranges
+  * @param  lat: Latitude in decimal degrees
+  * @param  lon: Longitude in decimal degrees
+  * @retval true if coordinates are valid, false otherwise
+  */
+bool GNSS_ValidateCoordinates(float lat, float lon);
+
+/**
+  * @brief  Process DMA circular buffer data (called from main loop)
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss);
+
+/**
+  * @brief  Process received UART data (legacy byte-by-byte processing)
   * @param  hgnss: Pointer to GNSS handle structure
   * @param  data: Received byte
   * @retval GNSS status
@@ -170,6 +221,12 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd);
   * @retval Calculated checksum
   */
 uint8_t GNSS_CalculateChecksum(const char *sentence);
+
+/**
+  * @brief  DMA callbacks for external ISR handling (called by usart_if.c)
+  */
+void GNSS_DMA_RxHalfCallback(UART_HandleTypeDef *huart);
+void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }

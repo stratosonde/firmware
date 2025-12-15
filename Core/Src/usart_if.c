@@ -20,9 +20,12 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usart_if.h"
+#include "sys_conf.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "SEGGER_RTT.h"
+#include "atgm336h.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -76,7 +79,7 @@ const UTIL_ADV_TRACE_Driver_s UTIL_TraceDriver =
   * @brief  TX complete callback
   * @return none
   */
-static void (*TxCpltCallback)(void *);
+__attribute__((unused)) static void (*TxCpltCallback)(void *);
 /**
   * @brief  RX complete callback
   * @param  rxChar ptr of chars buffer sent by user
@@ -84,7 +87,7 @@ static void (*TxCpltCallback)(void *);
   * @param  error errorcode
   * @return none
   */
-static void (*RxCpltCallback)(uint8_t *rxChar, uint16_t size, uint8_t error);
+__attribute__((unused)) static void (*RxCpltCallback)(uint8_t *rxChar, uint16_t size, uint8_t error);
 
 /* USER CODE BEGIN PV */
 
@@ -103,10 +106,12 @@ UTIL_ADV_TRACE_Status_t vcom_Init(void (*cb)(void *))
   /* USER CODE BEGIN vcom_Init_1 */
 
   /* USER CODE END vcom_Init_1 */
+#if (APP_LOG_ENABLED == 1)
   TxCpltCallback = cb;
   MX_DMA_Init();
   MX_USART1_UART_Init();
   LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_26);
+#endif
   return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_Init_2 */
 
@@ -118,6 +123,7 @@ UTIL_ADV_TRACE_Status_t vcom_DeInit(void)
   /* USER CODE BEGIN vcom_DeInit_1 */
 
   /* USER CODE END vcom_DeInit_1 */
+#if (APP_LOG_ENABLED == 1)
   /* ##-1- Reset peripherals ################################################## */
   __HAL_RCC_USART1_FORCE_RESET();
   __HAL_RCC_USART1_RELEASE_RESET();
@@ -128,9 +134,9 @@ UTIL_ADV_TRACE_Status_t vcom_DeInit(void)
   /* ##-3- Disable the NVIC for DMA ########################################### */
   /* USER CODE BEGIN 1 */
   HAL_NVIC_DisableIRQ(DMA1_Channel5_IRQn);
-
-  return UTIL_ADV_TRACE_OK;
   /* USER CODE END 1 */
+#endif
+  return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_DeInit_2 */
 
   /* USER CODE END vcom_DeInit_2 */
@@ -141,7 +147,9 @@ void vcom_Trace(uint8_t *p_data, uint16_t size)
   /* USER CODE BEGIN vcom_Trace_1 */
 
   /* USER CODE END vcom_Trace_1 */
+#if (APP_LOG_ENABLED == 1)
   HAL_UART_Transmit(&huart1, p_data, size, 1000);
+#endif
   /* USER CODE BEGIN vcom_Trace_2 */
 
   /* USER CODE END vcom_Trace_2 */
@@ -152,7 +160,9 @@ UTIL_ADV_TRACE_Status_t vcom_Trace_DMA(uint8_t *p_data, uint16_t size)
   /* USER CODE BEGIN vcom_Trace_DMA_1 */
 
   /* USER CODE END vcom_Trace_DMA_1 */
+#if (APP_LOG_ENABLED == 1)
   HAL_UART_Transmit_DMA(&huart1, p_data, size);
+#endif
   return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_Trace_DMA_2 */
 
@@ -164,6 +174,7 @@ UTIL_ADV_TRACE_Status_t vcom_ReceiveInit(void (*RxCb)(uint8_t *rxChar, uint16_t 
   /* USER CODE BEGIN vcom_ReceiveInit_1 */
 
   /* USER CODE END vcom_ReceiveInit_1 */
+#if (APP_LOG_ENABLED == 1)
   UART_WakeUpTypeDef WakeUpSelection;
 
   /*record call back*/
@@ -188,7 +199,7 @@ UTIL_ADV_TRACE_Status_t vcom_ReceiveInit(void (*RxCb)(uint8_t *rxChar, uint16_t 
 
   /*Start LPUART receive on IT*/
   HAL_UART_Receive_IT(&huart1, &charRx, 1);
-
+#endif
   return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_ReceiveInit_2 */
 
@@ -200,6 +211,7 @@ void vcom_Resume(void)
   /* USER CODE BEGIN vcom_Resume_1 */
 
   /* USER CODE END vcom_Resume_1 */
+#if (APP_LOG_ENABLED == 1)
   /*to re-enable lost UART settings*/
   if (HAL_UART_Init(&huart1) != HAL_OK)
   {
@@ -211,6 +223,7 @@ void vcom_Resume(void)
   {
     Error_Handler();
   }
+#endif
   /* USER CODE BEGIN vcom_Resume_2 */
 
   /* USER CODE END vcom_Resume_2 */
@@ -222,31 +235,62 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 
   /* USER CODE END HAL_UART_TxCpltCallback_1 */
   /* buffer transmission complete*/
+#if (APP_LOG_ENABLED == 1) 
   if (huart->Instance == USART1)
   {
     TxCpltCallback(NULL);
   }
+#endif
   /* USER CODE BEGIN HAL_UART_TxCpltCallback_2 */
 
   /* USER CODE END HAL_UART_TxCpltCallback_2 */
 }
 
+/* USER CODE BEGIN PV */
+static volatile uint32_t uart_rx_counter = 0;
+/* USER CODE END PV */
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   /* USER CODE BEGIN HAL_UART_RxCpltCallback_1 */
-
+  /* ABSOLUTE MINIMAL ISR - NO ERROR CHECKING, NO VARIABLES, JUST REARM */
   /* USER CODE END HAL_UART_RxCpltCallback_1 */
   if (huart->Instance == USART1)
   {
-    if ((NULL != RxCpltCallback) && (HAL_UART_ERROR_NONE == huart->ErrorCode))
+#if (APP_LOG_ENABLED == 1)
+    /* LoRaWAN trace mode - use vcom callbacks */
+    if (NULL != RxCpltCallback)
     {
       RxCpltCallback(&charRx, 1, 0);
     }
     HAL_UART_Receive_IT(huart, &charRx, 1);
+#else
+    /* GNSS mode - call GNSS DMA callback */
+    GNSS_DMA_RxCpltCallback(huart);
+#endif
   }
   /* USER CODE BEGIN HAL_UART_RxCpltCallback_2 */
 
   /* USER CODE END HAL_UART_RxCpltCallback_2 */
+}
+
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+  /* USER CODE BEGIN HAL_UART_RxHalfCpltCallback_1 */
+  /* DMA half-transfer complete callback for circular buffer mode */
+  /* USER CODE END HAL_UART_RxHalfCpltCallback_1 */
+  if (huart->Instance == USART1)
+  {
+#if (APP_LOG_ENABLED == 1)
+    /* LoRaWAN trace mode - no action needed for half-transfer */
+#else
+    /* GNSS mode - call GNSS DMA half callback */
+    GNSS_DMA_RxHalfCallback(huart);
+#endif
+  }
+  /* USER CODE BEGIN HAL_UART_RxHalfCpltCallback_2 */
+
+  /* USER CODE END HAL_UART_RxHalfCpltCallback_2 */
 }
 
 /* USER CODE BEGIN EF */

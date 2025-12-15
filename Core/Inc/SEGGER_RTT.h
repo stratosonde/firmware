@@ -33,5 +33,7 @@ int           SEGGER_RTT_GetKey          (void);
 int           SEGGER_RTT_WaitKey         (void);
 int           SEGGER_RTT_ConfigUpBuffer  (unsigned BufferIndex, const char* sName, void* pBuffer, unsigned BufferSize, unsigned Flags);
 int           SEGGER_RTT_ConfigDownBuffer(unsigned BufferIndex, const char* sName, void* pBuffer, unsigned BufferSize, unsigned Flags);
+int           SEGGER_RTT_SetTerminal     (unsigned char TerminalId);
+int           SEGGER_RTT_TerminalOut     (unsigned char TerminalId, const char* s);
 
 #endif

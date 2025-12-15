@@ -29,6 +29,9 @@
 #endif /* SENSOR_ENABLED */
 
 /* USER CODE BEGIN Includes */
+#include "atgm336h.h"
+#include "adc_if.h"
+#include "SEGGER_RTT.h"
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
 #include "sht31.h"
 #include "ms5607.h"
@@ -101,6 +104,12 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+/* GNSS module handle */
+GNSS_HandleTypeDef hgnss;
+
+/* UART handle - declared in main.c but we need to access it here for GNSS */
+extern UART_HandleTypeDef huart1;
+
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
 /* SHT31 sensor handle */
 SHT31_HandleTypeDef hsht31;
@@ -111,80 +120,6 @@ MS5607_HandleTypeDef hms5607;
 /* I2C handle - declared in main.c but we need to access it here */
 extern I2C_HandleTypeDef hi2c2;
 
-/* Function to scan I2C bus for devices with enhanced debugging */
-static void ScanI2CBus(I2C_HandleTypeDef *hi2c)
-{
-  printf("Scanning I2C bus for devices with enhanced debugging...\r\n");
-  
-  uint8_t devices_found = 0;
-  HAL_StatusTypeDef status;
-  
-  /* Try all possible 7-bit addresses with more detailed debugging */
-  for (uint8_t address = 1; address < 128; address++)
-  {
-    /* Add a delay between scans to give the I2C bus time to recover */
-    HAL_Delay(5);
-    
-    printf("Trying address 0x%02X: ", address);
-    
-    /* Try multiple times for each address */
-    for (uint8_t retry = 0; retry < 3; retry++)
-    {
-      /* The HAL_I2C_IsDeviceReady function expects the address to be shifted left by 1 */
-      /* This is because the LSB is used for read/write bit */
-      status = HAL_I2C_IsDeviceReady(hi2c, (address << 1), 1, 100);
-      
-      if (status == HAL_OK)
-      {
-        printf("FOUND on retry %d!\r\n", retry);
-        
-        /* Print additional debug info */
-        printf("  - Device found at address 0x%02X (7-bit address)\r\n", address);
-        printf("  - This corresponds to 0x%02X (8-bit address) for write operations\r\n", (address << 1));
-        printf("  - This corresponds to 0x%02X (8-bit address) for read operations\r\n", (address << 1) | 0x01);
-        
-        /* Blink LED to indicate device found */
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        
-        devices_found++;
-        break; /* Device found, break out of retry loop */
-      }
-      
-      /* Small delay between retries */
-      HAL_Delay(5);
-    }
-    
-    if (status != HAL_OK)
-    {
-      printf("not found\r\n");
-    }
-  }
-  
-  if (devices_found == 0)
-  {
-    printf("No I2C devices found on the bus\r\n");
-    printf("Possible issues:\r\n");
-    printf("1. Check physical connections (SDA, SCL, VDD, GND)\r\n");
-    printf("2. Verify pull-up resistors on SDA and SCL lines\r\n");
-    printf("3. Ensure sensor has proper power supply\r\n");
-    printf("4. Try different I2C timing settings\r\n");
-    
-    /* Blink LED rapidly to indicate no devices found */
-    for (int i = 0; i < 5; i++)
-    {
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-      HAL_Delay(50);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-      HAL_Delay(50);
-    }
-  }
-  else
-  {
-    printf("Total I2C devices found: %d\r\n", devices_found);
-  }
-}
 
 #if defined (X_NUCLEO_IKS01A2)
 #warning "IKS drivers are today available for several families but not stm32WL"
@@ -212,163 +147,69 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   float TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
   float PRESSURE_Value = PRESSURE_DEFAULT_VAL;
 
+  /* GNSS processing removed - module is powered off to prevent LoRaWAN interference */
+  /* Re-enable when GNSS power management is coordinated with LoRaWAN timing */
+  /* GNSS_ProcessDMABuffer(&hgnss); */
+
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
-  /* Read from SHT31 sensor */
-  int32_t temp, hum;
-  SHT31_StatusTypeDef sht31_status;
-  MS5607_StatusTypeDef ms5607_status;
-  uint8_t retry_count = 0;
-  const uint8_t MAX_RETRIES = 3;
+  /* Try to read real sensor values */
+  int32_t sht_temp_scaled, sht_hum_scaled;
+  float ms_temp, ms_press;
   
-  /* Turn on LED on PA0 briefly to indicate start of sensor reading */
+  /* Read SHT31 sensor */
+  if (SHT31_ReadTempAndHumidity(&hsht31, &sht_temp_scaled, &sht_hum_scaled) == SHT31_OK) {
+    TEMPERATURE_Value = sht_temp_scaled / 100.0f;  /* Convert from scaled to float */
+    HUMIDITY_Value = sht_hum_scaled / 100.0f;      /* Convert from scaled to float */
+    /* Print using integers (no float printf support needed) */
+    SEGGER_RTT_printf(0, "SHT31: T=%d.%d°C, H=%d.%d%%\r\n", 
+                      sht_temp_scaled / 100, (sht_temp_scaled % 100) / 10,
+                      sht_hum_scaled / 100, (sht_hum_scaled % 100) / 10);
+  } else {
+    SEGGER_RTT_WriteString(0, "SHT31 read failed, using defaults\r\n");
+  }
+  
+  /* Read MS5607 sensor */
+  if (MS5607_ReadPressureAndTemperature(&hms5607, &ms_temp, &ms_press) == MS5607_OK) {
+    PRESSURE_Value = ms_press;
+    /* Use MS5607 temperature as backup/verification */
+    int press_int = (int)(ms_press * 10);
+    int temp_int = (int)(ms_temp * 10);
+    SEGGER_RTT_printf(0, "MS5607: P=%d.%d hPa, T=%d.%d°C\r\n", 
+                      press_int / 10, press_int % 10,
+                      temp_int / 10, temp_int % 10);
+  } else {
+    SEGGER_RTT_WriteString(0, "MS5607 read failed, using defaults\r\n");
+  }
+#else
+  SEGGER_RTT_WriteString(0, "Sensors disabled, using default values\r\n");
+#endif
+
+  /* Quick LED flash to show we're running */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
   HAL_Delay(50);
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-  
-  /* Try to read temperature and humidity from SHT31 with retries */
-  while (retry_count < MAX_RETRIES) {
-    /* If this is a retry, indicate with LED pattern */
-    if (retry_count > 0) {
-      printf("SHT31 read retry #%d\r\n", retry_count);
-      
-      /* Blink LED to indicate retry attempt */
-      for (int i = 0; i < retry_count; i++) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(50);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(50);
-      }
-      
-      /* Reset the I2C bus before retry */
-      HAL_I2C_DeInit(&hi2c2);
-      HAL_Delay(10);
-      HAL_I2C_Init(&hi2c2);
-      HAL_Delay(10);
-      
-      /* Re-initialize the SHT31 sensor */
-      SHT31_Init(&hsht31);
-      HAL_Delay(50);
-    }
-    
-    /* Read temperature and humidity from SHT31 */
-    sht31_status = SHT31_ReadTempAndHumidity(&hsht31, &temp, &hum);
-    
-    if (sht31_status == SHT31_OK) {
-      /* Convert from int32_t (°C*100, %*100) to float */
-      TEMPERATURE_Value = (float)temp / 100.0f;
-      HUMIDITY_Value = (float)hum / 100.0f;
-      
-      /* Print debug info to console */
-      printf("SHT31 read successful: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
-              TEMPERATURE_Value, HUMIDITY_Value);
-      
-      /* Blink LED twice to indicate successful reading */
-      for (int i = 0; i < 2; i++) {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
-      }
-      
-      /* Success - break out of retry loop */
-      break;
-    } else {
-      /* Print error to console */
-      printf("SHT31 read failed with error code: %d (retry %d/%d)\r\n", 
-              sht31_status, retry_count + 1, MAX_RETRIES);
-      
-      /* Increment retry counter */
-      retry_count++;
-      
-      /* If we've exhausted all retries, use default values */
-      if (retry_count >= MAX_RETRIES) {
-        /* Blink LED in pattern to indicate all retries failed */
-        for (int i = 0; i < 5; i++) {
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-          HAL_Delay(100);
-          HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-          HAL_Delay(100);
-        }
-        
-        /* Use default values since reading failed */
-        TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
-        HUMIDITY_Value = HUMIDITY_DEFAULT_VAL;
-        printf("Using default values: Temp=%.1f°C, Humidity=%.1f%%\r\n", 
-                TEMPERATURE_Value, HUMIDITY_Value);
-      } else {
-        /* Wait before retry */
-        HAL_Delay(100 * retry_count); /* Increasing delay with each retry */
-      }
-    }
-  }
-  
-  /* Read pressure and temperature from MS5607 sensor */
-  if (hms5607.IsInitialized)
-  {
-    float ms5607_temp, ms5607_press;
-    ms5607_status = MS5607_ReadPressureAndTemperature(&hms5607, &ms5607_temp, &ms5607_press);
-    
-    if (ms5607_status == MS5607_OK)
-    {
-      /* Use MS5607 pressure value */
-      PRESSURE_Value = ms5607_press;
-      
-      /* 3 quick blinks = MS5607 read successful */
-      for (int i = 0; i < 3; i++)
-      {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
-      }
-    }
-    else
-    {
-      /* 2 quick blinks = MS5607 initialized but read failed */
-      for (int i = 0; i < 2; i++)
-      {
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-        HAL_Delay(100);
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-        HAL_Delay(100);
-      }
-      PRESSURE_Value = PRESSURE_DEFAULT_VAL;
-    }
-  }
-  else
-  {
-    /* 1 quick blink = MS5607 not initialized */
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(100);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-    PRESSURE_Value = PRESSURE_DEFAULT_VAL;
-  }
-  
-#if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
-  IKS01A2_ENV_SENSOR_GetValue(HTS221_0, ENV_HUMIDITY, &HUMIDITY_Value);
-  IKS01A2_ENV_SENSOR_GetValue(HTS221_0, ENV_TEMPERATURE, &TEMPERATURE_Value);
-#endif /* USE_IKS01A2_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A2_ENV_SENSOR_LPS22HB_0 == 1)
-  IKS01A2_ENV_SENSOR_GetValue(LPS22HB_0, ENV_PRESSURE, &PRESSURE_Value);
-  IKS01A2_ENV_SENSOR_GetValue(LPS22HB_0, ENV_TEMPERATURE, &TEMPERATURE_Value);
-#endif /* USE_IKS01A2_ENV_SENSOR_LPS22HB_0 */
-#if (USE_IKS01A3_ENV_SENSOR_HTS221_0 == 1)
-  IKS01A3_ENV_SENSOR_GetValue(IKS01A3_HTS221_0, ENV_HUMIDITY, &HUMIDITY_Value);
-  IKS01A3_ENV_SENSOR_GetValue(IKS01A3_HTS221_0, ENV_TEMPERATURE, &TEMPERATURE_Value);
-#endif /* USE_IKS01A3_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A3_ENV_SENSOR_LPS22HH_0 == 1)
-  IKS01A3_ENV_SENSOR_GetValue(IKS01A3_LPS22HH_0, ENV_PRESSURE, &PRESSURE_Value);
-  IKS01A3_ENV_SENSOR_GetValue(IKS01A3_LPS22HH_0, ENV_TEMPERATURE, &TEMPERATURE_Value);
-#endif /* USE_IKS01A3_ENV_SENSOR_LPS22HH_0 */
-#else
-  TEMPERATURE_Value = (SYS_GetTemperatureLevel() >> 8);
-#endif /* SENSOR_ENABLED */
 
+  /* Set sensor data */
   sensor_data->humidity    = HUMIDITY_Value;
   sensor_data->temperature = TEMPERATURE_Value;
   sensor_data->pressure    = PRESSURE_Value;
+  
+  /* Read battery voltage from ADC (PB4 with voltage divider) */
+  sensor_data->battery_voltage = SYS_GetBatteryVoltage() / 1000.0f;  /* Convert mV to V */
+  int batt_mv = SYS_GetBatteryVoltage();
+  int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
+  SEGGER_RTT_printf(0, "Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
+                    batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
+                    vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
+  
+  /* Initialize GNSS fields with defaults (will be updated when GNSS enabled) */
   sensor_data->latitude    = (int32_t)((STSOP_LATTITUDE  * MAX_GPS_POS) / 90);
   sensor_data->longitude   = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
+  sensor_data->altitudeGps = 0;
+  sensor_data->satellites = 0;
+  sensor_data->gnss_fix_quality = 0;
+  sensor_data->gnss_hdop = 99.9f;
+  sensor_data->gnss_valid = false;
 
   return 0;
   /* USER CODE END EnvSensors_Read */
@@ -378,260 +219,72 @@ int32_t EnvSensors_Init(void)
 {
   int32_t ret = 0;
   /* USER CODE BEGIN EnvSensors_Init */
-#if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
-  ScanI2CBus(&hi2c2);
   
-  /* Try both possible I2C addresses for the SHT31 sensor */
-  /* First try address 0x44 (ADDR pin pulled low) - this is the most common configuration */
+  SEGGER_RTT_WriteString(0, "EnvSensors_Init: Starting I2C sensor initialization...\r\n");
+  
+#if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+  /* Initialize SHT31 sensor handle */
   hsht31.hi2c = &hi2c2;
-  hsht31.Address = SHT31_I2C_ADDRESS_A; /* Address when ADDR is pulled low (0x44) */
+  hsht31.Address = SHT31_I2C_ADDRESS_B;  /* Use 0x45 - hardware has ADDR pin HIGH */
   hsht31.Mode = SHT31_MODE_HIGH_PRECISION;
   
-  /* Print debug info */
-  printf("Initializing SHT31 with address 0x%02X\r\n", hsht31.Address);
-  
-  /* Initialize the SHT31 sensor with LED debugging */
-  ret = SHT31_Init(&hsht31);
-  
-  /* If initialization fails with address 0x44, try address 0x45 */
-  if (ret != SHT31_OK)
-  {
-    printf("SHT31 initialization failed with address 0x44, trying address 0x45...\r\n");
-    
-    /* Blink LED to indicate trying alternate address */
-    for (int i = 0; i < 2; i++)
-    {
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-      HAL_Delay(200);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-      HAL_Delay(200);
-    }
-    
-    /* Try with address 0x45 (ADDR pin pulled high) */
-    hsht31.Address = SHT31_I2C_ADDRESS_B; /* Address when ADDR is pulled high (0x45) */
-    ret = SHT31_Init(&hsht31);
-    
-    if (ret == SHT31_OK)
-    {
-      printf("SHT31 initialization successful with address 0x45\r\n");
-    }
-  }
-  else
-  {
-    printf("SHT31 initialization successful with address 0x44\r\n");
-  }
-  
-  /* If initialization fails, blink the LED on PA0 to indicate error */
-  if (ret != SHT31_OK)
-  {
-    /* Blink LED on PA0 to indicate SHT31 initialization error */
-    for (int i = 0; i < 5; i++)
-    {
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-      HAL_Delay(200);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-      HAL_Delay(200);
-    }
-    
-    /* Continue anyway to avoid system crash, but log the error */
-    printf("SHT31 initialization failed with error code: %d\r\n", ret);
-    /* Don't call Error_Handler() to avoid system crash */
-  }
-  else
-  {
-    /* Blink LED once to indicate successful initialization */
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(500);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-    
-    printf("SHT31 initialized successfully\r\n");
-  }
-  
-  /* Initialize MS5607 pressure sensor */
-  printf("Initializing MS5607 pressure sensor...\r\n");
-  
-  /* IMPORTANT: Make sure the PS pin is pulled HIGH for I2C mode */
-  printf("REMINDER: MS5607 PS pin must be HIGH for I2C mode, LOW for SPI mode\r\n");
-  
-  /* Zero-initialize the handle to ensure clean state */
-  memset(&hms5607, 0, sizeof(hms5607));
-  
-  /* User confirmed CSB is low, so we should use address 0x77 */
+  /* Initialize MS5607 sensor handle */
   hms5607.hi2c = &hi2c2;
-  hms5607.Address = MS5607_I2C_ADDRESS_B; /* 0x77 when CSB is connected to GND (low) */
-  /* When shifted for I2C operations: 0xEE for write, 0xEF for read */
-  hms5607.PressureOsr = MS5607_OSR_4096;  /* Highest precision */
-  hms5607.TemperatureOsr = MS5607_OSR_4096; /* Highest precision */
+  hms5607.Address = MS5607_I2C_ADDRESS_B;  /* Use 0x77 - hardware has CSB pin LOW */
+  hms5607.PressureOsr = MS5607_OSR_4096;
+  hms5607.TemperatureOsr = MS5607_OSR_4096;
   
-  /* Don't reset I2C bus since SHT31 is already working on it */
-  /* Just add a small delay before initializing */
-  HAL_Delay(100);
-  
-  printf("Trying MS5607 with address 0x77 (CSB low)...\r\n");
-  
-  /* Initialize the MS5607 sensor with multiple attempts */
-  MS5607_StatusTypeDef ms5607_status = MS5607_ERROR;
-  uint8_t init_attempts = 0;
-  const uint8_t MAX_INIT_ATTEMPTS = 5;
-  
-  while (init_attempts < MAX_INIT_ATTEMPTS && ms5607_status != MS5607_OK) {
-    printf("MS5607 initialization attempt %d with address 0x%02X\r\n", 
-           init_attempts + 1, hms5607.Address);
-    
-    /* Reset the sensor before each attempt */
-    MS5607_Reset(&hms5607);
-    HAL_Delay(20); /* Wait for reset to complete */
-    
-    /* Initialize the sensor */
-    ms5607_status = MS5607_Init(&hms5607);
-    
-    if (ms5607_status != MS5607_OK) {
-      printf("MS5607 initialization failed, error code: %d\r\n", ms5607_status);
-      
-      /* Blink LED to indicate retry */
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-      HAL_Delay(200);
-      HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-      HAL_Delay(200);
-      
-      /* Try alternate address if we've tried a few times with the current address */
-      if (init_attempts == 2 && hms5607.Address == MS5607_I2C_ADDRESS_B) {
-        printf("Switching to alternate MS5607 address 0x76 (CSB high)...\r\n");
-        hms5607.Address = MS5607_I2C_ADDRESS_A;
-      }
-      
-      /* Don't reset I2C bus since SHT31 is already working on it */
-      /* Just add a small delay before next attempt */
-      HAL_Delay(100);
-      
-      init_attempts++;
-    }
+  /* Initialize SHT31 sensor */
+  if (SHT31_Init(&hsht31) == SHT31_OK) {
+    SEGGER_RTT_WriteString(0, "SHT31 sensor initialized successfully\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "SHT31 sensor initialization failed\r\n");
+    ret = -1;
   }
   
-  /* Check if initialization was successful */
-  if (ms5607_status != MS5607_OK)
-  {
-    printf("MS5607 initialization failed with error code: %d\r\n", ms5607_status);
-    /* Continue anyway to avoid system crash */
+  /* Initialize MS5607 sensor */
+  if (MS5607_Init(&hms5607) == MS5607_OK) {
+    SEGGER_RTT_WriteString(0, "MS5607 sensor initialized successfully\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "MS5607 sensor initialization failed\r\n");
+    ret = -2;
   }
-  else
-  {
-    printf("MS5607 initialized successfully\r\n");
+#else
+  SEGGER_RTT_WriteString(0, "Sensors disabled in configuration\r\n");
+#endif
+  
+  /* Initialize GNSS module handle */
+  SEGGER_RTT_WriteString(0, "Initializing GNSS module...\r\n");
+  hgnss.huart = &huart1;
+  hgnss.pwr_port = GPIOB;
+  hgnss.pwr_pin = GPIO_PIN_10;
+  hgnss.en_port = GPIOB;
+  hgnss.en_pin = GPIO_PIN_5;
+  
+  /* Initialize GNSS module (configures GPIO, sets up structure) */
+  if (GNSS_Init(&hgnss) == GNSS_OK) {
+    SEGGER_RTT_WriteString(0, "GNSS module initialized successfully\r\n");
+  } else {
+    SEGGER_RTT_WriteString(0, "GNSS module initialization FAILED\r\n");
+    ret = -3;
   }
   
-  /* Init */
-#if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_Init(HTS221_0, ENV_TEMPERATURE | ENV_HUMIDITY);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
+  /* GNSS power-on DISABLED to prevent interference with LoRaWAN */
+  /* The GNSS disables STOP mode which breaks LoRaWAN timing/join */
+  SEGGER_RTT_WriteString(0, "GNSS power-on DISABLED (prevents LoRaWAN interference)\r\n");
+  
+  /* Uncomment below when ready to enable GNSS (will affect LoRaWAN timing): */
+  /*
+  SEGGER_RTT_WriteString(0, "Powering on GNSS module...\r\n");
+  if (GNSS_PowerOn(&hgnss) == GNSS_OK) {
+    SEGGER_RTT_WriteString(0, "GNSS powered ON - UART1 DMA receiving NMEA...\r\n");
+    GNSS_Configure(&hgnss);
+  } else {
+    SEGGER_RTT_WriteString(0, "GNSS power on FAILED\r\n");
   }
-#endif /* USE_IKS01A2_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A2_ENV_SENSOR_LPS22HB_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_Init(LPS22HB_0, ENV_TEMPERATURE | ENV_PRESSURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A2_ENV_SENSOR_LPS22HB_0 */
-#if (USE_IKS01A3_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_Init(IKS01A3_HTS221_0, ENV_TEMPERATURE | ENV_HUMIDITY);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A3_ENV_SENSOR_LPS22HH_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_Init(IKS01A3_LPS22HH_0, ENV_TEMPERATURE | ENV_PRESSURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_LPS22HH_0 */
-
-  /* Enable */
-#if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_Enable(HTS221_0, ENV_HUMIDITY);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-  ret = IKS01A2_ENV_SENSOR_Enable(HTS221_0, ENV_TEMPERATURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A2_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A2_ENV_SENSOR_LPS22HB_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_Enable(LPS22HB_0, ENV_PRESSURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-  ret = IKS01A2_ENV_SENSOR_Enable(LPS22HB_0, ENV_TEMPERATURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A2_ENV_SENSOR_LPS22HB_0 */
-#if (USE_IKS01A3_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_Enable(IKS01A3_HTS221_0, ENV_HUMIDITY);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-  ret = IKS01A3_ENV_SENSOR_Enable(IKS01A3_HTS221_0, ENV_TEMPERATURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A3_ENV_SENSOR_LPS22HH_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_Enable(IKS01A3_LPS22HH_0, ENV_PRESSURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-  ret = IKS01A3_ENV_SENSOR_Enable(IKS01A3_LPS22HH_0, ENV_TEMPERATURE);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_LPS22HH_0 */
-
-  /* Get capabilities */
-#if (USE_IKS01A2_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_GetCapabilities(HTS221_0, &EnvCapabilities);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A2_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A2_ENV_SENSOR_LPS22HB_0 == 1)
-  ret = IKS01A2_ENV_SENSOR_GetCapabilities(LPS22HB_0, &EnvCapabilities);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A2_ENV_SENSOR_LPS22HB_0 */
-#if (USE_IKS01A3_ENV_SENSOR_HTS221_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_GetCapabilities(IKS01A3_HTS221_0, &EnvCapabilities);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_HTS221_0 */
-#if (USE_IKS01A3_ENV_SENSOR_LPS22HH_0 == 1)
-  ret = IKS01A3_ENV_SENSOR_GetCapabilities(IKS01A3_LPS22HH_0, &EnvCapabilities);
-  if (ret != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
-#endif /* USE_IKS01A3_ENV_SENSOR_LPS22HH_0 */
-
-#elif !defined (SENSOR_ENABLED)
-#error SENSOR_ENABLED not defined
-#endif /* SENSOR_ENABLED  */
+  */
+  
+  SEGGER_RTT_WriteString(0, "EnvSensors_Init: Initialization complete\r\n");
   /* USER CODE END EnvSensors_Init */
   return ret;
 }

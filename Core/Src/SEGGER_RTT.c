@@ -256,3 +256,44 @@ int SEGGER_RTT_ConfigDownBuffer(unsigned BufferIndex, const char* sName, void* p
   SEGGER_RTT_UNLOCK();
   return 0;
 }
+
+static unsigned char _ActiveTerminal = 0;
+
+int SEGGER_RTT_SetTerminal(unsigned char TerminalId) {
+  // Simple terminal switching - just store the active terminal
+  // This is used to prefix output with terminal switching commands
+  _ActiveTerminal = TerminalId;
+  return 0;
+}
+
+int SEGGER_RTT_TerminalOut(unsigned char TerminalId, const char* s) {
+  // Write string to the specified virtual terminal on channel 0
+  // Virtual terminals use special prefix bytes to switch terminals
+  unsigned char acSwitch[2];
+  unsigned Len;
+  
+  if (!s) {
+    return -1;
+  }
+  
+  Len = strlen(s);
+  if (Len == 0) {
+    return 0;
+  }
+  
+  SEGGER_RTT_LOCK();
+  
+  // If switching to a different terminal, send terminal switch command
+  if (TerminalId != _ActiveTerminal) {
+    acSwitch[0] = 0xFF;  // Terminal switch escape sequence
+    acSwitch[1] = (unsigned char)('0' + TerminalId);  // Terminal ID as ASCII character
+    SEGGER_RTT_Write(0, acSwitch, 2);
+    _ActiveTerminal = TerminalId;
+  }
+  
+  // Write the actual string
+  SEGGER_RTT_Write(0, s, Len);
+  
+  SEGGER_RTT_UNLOCK();
+  return (int)Len;
+}

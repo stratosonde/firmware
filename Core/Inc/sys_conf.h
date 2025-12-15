@@ -47,12 +47,22 @@ extern "C" {
 /**
   * @brief  Verbose level for all trace logs
   */
-#define VERBOSE_LEVEL                        VLEVEL_H
+#define VERBOSE_LEVEL                        VLEVEL_M
 
 /**
   * @brief Enable trace logs
   */
-#define APP_LOG_ENABLED                      1
+#define APP_LOG_ENABLED                      0
+
+/* USER CODE BEGIN Custom APP_LOG */
+/**
+  * @brief Redirect APP_LOG to RTT Terminal 0
+  * @note  This allows LoRaWAN debug visibility via RTT
+  *        All output goes to Terminal 0 for simple viewer compatibility
+  */
+#undef APP_LOG
+#define APP_LOG(TS, VL, ...) SEGGER_RTT_printf(0, "[APP] " __VA_ARGS__)
+/* USER CODE END Custom APP_LOG */
 
 /**
   * @brief Activate monitoring (probes) of some internal RF signals for debug purpose

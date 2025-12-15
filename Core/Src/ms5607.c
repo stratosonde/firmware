@@ -79,9 +79,7 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   }
   
   /* Print raw calibration values via RTT */
-  SEGGER_RTT_printf(0, "  C1=%u C2=%u C3=%u\r\n", hms5607->CalData.c1, hms5607->CalData.c2, hms5607->CalData.c3);
-  SEGGER_RTT_printf(0, "  C4=%u C5=%u C6=%u\r\n", hms5607->CalData.c4, hms5607->CalData.c5, hms5607->CalData.c6);
-  SEGGER_RTT_printf(0, "  CRC=0x%04X\r\n", hms5607->CalData.crc);
+  SEGGER_RTT_WriteString(0, "MS5607: Calibration data read\r\n");
   
   /* Verify calibration data is valid (not all zeros or all ones) */
   if (hms5607->CalData.c1 == 0 || hms5607->CalData.c1 == 0xFFFF ||
@@ -107,8 +105,7 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   prom[7] = hms5607->CalData.crc;
   
   /* Debug: print raw PROM values */
-  SEGGER_RTT_printf(0, "PROM[0]=0x%04X (reserved)\r\n", prom[0]);
-  SEGGER_RTT_printf(0, "PROM[7]=0x%04X (crc word)\r\n", prom[7]);
+  SEGGER_RTT_WriteString(0, "MS5607: PROM values read\r\n");
   
   uint8_t crc = MS5607_CRC4(prom);
   
@@ -117,15 +114,14 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   uint8_t stored_crc_high4 = (hms5607->CalData.crc >> 12) & 0x000F;  /* Upper 4 bits of PROM[7] */
   uint8_t stored_crc_prom0 = (hms5607->CalData.reserved >> 12) & 0x000F; /* Upper 4 bits of PROM[0] */
   
-  SEGGER_RTT_printf(0, "CRC calc=%d, PROM7_low4=%d, PROM7_high4=%d, PROM0_high4=%d\r\n", 
-                    crc, stored_crc_low4, stored_crc_high4, stored_crc_prom0);
+  SEGGER_RTT_WriteString(0, "MS5607: CRC check in progress\r\n");
   
   /* CRC is stored in lower 4 bits of PROM[7] per AN520 CRC Notes */
   uint8_t stored_crc = stored_crc_low4;
   
   if (crc != stored_crc)
   {
-    SEGGER_RTT_printf(0, "MS5607: CRC MISMATCH! calc=%d stored=%d\r\n", crc, stored_crc);
+    SEGGER_RTT_WriteString(0, "MS5607: CRC MISMATCH!\r\n");
     return MS5607_ERROR;
   }
   else
@@ -133,19 +129,13 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
     SEGGER_RTT_WriteString(0, "MS5607: CRC OK\r\n");
   }
   
-  /* Log calibration coefficients */
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607 calibration data:\r\n");
-  APP_LOG(TS_ON, VLEVEL_M, "  C1 = %u\r\n", hms5607->CalData.c1);
-  APP_LOG(TS_ON, VLEVEL_M, "  C2 = %u\r\n", hms5607->CalData.c2);
-  APP_LOG(TS_ON, VLEVEL_M, "  C3 = %u\r\n", hms5607->CalData.c3);
-  APP_LOG(TS_ON, VLEVEL_M, "  C4 = %u\r\n", hms5607->CalData.c4);
-  APP_LOG(TS_ON, VLEVEL_M, "  C5 = %u\r\n", hms5607->CalData.c5);
-  APP_LOG(TS_ON, VLEVEL_M, "  C6 = %u\r\n", hms5607->CalData.c6);
+  /* Calibration complete */
+  SEGGER_RTT_WriteString(0, "MS5607: Calibration complete\r\n");
   
   /* Set initialization flag */
   hms5607->IsInitialized = 1;
   
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607 initialization successful\r\n");
+  SEGGER_RTT_WriteString(0, "MS5607: Initialization successful\r\n");
   return MS5607_OK;
 }
 
@@ -243,13 +233,13 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* This allows us to see what's happening on the I2C bus even if init failed */
   if (!hms5607->IsInitialized)
   {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 WARNING: Sensor not initialized, attempting read anyway for diagnostics\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: Sensor not initialized\r\n");
   }
   
   /* Start D2 (temperature) conversion */
   status = MS5607_StartConversion(hms5607, MS5607_CMD_CONVERT_D2 | hms5607->TemperatureOsr);
   if (status != MS5607_OK) {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 D2 conversion start failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: D2 conversion failed\r\n");
     return status;
   }
   
@@ -279,16 +269,14 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Read D2 (temperature) ADC value */
   status = MS5607_ReadADC(hms5607, &d2);
   if (status != MS5607_OK) {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 D2 ADC read failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: D2 ADC read failed\r\n");
     return status;
   }
-  
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607 D2 (temperature) raw value: %lu\r\n", d2);
   
   /* Start D1 (pressure) conversion */
   status = MS5607_StartConversion(hms5607, MS5607_CMD_CONVERT_D1 | hms5607->PressureOsr);
   if (status != MS5607_OK) {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 D1 conversion start failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: D1 conversion failed\r\n");
     return status;
   }
   
@@ -318,16 +306,14 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Read D1 (pressure) ADC value */
   status = MS5607_ReadADC(hms5607, &d1);
   if (status != MS5607_OK) {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 D1 ADC read failed\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: D1 ADC read failed\r\n");
     return status;
   }
-  
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607 D1 (pressure) raw value: %lu\r\n", d1);
   
   /* Check if D1 or D2 is zero or very small, which would indicate a communication problem */
   /* But don't return error, try to calculate with the values we have */
   if (d1 == 0 || d2 == 0 || d1 < 1000 || d2 < 1000) {
-    APP_LOG(TS_ON, VLEVEL_M, "MS5607 warning: D1=%lu or D2=%lu is zero or very small, possible communication issue\r\n", d1, d2);
+    SEGGER_RTT_WriteString(0, "MS5607: Warning - ADC values low\r\n");
     /* Continue anyway and see if we get reasonable values */
   }
   
@@ -368,9 +354,6 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Convert to float values */
   *temperature = (float)temp / 100.0f;
   *pressure = (float)p / 100.0f;
-  
-  APP_LOG(TS_ON, VLEVEL_M, "MS5607 read: D1=%lu, D2=%lu, Temp=%.2f°C, Press=%.2fmbar\r\n", 
-          d1, d2, *temperature, *pressure);
   
   return MS5607_OK;
 }
@@ -459,7 +442,7 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
   /* Check if address is valid */
   if (address > 7)
   {
-    printf("MS5607_ReadProm: Invalid address %d\r\n", address);
+    SEGGER_RTT_WriteString(0, "MS5607_ReadProm: Invalid address\r\n");
     return MS5607_ERROR;
   }
   

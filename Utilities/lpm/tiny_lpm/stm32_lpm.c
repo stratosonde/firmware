@@ -138,11 +138,13 @@ void UTIL_LPM_SetStopMode( UTIL_LPM_bm_t lpm_id_bm, UTIL_LPM_State_t state )
   case UTIL_LPM_DISABLE:
     {
       StopModeDisable |= lpm_id_bm;
+      /* LPM Stop Mode disabled */
       break;
     }
   case UTIL_LPM_ENABLE:
     {
       StopModeDisable &= ( ~lpm_id_bm );
+      /* LPM Stop Mode enabled */
       break;
     }
   default :
@@ -215,6 +217,8 @@ UTIL_LPM_Mode_t UTIL_LPM_GetMode( void )
 void UTIL_LPM_EnterLowPower( void )
 {
   UTIL_LPM_ENTER_CRITICAL_SECTION_ELP( );
+
+  /* Debug removed - use UTIL_LPM_SetStopMode() logs to track LPM state changes */
 
   if( StopModeDisable != UTIL_LPM_NO_BIT_SET )
   {

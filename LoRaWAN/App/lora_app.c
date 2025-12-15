@@ -366,37 +366,26 @@ static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
-  APP_LOG(TS_ON, VLEVEL_M, "Preparing to send data using Cayenne LPP format...\r\n");
 
   // Get sensor data
   sensor_t sensor_data;
   SEGGER_RTT_WriteString(0, "Calling EnvSensors_Read...\r\n");
   EnvSensors_Read(&sensor_data);
   
-  // Use integer output to bypass float printf issues
-  int temp_int = (int)(sensor_data.temperature * 10);
-  int hum_int = (int)(sensor_data.humidity * 10);
-  int press_int = (int)(sensor_data.pressure * 10);
-  SEGGER_RTT_printf(0, "Sensor: T=%d.%d C, H=%d.%d %%, P=%d.%d mbar\r\n", 
-                    temp_int/10, (temp_int >= 0 ? temp_int%10 : (-temp_int)%10),
-                    hum_int/10, hum_int%10,
-                    press_int/10, press_int%10);
+  SEGGER_RTT_WriteString(0, "Sensor data read\r\n");
   
   // Initialize Cayenne LPP payload
   CayenneLppReset();
-  SEGGER_RTT_printf(0, "CayenneLpp reset, size=%d\r\n", CayenneLppGetSize());
+  SEGGER_RTT_WriteString(0, "CayenneLpp reset\r\n");
   
   // Add temperature data (channel 1)
   CayenneLppAddTemperature(1, sensor_data.temperature);
-  SEGGER_RTT_printf(0, "After temp, size=%d\r\n", CayenneLppGetSize());
   
   // Add humidity data (channel 2)
   CayenneLppAddRelativeHumidity(2, sensor_data.humidity);
-  SEGGER_RTT_printf(0, "After humidity, size=%d\r\n", CayenneLppGetSize());
   
   // Add pressure data (channel 3)
   CayenneLppAddBarometricPressure(3, sensor_data.pressure);
-  SEGGER_RTT_printf(0, "After pressure, size=%d\r\n", CayenneLppGetSize());
   
   // Add GPS data (channel 4) - use zeros if GNSS fix is invalid
   float lat, lon, alt;
@@ -406,34 +395,25 @@ static void SendTxData(void)
     lon = (sensor_data.longitude * 180.0f) / 8388607.0f;
     alt = (float)sensor_data.altitudeGps;
     
-    APP_LOG(TS_ON, VLEVEL_M, "GNSS data valid: Lat=%.6f, Lon=%.6f, Alt=%.1fm, Sats=%d\r\n",
-            lat, lon, alt, sensor_data.satellites);
+    SEGGER_RTT_WriteString(0, "GNSS data valid\r\n");
   } else {
     // Use zeros when no valid GNSS fix
     lat = 0.0f;
     lon = 0.0f;
     alt = 0.0f;
     
-    APP_LOG(TS_ON, VLEVEL_M, "GNSS data invalid, sending zeros\r\n");
+    SEGGER_RTT_WriteString(0, "GNSS data invalid\r\n");
   }
   
   CayenneLppAddGps(4, lat, lon, alt);
-  SEGGER_RTT_printf(0, "After GPS, size=%d\r\n", CayenneLppGetSize());
   
   // Add number of satellites as analog input (channel 5) - value 0-255
   CayenneLppAddAnalogInput(5, (float)sensor_data.satellites);
-  SEGGER_RTT_printf(0, "After satellites, size=%d\r\n", CayenneLppGetSize());
-
-  // Log the data being sent
-  APP_LOG(TS_ON, VLEVEL_M, "Cayenne LPP data prepared (len=%d), Temp: %.1f°C, Humidity: %.1f%%, Pressure: %.1fmbar\r\n", 
-          CayenneLppGetSize(), sensor_data.temperature, sensor_data.humidity, sensor_data.pressure);
   
-  // Debug: Print the raw buffer contents
-  APP_LOG(TS_ON, VLEVEL_M, "Buffer contents: ");
-  for (uint8_t i = 0; i < CayenneLppGetSize(); i++) {
-    APP_LOG(TS_OFF, VLEVEL_M, "%02X ", CayenneLppGetBuffer()[i]);
-  }
-  APP_LOG(TS_OFF, VLEVEL_M, "\r\n");
+  // Add battery voltage on channel 6 (in volts)
+  CayenneLppAddAnalogInput(6, sensor_data.battery_voltage);
+
+  SEGGER_RTT_WriteString(0, "Cayenne LPP data prepared\r\n");
   
   // Prepare and send the LoRaWAN packet
   LmHandlerAppData_t appData;
@@ -443,19 +423,10 @@ static void SendTxData(void)
   
   // Force data rate before each send (DR2 = 125 bytes max for US915)
   LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
-  SEGGER_RTT_printf(0, "Set DR=%d, Sending LoRaWAN: port=%d, size=%d\r\n", 
-                    LORAWAN_DEFAULT_DATA_RATE, appData.Port, appData.BufferSize);
-  
-  /* Print raw buffer via RTT */
-  SEGGER_RTT_WriteString(0, "Raw buffer: ");
-  for (uint8_t i = 0; i < appData.BufferSize; i++) {
-    SEGGER_RTT_printf(0, "%02X ", appData.Buffer[i]);
-  }
-  SEGGER_RTT_WriteString(0, "\r\n");
+  SEGGER_RTT_WriteString(0, "Sending LoRaWAN packet...\r\n");
   
   LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-  SEGGER_RTT_printf(0, "LmHandlerSend status: %d (0=OK)\r\n", status);
-  APP_LOG(TS_ON, VLEVEL_M, "LmHandlerSend status: %d\r\n", status);
+  SEGGER_RTT_WriteString(0, "LmHandlerSend complete\r\n");
   SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }
@@ -481,10 +452,7 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
-  SEGGER_RTT_printf(0, "OnTxData: status=%d, DR=%d, power=%d, ack=%d\r\n", 
-          params->Status, params->Datarate, params->TxPower, params->AckReceived);
-  APP_LOG(TS_ON, VLEVEL_M, "OnTxData: status = %d, datarate = %d, power = %d\r\n", 
-          params->Status, params->Datarate, params->TxPower);
+  SEGGER_RTT_WriteString(0, "OnTxData callback\r\n");
   /* USER CODE END OnTxData_1 */
 }
 
@@ -493,13 +461,11 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   /* USER CODE BEGIN OnJoinRequest_1 */
   if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
   {
-    SEGGER_RTT_printf(0, "JOIN SUCCESS! DevAddr: %08X\r\n", joinParams->CommissioningParams->DevAddr);
-    APP_LOG(TS_ON, VLEVEL_M, "Join Success! DevAddr: %08X\r\n", joinParams->CommissioningParams->DevAddr);
+    SEGGER_RTT_WriteString(0, "JOIN SUCCESS!\r\n");
   }
   else
   {
-    SEGGER_RTT_printf(0, "JOIN FAILED! Status: %d\r\n", joinParams->Status);
-    APP_LOG(TS_ON, VLEVEL_M, "Join Failed! Status: %d\r\n", joinParams->Status);
+    SEGGER_RTT_WriteString(0, "JOIN FAILED!\r\n");
   }
   /* USER CODE END OnJoinRequest_1 */
 }
@@ -603,20 +569,20 @@ static void StopJoin(void)
 
   if (LORAMAC_HANDLER_SUCCESS != LmHandlerStop())
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stop on going ...\r\n");
+    SEGGER_RTT_WriteString(0, "LmHandler Stop ongoing\r\n");
   }
   else
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stopped\r\n");
+    SEGGER_RTT_WriteString(0, "LmHandler Stopped\r\n");
     if (LORAWAN_DEFAULT_ACTIVATION_TYPE == ACTIVATION_TYPE_ABP)
     {
       ActivationType = ACTIVATION_TYPE_OTAA;
-      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to OTAA mode\r\n");
+      SEGGER_RTT_WriteString(0, "Switch to OTAA\r\n");
     }
     else
     {
       ActivationType = ACTIVATION_TYPE_ABP;
-      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to ABP mode\r\n");
+      SEGGER_RTT_WriteString(0, "Switch to ABP\r\n");
     }
     LmHandlerConfigure(&LmHandlerParams);
     LmHandlerJoin(ActivationType, true);
@@ -653,11 +619,11 @@ static void StoreContext(void)
 
   if (status == LORAMAC_HANDLER_NVM_DATA_UP_TO_DATE)
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA UP TO DATE\r\n");
+    SEGGER_RTT_WriteString(0, "NVM DATA UP TO DATE\r\n");
   }
   else if (status == LORAMAC_HANDLER_ERROR)
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORE FAILED\r\n");
+    SEGGER_RTT_WriteString(0, "NVM DATA STORE FAILED\r\n");
   }
   /* USER CODE BEGIN StoreContext_Last */
 
@@ -671,11 +637,11 @@ static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
   /* USER CODE END OnNvmDataChange_1 */
   if (state == LORAMAC_HANDLER_NVM_STORE)
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORED\r\n");
+    SEGGER_RTT_WriteString(0, "NVM DATA STORED\r\n");
   }
   else
   {
-    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA RESTORED\r\n");
+    SEGGER_RTT_WriteString(0, "NVM DATA RESTORED\r\n");
   }
   /* USER CODE BEGIN OnNvmDataChange_Last */
 

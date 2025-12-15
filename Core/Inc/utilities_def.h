@@ -48,7 +48,7 @@ typedef enum
   CFG_LPM_APPLI_Id,
   CFG_LPM_UART_TX_Id,
   /* USER CODE BEGIN CFG_LPM_Id_t */
-
+  CFG_LPM_GNSS_Id,
   /* USER CODE END CFG_LPM_Id_t */
 } CFG_LPM_Id_t;
 
