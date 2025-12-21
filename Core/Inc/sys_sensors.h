@@ -52,6 +52,7 @@ typedef struct
   float gnss_hdop;        /*!< horizontal dilution of precision */
   bool gnss_valid;        /*!< GNSS data validity flag */
   float battery_voltage;  /*!< battery voltage in volts */
+  float regulator_voltage; /*!< regulator voltage (VDDA/3.3V rail) in volts */
   /* USER CODE END sensor_t */
 } sensor_t;
 

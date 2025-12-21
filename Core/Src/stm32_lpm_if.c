@@ -31,6 +31,7 @@
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
 extern I2C_HandleTypeDef hi2c2;
+extern SPI_HandleTypeDef hspi2;
 void SystemClock_Config(void);
 /* USER CODE END EV */
 
@@ -117,6 +118,11 @@ void PWR_ExitStopMode(void)
   /* Re-initialize I2C2 since registers are lost in STOP2 mode */
   HAL_I2C_DeInit(&hi2c2);
   HAL_I2C_Init(&hi2c2);
+  
+  /* Re-initialize SPI2 since registers are lost in STOP2 mode */
+  /* SPI2 is used for external flash (W25Q16JV) - must be restored after wake */
+  HAL_SPI_DeInit(&hspi2);
+  HAL_SPI_Init(&hspi2);
   /* USER CODE END ExitStopMode_1 */
   /* Resume sysTick : work around for debugger problem in dual core */
   HAL_ResumeTick();

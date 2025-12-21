@@ -195,6 +195,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   
   /* Read battery voltage from ADC (PB4 with voltage divider) */
   sensor_data->battery_voltage = SYS_GetBatteryVoltage() / 1000.0f;  /* Convert mV to V */
+  
+  /* Read regulator voltage (VDDA/3.3V rail) from internal reference */
+  sensor_data->regulator_voltage = SYS_GetBatteryLevel() / 1000.0f;  /* Convert mV to V */
+  
   int batt_mv = SYS_GetBatteryVoltage();
   int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
   SEGGER_RTT_printf(0, "Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 

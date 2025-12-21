@@ -499,6 +499,9 @@ static void SendTxData(void)
   
   // Add battery voltage on channel 6 (in volts)
   CayenneLppAddAnalogInput(6, sensor_data.battery_voltage);
+  
+  // Add regulator voltage (3.3V rail) on channel 7 (in volts)
+  CayenneLppAddAnalogInput(7, sensor_data.regulator_voltage);
 
   SEGGER_RTT_WriteString(0, "Cayenne LPP data prepared\r\n");
   
@@ -803,4 +806,3 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
 
   /* USER CODE END OnRestoreContextRequest_Last */
 }
-

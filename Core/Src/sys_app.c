@@ -158,7 +158,8 @@ uint8_t GetBatteryLevel(void)
 
   /* USER CODE END GetBatteryLevel_0 */
 
-  batteryLevelmV = (uint16_t) SYS_GetBatteryLevel();
+  /* Use actual battery voltage from PB4 (not VDDA) */
+  batteryLevelmV = SYS_GetBatteryVoltage();  /* Reads actual battery through voltage divider */
 
   /* Convert battery level from mV to linear scale: 1 (very low) to 254 (fully charged) */
   if (batteryLevelmV > VDD_BAT)
