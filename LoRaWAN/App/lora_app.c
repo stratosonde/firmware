@@ -38,11 +38,12 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "SEGGER_RTT.h"
+#include "atgm336h.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
-
+extern GNSS_HandleTypeDef hgnss;  /* GNSS handle from sys_sensors.c */
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -291,6 +292,7 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 static UTIL_TIMER_Object_t StopJoinTimer;
 
 /* USER CODE BEGIN PV */
+
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -333,6 +335,7 @@ void LoRaWAN_Init(void)
   {
     /* send every time timer elapses */
     UTIL_TIMER_Create(&TxTimer, TxPeriodicity, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
+    /* Timer enabled - this drives join retries via LmHandlerSend's internal join check */
     UTIL_TIMER_Start(&TxTimer);
   }
   else
@@ -365,7 +368,92 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
+  
+  /* Check join status - if not joined, trigger a new join attempt */
+  if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
+  {
+    SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
+    LmHandlerJoin(ActivationType, true);
+    return; /* Exit - will send data after join succeeds */
+  }
+  
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
+
+  /* Non-blocking GNSS collection - power on briefly, capture what's available
+   * GPS module needs time to get a fix (cold start ~30s, warm ~5s, hot ~1s)
+   * We power on for longer on first attempts to allow cold/warm fix
+   * This keeps the GNSS operation bounded and doesn't block LoRaWAN timing
+   */
+  #define GNSS_COLLECTION_TIME_MS  45000  /* 45 seconds - allows cold start fix */
+  #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
+  
+  SEGGER_RTT_WriteString(0, "Powering GPS ON for fix acquisition (45s max)...\r\n");
+  if (GNSS_PowerOn(&hgnss) == GNSS_OK)
+  {
+    uint32_t gps_start = HAL_GetTick();
+    bool got_fix = false;
+    uint32_t last_status_print = 0;
+    
+    /* Process GPS data for up to GNSS_COLLECTION_TIME_MS */
+    while ((HAL_GetTick() - gps_start) < GNSS_COLLECTION_TIME_MS)
+    {
+      /* Process DMA buffer - parses NMEA and updates hgnss.data */
+      GNSS_ProcessDMABuffer(&hgnss);
+      
+      /* Check if we have a good quality fix */
+      if (GNSS_IsFixGoodQuality(&hgnss))
+      {
+        got_fix = true;
+        char fix_msg[128];
+        snprintf(fix_msg, sizeof(fix_msg), 
+                 "GPS FIX! Lat:%.6f Lon:%.6f Alt:%.1fm Sats:%d HDOP:%.1f (took %lums)\r\n",
+                 hgnss.data.latitude, hgnss.data.longitude, hgnss.data.altitude,
+                 hgnss.data.satellites, hgnss.data.hdop,
+                 (unsigned long)(HAL_GetTick() - gps_start));
+        SEGGER_RTT_WriteString(0, fix_msg);
+        break;  /* Exit early - we have what we need */
+      }
+      
+      /* Print status every 5 seconds during acquisition */
+      uint32_t elapsed = HAL_GetTick() - gps_start;
+      if (elapsed - last_status_print >= 5000)
+      {
+        char status_msg[100];
+        snprintf(status_msg, sizeof(status_msg), 
+                 "[GPS %lus] Sats:%d/%d HDOP:%.1f Fix:%s\r\n",
+                 (unsigned long)(elapsed / 1000),
+                 hgnss.data.satellites, hgnss.data.satellites_in_view,
+                 hgnss.data.hdop,
+                 (hgnss.data.fix_quality != GNSS_FIX_INVALID) ? "Yes" : "No");
+        SEGGER_RTT_WriteString(0, status_msg);
+        last_status_print = elapsed;
+      }
+      
+      /* Small delay to prevent tight loop, allow other processing */
+      HAL_Delay(100);
+    }
+    
+    if (!got_fix)
+    {
+      /* Check if we have at least basic fix */
+      if (GNSS_IsFixValid(&hgnss))
+      {
+        SEGGER_RTT_WriteString(0, "GPS: Basic fix (not high quality)\r\n");
+      }
+      else
+      {
+        SEGGER_RTT_WriteString(0, "GPS: No fix - using defaults\r\n");
+      }
+    }
+    
+    /* Power off GPS before LoRaWAN TX to avoid timing conflicts */
+    GNSS_PowerOff(&hgnss);
+    SEGGER_RTT_WriteString(0, "GPS powered OFF\r\n");
+  }
+  else
+  {
+    SEGGER_RTT_WriteString(0, "GPS: Power on failed!\r\n");
+  }
 
   // Get sensor data
   sensor_t sensor_data;
@@ -452,20 +540,63 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
-  SEGGER_RTT_WriteString(0, "OnTxData callback\r\n");
+  char rtt_buf[128];
+  
+  SEGGER_RTT_WriteString(0, "\r\n=== OnTxData Callback ===\r\n");
+  snprintf(rtt_buf, sizeof(rtt_buf), "  IsMcpsConfirm: %d\r\n", params->IsMcpsConfirm);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %d\r\n", params->Status);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", params->Datarate, params->TxPower);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Channel: %lu, UplinkCounter: %lu\r\n", 
+           (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  if (params->IsMcpsConfirm)
+  {
+    snprintf(rtt_buf, sizeof(rtt_buf), "  AckReceived: %d\r\n", params->AckReceived);
+    SEGGER_RTT_WriteString(0, rtt_buf);
+  }
   /* USER CODE END OnTxData_1 */
 }
 
 static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
 {
   /* USER CODE BEGIN OnJoinRequest_1 */
+  char rtt_buf[128];
+  
+  SEGGER_RTT_WriteString(0, "\r\n=== OnJoinRequest Callback ===\r\n");
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %s (%d)\r\n", 
+           (joinParams->Status == LORAMAC_HANDLER_SUCCESS) ? "SUCCESS" : "FAILED",
+           joinParams->Status);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Mode: %s\r\n", 
+           (joinParams->Mode == ACTIVATION_TYPE_OTAA) ? "OTAA" : "ABP");
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
+  snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", 
+           joinParams->Datarate, joinParams->TxPower);
+  SEGGER_RTT_WriteString(0, rtt_buf);
+  
   if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
   {
     SEGGER_RTT_WriteString(0, "JOIN SUCCESS!\r\n");
+    
+    /* Start the Tx timer now that we're joined */
+    if (EventType == TX_ON_TIMER)
+    {
+      SEGGER_RTT_WriteString(0, "Starting Tx timer...\r\n");
+      UTIL_TIMER_Start(&TxTimer);
+    }
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "JOIN FAILED!\r\n");
+    SEGGER_RTT_WriteString(0, "JOIN FAILED - will retry on next timer event\r\n");
   }
   /* USER CODE END OnJoinRequest_1 */
 }

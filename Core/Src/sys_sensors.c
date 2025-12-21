@@ -202,14 +202,40 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
                     vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
   
-  /* Initialize GNSS fields with defaults (will be updated when GNSS enabled) */
-  sensor_data->latitude    = (int32_t)((STSOP_LATTITUDE  * MAX_GPS_POS) / 90);
-  sensor_data->longitude   = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
-  sensor_data->altitudeGps = 0;
-  sensor_data->satellites = 0;
-  sensor_data->gnss_fix_quality = 0;
-  sensor_data->gnss_hdop = 99.9f;
-  sensor_data->gnss_valid = false;
+  /* Use real GNSS data if available from hgnss (populated by SendTxData's GPS collection)
+   * GPS is powered on/off in SendTxData before calling EnvSensors_Read
+   * hgnss.data contains the latest parsed NMEA data */
+  if (hgnss.is_initialized && hgnss.data.valid && 
+      hgnss.data.fix_quality != GNSS_FIX_INVALID &&
+      GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
+  {
+    /* Convert decimal degrees to scaled integer format for Cayenne LPP */
+    sensor_data->latitude = (int32_t)((hgnss.data.latitude * MAX_GPS_POS) / 90.0f);
+    sensor_data->longitude = (int32_t)((hgnss.data.longitude * MAX_GPS_POS) / 180.0f);
+    sensor_data->altitudeGps = (int16_t)hgnss.data.altitude;
+    sensor_data->satellites = hgnss.data.satellites;
+    sensor_data->gnss_fix_quality = hgnss.data.fix_quality;
+    sensor_data->gnss_hdop = hgnss.data.hdop;
+    sensor_data->gnss_valid = true;
+    
+    SEGGER_RTT_printf(0, "GNSS: Valid fix | Lat:%.6f Lon:%.6f Alt:%.1f Sats:%d\r\n",
+                      hgnss.data.latitude, hgnss.data.longitude,
+                      hgnss.data.altitude, hgnss.data.satellites);
+  }
+  else
+  {
+    /* No valid GPS fix - use default coordinates */
+    sensor_data->latitude = (int32_t)((STSOP_LATTITUDE * MAX_GPS_POS) / 90);
+    sensor_data->longitude = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
+    sensor_data->altitudeGps = 0;
+    sensor_data->satellites = hgnss.data.satellites_in_view;  /* Show satellites in view even without fix */
+    sensor_data->gnss_fix_quality = 0;
+    sensor_data->gnss_hdop = 99.9f;
+    sensor_data->gnss_valid = false;
+    
+    SEGGER_RTT_printf(0, "GNSS: No fix | Sats visible:%d | Using default coords\r\n",
+                      hgnss.data.satellites_in_view);
+  }
 
   return 0;
   /* USER CODE END EnvSensors_Read */
@@ -261,7 +287,7 @@ int32_t EnvSensors_Init(void)
   hgnss.en_port = GPIOB;
   hgnss.en_pin = GPIO_PIN_5;
   
-  /* Initialize GNSS module (configures GPIO, sets up structure) */
+  /* Initialize GNSS module (configures GPIO, sets up structure - does NOT power on) */
   if (GNSS_Init(&hgnss) == GNSS_OK) {
     SEGGER_RTT_WriteString(0, "GNSS module initialized successfully\r\n");
   } else {
@@ -269,20 +295,9 @@ int32_t EnvSensors_Init(void)
     ret = -3;
   }
   
-  /* GNSS power-on DISABLED to prevent interference with LoRaWAN */
-  /* The GNSS disables STOP mode which breaks LoRaWAN timing/join */
-  SEGGER_RTT_WriteString(0, "GNSS power-on DISABLED (prevents LoRaWAN interference)\r\n");
-  
-  /* Uncomment below when ready to enable GNSS (will affect LoRaWAN timing): */
-  /*
-  SEGGER_RTT_WriteString(0, "Powering on GNSS module...\r\n");
-  if (GNSS_PowerOn(&hgnss) == GNSS_OK) {
-    SEGGER_RTT_WriteString(0, "GNSS powered ON - UART1 DMA receiving NMEA...\r\n");
-    GNSS_Configure(&hgnss);
-  } else {
-    SEGGER_RTT_WriteString(0, "GNSS power on FAILED\r\n");
-  }
-  */
+  /* GNSS power-on DISABLED during init to prevent interference with LoRaWAN join */
+  /* GPS will be powered on/off by SendTxData() callback after join succeeds */
+  SEGGER_RTT_WriteString(0, "GNSS init complete - will be powered on during transmissions\r\n");
   
   SEGGER_RTT_WriteString(0, "EnvSensors_Init: Initialization complete\r\n");
   /* USER CODE END EnvSensors_Init */

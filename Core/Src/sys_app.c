@@ -120,12 +120,9 @@ void SystemApp_Init(void)
 
   /*Init low power manager AFTER sensors are initialized */
   UTIL_LPM_Init();
-  /* Disable Stand-by mode */
+  /* Disable Stand-by mode (Off mode) but allow Stop mode for LoRaWAN */
   UTIL_LPM_SetOffMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
-
-/* FORCE DISABLE ALL LOW POWER MODES FOR DEBUGGING RUNAWAY ISSUE */
-UTIL_LPM_SetStopMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
-UTIL_LPM_SetOffMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
+  /* STOP mode ENABLED - required for LoRaWAN radio timing */
 
   /* USER CODE BEGIN SystemApp_Init_2 */
 

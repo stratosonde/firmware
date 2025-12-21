@@ -39,6 +39,8 @@
 #include "radio_driver.h"
 #include "radio_conf.h"
 #include "mw_log_conf.h"
+#include "SEGGER_RTT.h"
+#include <stdio.h>
 
 /* Private typedef -----------------------------------------------------------*/
 /*!
@@ -1310,6 +1312,14 @@ static uint32_t RadioTimeOnAir( RadioModems_t modem, uint32_t bandwidth,
 
 static radio_status_t RadioSend( uint8_t *buffer, uint8_t size )
 {
+    char rtt_buf[128];
+    SEGGER_RTT_WriteString(0, "\r\n[RADIO] RadioSend() called\r\n");
+    snprintf(rtt_buf, sizeof(rtt_buf), "[RADIO]   Size: %d bytes, Modem: %d\r\n", size, SubgRf.Modem);
+    SEGGER_RTT_WriteString(0, rtt_buf);
+    snprintf(rtt_buf, sizeof(rtt_buf), "[RADIO]   AntSwitch: %d, TxTimeout: %lu ms\r\n", 
+             SubgRf.AntSwitchPaSelect, (unsigned long)SubgRf.TxTimeout);
+    SEGGER_RTT_WriteString(0, rtt_buf);
+    
     SUBGRF_SetDioIrqParams( IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT | IRQ_TX_DBG,
                             IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT | IRQ_TX_DBG,
                             IRQ_RADIO_NONE,
@@ -1320,6 +1330,7 @@ static radio_status_t RadioSend( uint8_t *buffer, uint8_t size )
 
     /* Set RF switch */
     SUBGRF_SetSwitch( SubgRf.AntSwitchPaSelect, RFSWITCH_TX );
+    SEGGER_RTT_WriteString(0, "[RADIO]   RF switch set to TX\r\n");
     /* WORKAROUND - Modulation Quality with 500 kHz LoRaTM Bandwidth*/
     /* RegTxModulation = @address 0x0889 */
     if( ( SubgRf.Modem == MODEM_LORA ) && ( SubgRf.ModulationParams.Params.LoRa.Bandwidth == LORA_BW_500 ) )

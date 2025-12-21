@@ -22,12 +22,16 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdlib.h>
 #include "stm32wlxx_hal_pwr.h"
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"
 #include "sys_sensors.h"
 #include "sht31.h"
 #include "ms5607.h"
+#include "LmHandler.h"
+#include "LmHandlerTypes.h"
+#include "../../Utilities/lpm/tiny_lpm/stm32_lpm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -133,7 +137,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();            /* DMA MUST be initialized BEFORE UART1 (which uses DMA) */
+  MX_DMA_Init();            /* DMA MUST be initialized BEFORE UART1 (which uses DMA for GNSS) */
   MX_I2C2_Init();           /* I2C2 MUST be initialized BEFORE LoRaWAN (which calls EnvSensors_Init) */
   MX_USART1_UART_Init();    /* UART1 for GNSS module communication */
   MX_LoRaWAN_Init();        /* This calls SystemApp_Init -> EnvSensors_Init which uses I2C2 */
@@ -152,25 +156,17 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   
-  /* LoRaWAN normal operation mode */
-  SEGGER_RTT_WriteString(0, "\r\n***** NORMAL LORAWAN MODE *****\r\n");
-  SEGGER_RTT_WriteString(0, "LPM debugging enabled - watch for [LPM] messages\r\n\r\n");
+  SEGGER_RTT_WriteString(0, "\r\n===== STARTING LORAWAN OPERATION =====\r\n");
+  SEGGER_RTT_WriteString(0, "Main loop: Continuous LoRaWAN servicing\r\n");
+  SEGGER_RTT_WriteString(0, "Join will happen in background\r\n");
+  SEGGER_RTT_WriteString(0, "GPS will be controlled by transmission callback\r\n\r\n");
   
-  /* Log to virtual terminal 1 for GNSS */
-  //SEGGER_RTT_SetTerminal(1);
-  //SEGGER_RTT_WriteString(0, "GNSS logging enabled on virtual terminal 1\r\n\r\n");
-  //SEGGER_RTT_SetTerminal(0);  /* Switch back to terminal 0 */
-  
+  //system_sleep();
+  /* Main loop - simple continuous LoRaWAN servicing (like original working code) */
   while (1)
   {
-    /* Process GNSS DMA buffer only if GNSS is powered and initialized */
-    /* Uncomment when ready to use GNSS processing: */
-    // if (hgnss.is_powered && hgnss.is_initialized) {
-    //   GNSS_ProcessDMABuffer(&hgnss);
-    // }
-    
     MX_LoRaWAN_Process();
-
+    //UTIL_LPM_EnterLowPower();
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
     HAL_Delay(10);
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);

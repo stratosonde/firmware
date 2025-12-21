@@ -163,6 +163,13 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
+  /* CRITICAL: Abort DMA transfer before powering off */
+  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL)
+  {
+    HAL_UART_AbortReceive(hgnss->huart);
+    SEGGER_RTT_WriteString(0, "GNSS_PowerOff: DMA receive aborted\r\n");
+  }
+
   /* Re-enable STOP mode now that GNSS is no longer receiving */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   SEGGER_RTT_WriteString(0, "GNSS_PowerOff: Re-enabled STOP mode\r\n");
@@ -330,10 +337,10 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
     return GNSS_ERROR;
   }
 
-  /* Log raw NMEA sentence */
-  SEGGER_RTT_WriteString(0, "[NMEA] ");
-  SEGGER_RTT_WriteString(0, sentence);
-  SEGGER_RTT_WriteString(0, "\r\n");
+  /* Log raw NMEA sentence - DISABLED to reduce output */
+  // SEGGER_RTT_WriteString(0, "[NMEA] ");
+  // SEGGER_RTT_WriteString(0, sentence);
+  // SEGGER_RTT_WriteString(0, "\r\n");
 
   /* Verify checksum if present */
   if (!GNSS_VerifyChecksum(sentence))
@@ -457,14 +464,38 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   uint16_t dma_remaining = __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx);
   hgnss->dma_head = GNSS_DMA_BUFFER_SIZE - dma_remaining;
 
-  /* DMA monitoring - print status every 5 seconds */
+  /* GPS status monitoring - print summary every 10 seconds */
   static uint32_t last_debug_time = 0;
   uint32_t now = HAL_GetTick();
   
-  /* Print DMA status every 5 seconds */
-  if ((now - last_debug_time > 5000))
+  /* Print GPS summary every 10 seconds */
+  if ((now - last_debug_time > 10000))
   {
-    SEGGER_RTT_WriteString(0, "[GPS DMA] Active\r\n");
+    char summary[200];
+    
+    if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID)
+    {
+      /* Valid fix - show full details */
+      snprintf(summary, sizeof(summary),
+               "[GPS] FIX | Sats:%d HDOP:%.1f | Lat:%.6f Lon:%.6f Alt:%.1fm | Speed:%.1fkm/h\r\n",
+               hgnss->data.satellites,
+               hgnss->data.hdop,
+               hgnss->data.latitude,
+               hgnss->data.longitude,
+               hgnss->data.altitude,
+               hgnss->data.speed);
+    }
+    else
+    {
+      /* No fix - show basic status */
+      snprintf(summary, sizeof(summary),
+               "[GPS] Searching... | Sats visible:%d | HDOP:%.1f | Status:%s\r\n",
+               hgnss->data.satellites_in_view,
+               hgnss->data.hdop,
+               (hgnss->data.fix_quality == GNSS_FIX_INVALID) ? "No Fix" : "Acquiring");
+    }
+    
+    SEGGER_RTT_WriteString(0, summary);
     last_debug_time = now;
   }
 
