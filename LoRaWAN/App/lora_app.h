@@ -39,7 +39,7 @@ extern "C" {
 /* Exported constants --------------------------------------------------------*/
 
 /* LoraWAN application configuration (Mw is configured by lorawan_conf.h) */
-#define ACTIVE_REGION                               LORAMAC_REGION_US915
+#define ACTIVE_REGION                               LORAMAC_REGION_EU868
 
 /* USER CODE BEGIN EC_CAYENNE_LPP */
 /*!
@@ -51,7 +51,7 @@ extern "C" {
 /*!
  * Defines the application data transmission duty cycle. 10s, value in [ms].
  */
-#define APP_TX_DUTYCYCLE                            30000
+#define APP_TX_DUTYCYCLE                            300000
 
 /*!
  * LoRaWAN User application port
@@ -78,16 +78,14 @@ extern "C" {
 /*!
  * LoRaWAN Adaptive Data Rate
  * @note Please note that when ADR is enabled the end-device should be static
- * @note Disabled to allow fixed higher data rate for larger payloads
  */
-#define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_OFF
+#define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_ON
 
 /*!
  * LoRaWAN Default Data Rate
- * @note For US915: DR0=11 bytes max, DR1=53 bytes max, DR2=125 bytes max, DR3=242 bytes max
- * @note Using DR2 to accommodate 26-byte Cayenne LPP payload with GPS data
+ * @note Please note that LORAWAN_DEFAULT_DATA_RATE is used only when LORAWAN_ADR_STATE is disabled
  */
-#define LORAWAN_DEFAULT_DATA_RATE                   DR_2
+#define LORAWAN_DEFAULT_DATA_RATE                   DR_0
 
 /*!
  * LoRaWAN Default Tx output power
@@ -130,7 +128,18 @@ extern "C" {
 #define LORAWAN_DEFAULT_CLASS_B_C_RESP_TIMEOUT      8000
 
 /* USER CODE BEGIN EC */
+/* Override CubeMX defaults for US915 region */
+#undef ACTIVE_REGION
+#define ACTIVE_REGION                               LORAMAC_REGION_US915
 
+#undef APP_TX_DUTYCYCLE
+#define APP_TX_DUTYCYCLE                            30000  /* 30 seconds */
+
+#undef LORAWAN_ADR_STATE
+#define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_OFF
+
+#undef LORAWAN_DEFAULT_DATA_RATE
+#define LORAWAN_DEFAULT_DATA_RATE                   DR_2  /* For larger payloads on US915 */
 /* USER CODE END EC */
 
 /* Exported macros -----------------------------------------------------------*/

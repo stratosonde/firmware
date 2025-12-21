@@ -335,7 +335,6 @@ void LoRaWAN_Init(void)
   {
     /* send every time timer elapses */
     UTIL_TIMER_Create(&TxTimer, TxPeriodicity, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
-    /* Timer enabled - this drives join retries via LmHandlerSend's internal join check */
     UTIL_TIMER_Start(&TxTimer);
   }
   else
@@ -700,20 +699,20 @@ static void StopJoin(void)
 
   if (LORAMAC_HANDLER_SUCCESS != LmHandlerStop())
   {
-    SEGGER_RTT_WriteString(0, "LmHandler Stop ongoing\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stop on going ...\r\n");
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "LmHandler Stopped\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stopped\r\n");
     if (LORAWAN_DEFAULT_ACTIVATION_TYPE == ACTIVATION_TYPE_ABP)
     {
       ActivationType = ACTIVATION_TYPE_OTAA;
-      SEGGER_RTT_WriteString(0, "Switch to OTAA\r\n");
+      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to OTAA mode\r\n");
     }
     else
     {
       ActivationType = ACTIVATION_TYPE_ABP;
-      SEGGER_RTT_WriteString(0, "Switch to ABP\r\n");
+      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to ABP mode\r\n");
     }
     LmHandlerConfigure(&LmHandlerParams);
     LmHandlerJoin(ActivationType, true);
@@ -750,11 +749,11 @@ static void StoreContext(void)
 
   if (status == LORAMAC_HANDLER_NVM_DATA_UP_TO_DATE)
   {
-    SEGGER_RTT_WriteString(0, "NVM DATA UP TO DATE\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA UP TO DATE\r\n");
   }
   else if (status == LORAMAC_HANDLER_ERROR)
   {
-    SEGGER_RTT_WriteString(0, "NVM DATA STORE FAILED\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORE FAILED\r\n");
   }
   /* USER CODE BEGIN StoreContext_Last */
 
@@ -768,11 +767,11 @@ static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
   /* USER CODE END OnNvmDataChange_1 */
   if (state == LORAMAC_HANDLER_NVM_STORE)
   {
-    SEGGER_RTT_WriteString(0, "NVM DATA STORED\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORED\r\n");
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "NVM DATA RESTORED\r\n");
+    APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA RESTORED\r\n");
   }
   /* USER CODE BEGIN OnNvmDataChange_Last */
 
@@ -804,3 +803,4 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
 
   /* USER CODE END OnRestoreContextRequest_Last */
 }
+

@@ -55,8 +55,6 @@
 #include "kms_platf_objects_interface.h"
 #endif /* LORAWAN_KMS */
 #include "LmhpPackagesRegistration.h"
-#include "SEGGER_RTT.h"
-#include <stdio.h>
 
 /* Private typedef -----------------------------------------------------------*/
 /*!

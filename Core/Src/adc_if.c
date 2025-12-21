@@ -173,11 +173,15 @@ uint16_t SYS_GetBatteryLevel(void)
   /* USER CODE END SYS_GetBatteryLevel_2 */
 }
 
+/* Private Functions Definition -----------------------------------------------*/
+/* USER CODE BEGIN PrFD */
+/**
+  * @brief Get the battery voltage from PB4 (ADC_CHANNEL_3)
+  * @note  PB4 has a 0.5 voltage divider, function applies 2x scaling
+  * @return value battery voltage in mV
+  */
 uint16_t SYS_GetBatteryVoltage(void)
 {
-  /* USER CODE BEGIN SYS_GetBatteryVoltage_1 */
-
-  /* USER CODE END SYS_GetBatteryVoltage_1 */
   uint16_t batteryVoltagemV = 0;
   uint32_t measuredLevel = 0;
 
@@ -197,14 +201,7 @@ uint16_t SYS_GetBatteryVoltage(void)
   }
 
   return batteryVoltagemV;
-  /* USER CODE BEGIN SYS_GetBatteryVoltage_2 */
-
-  /* USER CODE END SYS_GetBatteryVoltage_2 */
 }
-
-/* Private Functions Definition -----------------------------------------------*/
-/* USER CODE BEGIN PrFD */
-
 /* USER CODE END PrFD */
 
 static uint32_t ADC_ReadChannels(uint32_t channel)

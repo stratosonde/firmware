@@ -56,11 +56,12 @@ I2C_HandleTypeDef hi2c2;
 
 RTC_HandleTypeDef hrtc;
 
+SPI_HandleTypeDef hspi2;
+
 SUBGHZ_HandleTypeDef hsubghz;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
-DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 /* Note: RTT Virtual Terminal architecture:
@@ -74,6 +75,7 @@ DMA_HandleTypeDef hdma_usart1_rx;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_SPI2_Init(void);
 static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 void system_sleep(void);
@@ -132,15 +134,19 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
+   * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
+   * vcom_Init (inside SystemApp_Init) needs DMA for UART */
+  MX_DMA_Init();
+  MX_I2C2_Init();
+  MX_USART1_UART_Init();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();            /* DMA MUST be initialized BEFORE UART1 (which uses DMA for GNSS) */
-  MX_I2C2_Init();           /* I2C2 MUST be initialized BEFORE LoRaWAN (which calls EnvSensors_Init) */
-  MX_USART1_UART_Init();    /* UART1 for GNSS module communication */
-  MX_LoRaWAN_Init();        /* This calls SystemApp_Init -> EnvSensors_Init which uses I2C2 */
+  MX_LoRaWAN_Init();
+  MX_SPI2_Init();
+  /* MX_I2C2_Init(); - Already called in SysInit above */
   /* USER CODE BEGIN 2 */
   /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
 
@@ -155,21 +161,16 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  
   SEGGER_RTT_WriteString(0, "\r\n===== STARTING LORAWAN OPERATION =====\r\n");
   SEGGER_RTT_WriteString(0, "Main loop: Continuous LoRaWAN servicing\r\n");
-  SEGGER_RTT_WriteString(0, "Join will happen in background\r\n");
-  SEGGER_RTT_WriteString(0, "GPS will be controlled by transmission callback\r\n\r\n");
+  SEGGER_RTT_WriteString(0, "Join will happen in background via TxTimer\r\n\r\n");
   
-  //system_sleep();
-  /* Main loop - simple continuous LoRaWAN servicing (like original working code) */
   while (1)
   {
+    /* USER CODE END WHILE */
     MX_LoRaWAN_Process();
-    //UTIL_LPM_EnterLowPower();
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-    HAL_Delay(10);
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+
+    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
 }
@@ -285,7 +286,7 @@ static void MX_I2C2_Init(void)
 
   /* USER CODE END I2C2_Init 1 */
   hi2c2.Instance = I2C2;
-  hi2c2.Init.Timing = 0x10909CEC;
+  hi2c2.Init.Timing = 0x00B07CB4;
   hi2c2.Init.OwnAddress1 = 0;
   hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -379,6 +380,46 @@ void MX_RTC_Init(void)
 }
 
 /**
+  * @brief SPI2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI2_Init(void)
+{
+
+  /* USER CODE BEGIN SPI2_Init 0 */
+
+  /* USER CODE END SPI2_Init 0 */
+
+  /* USER CODE BEGIN SPI2_Init 1 */
+  /* Override CubeMX generated DataSize - W25Q16 flash requires 8-bit */
+  /* USER CODE END SPI2_Init 1 */
+  /* SPI2 parameter configuration*/
+  hspi2.Instance = SPI2;
+  hspi2.Init.Mode = SPI_MODE_MASTER;
+  hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi2.Init.NSS = SPI_NSS_HARD_OUTPUT;
+  hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi2.Init.CRCPolynomial = 7;
+  hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI2_Init 2 */
+
+  /* USER CODE END SPI2_Init 2 */
+
+}
+
+/**
   * @brief SUBGHZ Initialization Function
   * @param None
   * @retval None
@@ -463,11 +504,7 @@ void MX_DMA_Init(void)
   __HAL_RCC_DMA1_CLK_ENABLE();
 
   /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration (USART1_RX) */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  
-  /* DMA1_Channel2_IRQn interrupt configuration (USART1_TX) */
+  /* DMA1_Channel2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
 

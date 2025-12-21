@@ -115,14 +115,20 @@ void SystemApp_Init(void)
   /*Initialize the temperature and Battery measurement services */
   SYS_InitMeasurement();
 
-  /*Initialize the Sensors FIRST - before LPM to avoid I2C conflicts */
+  /*Initialize the Sensors */
   EnvSensors_Init();
 
-  /*Init low power manager AFTER sensors are initialized */
+  /*Init low power manager*/
   UTIL_LPM_Init();
-  /* Disable Stand-by mode (Off mode) but allow Stop mode for LoRaWAN */
+  /* Disable Stand-by mode */
   UTIL_LPM_SetOffMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
-  /* STOP mode ENABLED - required for LoRaWAN radio timing */
+
+#if defined (LOW_POWER_DISABLE) && (LOW_POWER_DISABLE == 1)
+  /* Disable Stop Mode */
+  UTIL_LPM_SetStopMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
+#elif !defined (LOW_POWER_DISABLE)
+#error LOW_POWER_DISABLE not defined
+#endif /* LOW_POWER_DISABLE */
 
   /* USER CODE BEGIN SystemApp_Init_2 */
 

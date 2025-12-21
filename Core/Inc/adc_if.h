@@ -90,15 +90,13 @@ int16_t SYS_GetTemperatureLevel(void);
   */
 uint16_t SYS_GetBatteryLevel(void);
 
+/* USER CODE BEGIN EFP */
 /**
   * @brief Get the battery voltage from PB4 (ADC_CHANNEL_3)
   * @note  PB4 has a 0.5 voltage divider, function applies 2x scaling
   * @return value battery voltage in mV
   */
 uint16_t SYS_GetBatteryVoltage(void);
-
-/* USER CODE BEGIN EFP */
-
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

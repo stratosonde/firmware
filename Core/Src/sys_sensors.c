@@ -20,7 +20,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stdint.h"
-#include "string.h"
 #include "platform.h"
 #include "sys_conf.h"
 #include "sys_sensors.h"

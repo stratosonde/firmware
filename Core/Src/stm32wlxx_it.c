@@ -58,10 +58,10 @@
 extern RTC_HandleTypeDef hrtc;
 extern SUBGHZ_HandleTypeDef hsubghz;
 extern DMA_HandleTypeDef hdma_usart1_tx;
-extern DMA_HandleTypeDef hdma_usart1_rx;
 extern UART_HandleTypeDef huart1;
 /* USER CODE BEGIN EV */
-
+/* DMA RX handle for GNSS - declared in stm32wlxx_hal_msp.c */
+extern DMA_HandleTypeDef hdma_usart1_rx;
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -231,21 +231,7 @@ void EXTI3_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles DMA1 Channel 1 Interrupt (USART1_RX).
-  */
-void DMA1_Channel1_IRQHandler(void)
-{
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_usart1_rx);
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 1 */
-}
-
-/**
-  * @brief This function handles DMA1 Channel 2 Interrupt (USART1_TX).
+  * @brief This function handles DMA1 Channel 2 Interrupt.
   */
 void DMA1_Channel2_IRQHandler(void)
 {
@@ -301,5 +287,12 @@ void SUBGHZ_Radio_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-
+/**
+  * @brief This function handles DMA1 Channel 1 Interrupt (USART1_RX for GNSS).
+  * @note  CubeMX removed this, so we add it manually in USER CODE section
+  */
+void DMA1_Channel1_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_usart1_rx);
+}
 /* USER CODE END 1 */

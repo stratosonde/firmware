@@ -24,6 +24,9 @@ fix_instructions.txt
 Reference/
 datasheets/
 
+# Archive folder (old debug notes)
+archive/
+
 # OS files
 .DS_Store
 Thumbs.db
