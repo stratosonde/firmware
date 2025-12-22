@@ -62,6 +62,7 @@
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/LoRaWAN/Utilities"/>
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/SubGHz_Phy"/>
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/h3lite/include"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1750306579" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -155,6 +156,7 @@
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/LoRaWAN/Utilities"/>
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/SubGHz_Phy"/>
 									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/h3lite/include"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.778945493" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>

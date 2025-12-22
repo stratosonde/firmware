@@ -1,0 +1,3 @@
+[submodule "Middlewares/Third_Party/h3lite"]
+	path = Middlewares/Third_Party/h3lite
+	url = https://github.com/stratosonde/h3lite.git

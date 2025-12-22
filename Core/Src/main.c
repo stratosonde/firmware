@@ -32,6 +32,8 @@
 #include "LmHandler.h"
 #include "LmHandlerTypes.h"
 #include "../../Utilities/lpm/tiny_lpm/stm32_lpm.h"
+#include "h3lite.h"
+#include "multiregion_h3.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -153,7 +155,16 @@ int main(void)
   
   leds_boot_seq();
   
-  SEGGER_RTT_WriteString(0, "Boot sequence complete, starting LoRaWAN...\r\n");
+  SEGGER_RTT_WriteString(0, "Boot sequence complete, initializing H3Lite...\r\n");
+  
+  // Initialize h3lite for region detection
+  if (!h3liteInit()) {
+    SEGGER_RTT_WriteString(0, "ERROR: H3Lite initialization failed!\r\n");
+    Error_Handler();
+  }
+  SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
+  
+  SEGGER_RTT_WriteString(0, "Starting LoRaWAN...\r\n");
 
   /* Removed system_sleep() call to keep I2C and UART active for debug */
   /* system_sleep() call commented out to ensure I2C remains active for SHT31 sensor */
