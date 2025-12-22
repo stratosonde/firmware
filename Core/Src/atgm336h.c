@@ -78,13 +78,14 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   GPIO_InitStruct.Pin = hgnss->en_pin;
   HAL_GPIO_Init(hgnss->en_port, &GPIO_InitStruct);
 
-  /* Ensure module is powered off initially */
-  /* PB10 (power): ACTIVE HIGH, so RESET=OFF */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
-  /* PB5 (enable): ACTIVE HIGH, so RESET=OFF */
+  /* NEW STRATEGY: Keep PB10 (main power) always HIGH for hot-start capability */
+  /* With Vbat always powered, keeping PB10 HIGH enables GPS standby mode */
+  /* This allows sub-second hot fixes while using minimal standby current */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);
+  /* PB5 (enable): Start with OFF, will toggle for wake/sleep */
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);
   
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10(pwr)=LOW(off), PB5(en)=LOW(off)\r\n");
+  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10(pwr)=HIGH(standby-ready), PB5(en)=LOW(sleep)\r\n");
 
   hgnss->is_initialized = true;
 
@@ -108,13 +109,12 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     return GNSS_OK; // Already powered on
   }
 
-  /* Power on the module - Control BOTH pins */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: PB10(pwr)=HIGH(on), PB5(en)=HIGH(on)\r\n");
+  /* HOT-START MODE: Only toggle PB5, keep PB10 always HIGH */
+  /* PB10 stays HIGH (set in GNSS_Init) to maintain GPS standby state */
+  /* Only wake GPS from standby by toggling PB5 HIGH */
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: PB5(en)=HIGH(wake from standby)\r\n");
   
-  /* PB10 (power): ACTIVE HIGH, so SET=ON */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);
-  
-  /* PB5 (enable): ACTIVE HIGH, so SET=ON */
+  /* PB5 (enable): ACTIVE HIGH, so SET=ON to wake GPS */
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);
   
   hgnss->is_powered = true;
@@ -174,14 +174,15 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   SEGGER_RTT_WriteString(0, "GNSS_PowerOff: Re-enabled STOP mode\r\n");
 
-  /* Power off the module - Control BOTH pins */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: PB10(pwr)=LOW(off), PB5(en)=LOW(off)\r\n");
+  /* HOT-START MODE: Only toggle PB5 LOW to sleep GPS, keep PB10 HIGH */
+  /* PB10 stays HIGH to maintain GPS standby (with Vbat backup) */
+  /* This enables hot-start (<1s) on next power-on */
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: PB5(en)=LOW(sleep/standby), PB10 stays HIGH\r\n");
   
-  /* PB10 (power): ACTIVE HIGH, so RESET=OFF */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
-  
-  /* PB5 (enable): ACTIVE HIGH, so RESET=OFF */
+  /* PB5 (enable): ACTIVE HIGH, so RESET=sleep/standby */
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);
+  
+  /* PB10 deliberately NOT changed - stays HIGH for standby mode */
   
   hgnss->is_powered = false;
 

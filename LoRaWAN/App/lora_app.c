@@ -37,8 +37,10 @@
 
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
+#include "stdlib.h"
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"
+#include "multiregion_h3.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -386,10 +388,20 @@ static void SendTxData(void)
   #define GNSS_COLLECTION_TIME_MS  45000  /* 45 seconds - allows cold start fix */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
+  /* Declare gps_start and ttf_ms at function scope */
+  uint32_t gps_start = 0;
+  uint32_t ttf_ms = 0;  /* Time to fix in milliseconds - captured when fix obtained */
+  
   SEGGER_RTT_WriteString(0, "Powering GPS ON for fix acquisition (45s max)...\r\n");
   if (GNSS_PowerOn(&hgnss) == GNSS_OK)
   {
-    uint32_t gps_start = HAL_GetTick();
+    /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
+    /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
+    hgnss.data.valid = false;
+    hgnss.data.fix_quality = GNSS_FIX_INVALID;
+    SEGGER_RTT_WriteString(0, "GPS data invalidated - waiting for fresh fix...\r\n");
+    
+    gps_start = HAL_GetTick();
     bool got_fix = false;
     uint32_t last_status_print = 0;
     
@@ -403,12 +415,23 @@ static void SendTxData(void)
       if (GNSS_IsFixGoodQuality(&hgnss))
       {
         got_fix = true;
-        char fix_msg[128];
+        ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
+        
+        /* Convert floats to integers for safe printf (no float support needed) */
+        int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);
+        int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000);
+        int32_t alt_int = (int32_t)(hgnss.data.altitude * 10);
+        int32_t hdop_int = (int32_t)(hgnss.data.hdop * 10);
+        
+        char fix_msg[150];
         snprintf(fix_msg, sizeof(fix_msg), 
-                 "GPS FIX! Lat:%.6f Lon:%.6f Alt:%.1fm Sats:%d HDOP:%.1f (took %lums)\r\n",
-                 hgnss.data.latitude, hgnss.data.longitude, hgnss.data.altitude,
-                 hgnss.data.satellites, hgnss.data.hdop,
-                 (unsigned long)(HAL_GetTick() - gps_start));
+                 "GPS FIX! Lat=%d.%06d Lon=%d.%06d Alt=%d.%dm Sats:%d HDOP=%d.%d (took %lums)\r\n",
+                 lat_int / 1000000, abs(lat_int % 1000000),
+                 lon_int / 1000000, abs(lon_int % 1000000),
+                 alt_int / 10, abs(alt_int % 10),
+                 hgnss.data.satellites,
+                 hdop_int / 10, abs(hdop_int % 10),
+                 (unsigned long)ttf_ms);
         SEGGER_RTT_WriteString(0, fix_msg);
         break;  /* Exit early - we have what we need */
       }
@@ -448,12 +471,63 @@ static void SendTxData(void)
     /* Power off GPS before LoRaWAN TX to avoid timing conflicts */
     GNSS_PowerOff(&hgnss);
     SEGGER_RTT_WriteString(0, "GPS powered OFF\r\n");
+    
+    /* Perform H3lite region lookup if we have a valid fix */
+    if (GNSS_IsFixValid(&hgnss) && 
+        GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
+    {
+      /* Start timing for H3 region lookup */
+      uint32_t h3_start = HAL_GetTick();
+      
+      /* Call H3lite region lookup */
+      LoRaMacRegion_t detected_region = MultiRegion_DetectFromGPS_H3(
+          hgnss.data.latitude, 
+          hgnss.data.longitude
+      );
+      
+      /* Calculate elapsed time for H3 lookup */
+      uint32_t h3_elapsed = HAL_GetTick() - h3_start;
+      
+      /* Convert floats to integers for printing (safe for all printf implementations) */
+      int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);  // 6 decimal places
+      int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000); // 6 decimal places
+      
+      /* Map region enum to string name */
+      const char* region_name = "UNKNOWN";
+      switch(detected_region) {
+        case LORAMAC_REGION_US915: region_name = "US915"; break;
+        case LORAMAC_REGION_EU868: region_name = "EU868"; break;
+        case LORAMAC_REGION_AS923: region_name = "AS923"; break;
+        case LORAMAC_REGION_AU915: region_name = "AU915"; break;
+        case LORAMAC_REGION_CN470: region_name = "CN470"; break;
+        case LORAMAC_REGION_KR920: region_name = "KR920"; break;
+        case LORAMAC_REGION_IN865: region_name = "IN865"; break;
+        case LORAMAC_REGION_RU864: region_name = "RU864"; break;
+        default: region_name = "UNKNOWN"; break;
+      }
+      
+      /* Output region lookup result to RTT with timing - use snprintf to avoid buffer issues */
+      char h3_msg[200];
+      snprintf(h3_msg, sizeof(h3_msg), 
+               "H3 Region Lookup: Lat=%d.%06d Lon=%d.%06d -> %s (took %lums)\r\n",
+               lat_int / 1000000, abs(lat_int % 1000000),
+               lon_int / 1000000, abs(lon_int % 1000000),
+               region_name, (unsigned long)h3_elapsed);
+      SEGGER_RTT_WriteString(0, h3_msg);
+    }
+    else
+    {
+      SEGGER_RTT_WriteString(0, "H3 Region Lookup: Skipped (no valid GPS fix)\r\n");
+    }
   }
   else
   {
     SEGGER_RTT_WriteString(0, "GPS: Power on failed!\r\n");
   }
 
+  /* Add separator before sensor read to prevent RTT buffer overwrite */
+  SEGGER_RTT_WriteString(0, "\r\n");
+  
   // Get sensor data
   sensor_t sensor_data;
   SEGGER_RTT_WriteString(0, "Calling EnvSensors_Read...\r\n");
@@ -502,8 +576,19 @@ static void SendTxData(void)
   
   // Add regulator voltage (3.3V rail) on channel 7 (in volts)
   CayenneLppAddAnalogInput(7, sensor_data.regulator_voltage);
+  
+  // Add GNSS HDOP on channel 8 (Horizontal Dilution of Precision)
+  CayenneLppAddAnalogInput(8, sensor_data.gnss_hdop);
+  
+  // Add TTF (Time To Fix) on channel 9 (in milliseconds) - captured at moment of fix
+  CayenneLppAddAnalogInput(9, (float)ttf_ms);
 
-  SEGGER_RTT_WriteString(0, "Cayenne LPP data prepared\r\n");
+  /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
+  int hdop_int = (int)(sensor_data.gnss_hdop * 10);
+  char lpp_msg[100];
+  snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP data prepared (HDOP=%d.%d, TTF=%lums)\r\n", 
+           hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms);
+  SEGGER_RTT_WriteString(0, lpp_msg);
   
   // Prepare and send the LoRaWAN packet
   LmHandlerAppData_t appData;
