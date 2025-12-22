@@ -88,7 +88,7 @@ Revision: $Rev: 18601 $
 #endif
 
 #ifndef   BUFFER_SIZE_UP
-  #define BUFFER_SIZE_UP                            (1024)  // Size of the buffer for terminal output of target, up to host
+  #define BUFFER_SIZE_UP                            (2048)  // Size of the buffer for terminal output of target, up to host (increased for H3 tests)
 #endif
 
 #ifndef   BUFFER_SIZE_DOWN

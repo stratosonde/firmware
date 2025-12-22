@@ -22,22 +22,10 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "h3lite.h"
+#include "LoRaMacInterfaces.h"
 
 /* Exported types ------------------------------------------------------------*/
-// Forward declaration - will be properly defined when multiregion context is implemented
-typedef enum
-{
-    LORAMAC_REGION_AS923 = 0,
-    LORAMAC_REGION_AU915,
-    LORAMAC_REGION_CN470,
-    LORAMAC_REGION_CN779,
-    LORAMAC_REGION_EU433,
-    LORAMAC_REGION_EU868,
-    LORAMAC_REGION_KR920,
-    LORAMAC_REGION_IN865,
-    LORAMAC_REGION_US915,
-    LORAMAC_REGION_RU864,
-} LoRaMacRegion_t;
+// LoRaMacRegion_t is defined in LoRaMacInterfaces.h
 
 /* Exported functions --------------------------------------------------------*/
 

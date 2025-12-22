@@ -163,7 +163,6 @@ int main(void)
     Error_Handler();
   }
   SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
-  
   SEGGER_RTT_WriteString(0, "Starting LoRaWAN...\r\n");
 
   /* Removed system_sleep() call to keep I2C and UART active for debug */

@@ -511,12 +511,31 @@ static void SendTxData(void)
   appData.BufferSize = CayenneLppGetSize();
   appData.Buffer = CayenneLppGetBuffer();
   
+  // DEBUG: Log payload size
+  char size_msg[64];
+  snprintf(size_msg, sizeof(size_msg), "Payload size: %d bytes\r\n", appData.BufferSize);
+  SEGGER_RTT_WriteString(0, size_msg);
+  
   // Force data rate before each send (DR2 = 125 bytes max for US915)
   LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
   SEGGER_RTT_WriteString(0, "Sending LoRaWAN packet...\r\n");
   
   LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-  SEGGER_RTT_WriteString(0, "LmHandlerSend complete\r\n");
+  
+  // DEBUG: Log LmHandlerSend status
+  char status_msg[128];
+  const char* status_str;
+  switch(status) {
+    case LORAMAC_HANDLER_SUCCESS: status_str = "SUCCESS"; break;
+    case LORAMAC_HANDLER_BUSY_ERROR: status_str = "BUSY_ERROR"; break;
+    case LORAMAC_HANDLER_ERROR: status_str = "ERROR"; break;
+    case LORAMAC_HANDLER_NO_NETWORK_JOINED: status_str = "NO_NETWORK_JOINED"; break;
+    case LORAMAC_HANDLER_DUTYCYCLE_RESTRICTED: status_str = "DUTYCYCLE_RESTRICTED"; break;
+    default: status_str = "UNKNOWN"; break;
+  }
+  snprintf(status_msg, sizeof(status_msg), "LmHandlerSend status: %s (%d)\r\n", status_str, status);
+  SEGGER_RTT_WriteString(0, status_msg);
+  
   SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }
@@ -524,14 +543,14 @@ static void SendTxData(void)
 static void OnTxTimerEvent(void *context)
 {
   /* USER CODE BEGIN OnTxTimerEvent_1 */
-
+  SEGGER_RTT_WriteString(0, "\r\n*** OnTxTimerEvent FIRED ***\r\n");
   /* USER CODE END OnTxTimerEvent_1 */
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
 
   /*Wait for next tx slot*/
   UTIL_TIMER_Start(&TxTimer);
   /* USER CODE BEGIN OnTxTimerEvent_2 */
-
+  SEGGER_RTT_WriteString(0, "Timer restarted for next cycle\r\n");
   /* USER CODE END OnTxTimerEvent_2 */
 }
 
