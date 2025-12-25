@@ -38,10 +38,14 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "stdlib.h"
+#include "string.h"
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"
+#include "sys_conf.h"
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
+#include "LoRaMac.h"
+#include "se-identity.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -225,9 +229,7 @@ static void OnSystemReset(void);
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV_MULTIREGION */
-/* Multi-region pre-join support */
-volatile uint8_t g_multiregion_join_success = 0;
-volatile uint8_t g_multiregion_in_prejoin = 0;
+/* Multi-region ABP support - no join flags needed */
 /* USER CODE END PV_MULTIREGION */
 
 /**
@@ -367,36 +369,97 @@ void LoRaWAN_Init(void)
   LmHandlerConfigure(&LmHandlerParams);
 
   /* USER CODE BEGIN LoRaWAN_Init_2 */
-  /* Initialize multi-region context manager */
+#if MULTIREGION_ABP_MODE
+  /* ========== MULTI-REGION ABP MODE ========== */
+  /* Initialize multi-region ABP support */
   MultiRegion_Init();
-  APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
+  APP_LOG(TS_ON, VLEVEL_H, "Multi-region ABP initialized\r\n");
   
-  /* CRITICAL: Erase old LoRaWAN NVM to prevent DevEUI restoration conflicts */
-  SEGGER_RTT_WriteString(0, "Erasing old LoRaWAN NVM before pre-join...\r\n");
-  extern FLASH_IF_StatusTypedef FLASH_IF_Erase(void *pFlashAddress, uint32_t page_size);
-  FLASH_IF_Erase(LORAWAN_NVM_BASE_ADDRESS, FLASH_PAGE_SIZE);
-  HAL_Delay(100);
+  /* Load US915 ABP credentials and activate */
+  SEGGER_RTT_WriteString(0, "Loading US915 ABP credentials...\r\n");
+  MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+  APP_LOG(TS_ON, VLEVEL_H, "US915 ABP activated\r\n");
   
-  /* Pre-join US915 and EU868 regions for testing */
-  /* NOTE: This will take ~60 seconds (30s per region join) */
-  SEGGER_RTT_WriteString(0, "Setting pre-join mode flag...\r\n");
-  g_multiregion_in_prejoin = true;  // Tell callback not to start timer
+  SEGGER_RTT_WriteString(0, "Multi-region ABP mode - no join needed, starting TX timer\r\n");
+#else
+  /* ========== TRADITIONAL ABP MODE ========== */
+  SEGGER_RTT_WriteString(0, "Traditional ABP mode - US915\r\n");
   
-  MultiRegion_PreJoinAllRegions();
+  // Set DevEUI from se-identity.h (US915 - use the _US915 variant which has 0x prefix)
+  uint8_t devEui[] = {LORAWAN_DEVICE_EUI_US915};
+  LmHandlerSetDevEUI(devEui);
+  SEGGER_RTT_WriteString(0, "DevEUI set from se-identity.h\r\n");
   
-  g_multiregion_in_prejoin = false;  // Clear flag
-  SEGGER_RTT_WriteString(0, "Pre-join mode flag cleared\r\n");
+  // Get NVM context and load ABP keys
+  MibRequestConfirm_t mib;
+  mib.Type = MIB_NVM_CTXS;
+  LoRaMacMibGetRequestConfirm(&mib);
+  LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
   
-  /* After pre-join, disable ForceRejoin to avoid re-joining */
-  ForceRejoin = false;
-  APP_LOG(TS_ON, VLEVEL_H, "Multi-region pre-join complete, ForceRejoin disabled\r\n");
+  if (nvm) {
+    // Load keys from se-identity.h (formatted)
+    uint8_t appSKey[] = FORMAT_KEY(LORAWAN_APP_S_KEY);
+    uint8_t nwkSKey[] = FORMAT_KEY(LORAWAN_NWK_S_KEY);
+    
+    // Set ABP session keys (LoRaWAN 1.0.x uses simpler key structure)
+    // For 1.0.x: APP_S_KEY and NWK_S_KEY are the only session keys
+    memcpy(nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, appSKey, 16);
+    memcpy(nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, nwkSKey, 16);
+    
+    // Set DevAddr for US915 from Chirpstack
+    nvm->MacGroup2.DevAddr = 0x26091500;  // US915 DevAddr from Chirpstack_ABP_Values.txt
+    
+    // Reset frame counters for fresh ABP start
+    nvm->Crypto.FCntList.FCntUp = 0;
+    nvm->Crypto.FCntList.NFCntDown = 0;
+    
+    // Mark as ABP activated
+    nvm->MacGroup2.NetworkActivation = ACTIVATION_TYPE_ABP;
+    
+    // Debug output - print all ABP credentials
+    SEGGER_RTT_printf(0, "\r\n=== ABP Credentials Loaded ===\r\n");
+    SEGGER_RTT_printf(0, "DevAddr: 0x%08lX\r\n", nvm->MacGroup2.DevAddr);
+    
+    // Print AppSKey
+    SEGGER_RTT_WriteString(0, "AppSKey: ");
+    for (int i = 0; i < 16; i++) {
+      SEGGER_RTT_printf(0, "%02X", appSKey[i]);
+    }
+    SEGGER_RTT_WriteString(0, "\r\n");
+    
+    // Print NwkSKey
+    SEGGER_RTT_WriteString(0, "NwkSKey: ");
+    for (int i = 0; i < 16; i++) {
+      SEGGER_RTT_printf(0, "%02X", nwkSKey[i]);
+    }
+    SEGGER_RTT_WriteString(0, "\r\n");
+    
+    SEGGER_RTT_WriteString(0, "Compare these with your Chirpstack config!\r\n");
+    SEGGER_RTT_WriteString(0, "================================\r\n\r\n");
+  }
   
+  // Set activation via MIB
+  mib.Type = MIB_NETWORK_ACTIVATION;
+  mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
+  LoRaMacMibSetRequestConfirm(&mib);
+  
+  // Start MAC and allow stabilization
+  LoRaMacStart();
+  HAL_Delay(200);
+  
+  // Process MAC events to complete initialization
+  for (int i = 0; i < 10; i++) {
+    LmHandlerProcess();
+    HAL_Delay(10);
+  }
+  
+  SEGGER_RTT_WriteString(0, "Traditional ABP credentials loaded and MAC started\r\n");
+  APP_LOG(TS_ON, VLEVEL_H, "Traditional ABP mode - US915 activated\r\n");
+#endif
   /* USER CODE END LoRaWAN_Init_2 */
 
-  // Skip join - pre-join already joined both US915 and EU868
-  // Already on US915 from MultiRegion_SwitchToRegion() at end of pre-join
+  // ABP doesn't need join - skip it for both modes
   // LmHandlerJoin(ActivationType, ForceRejoin);
-  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - already joined from pre-join\r\n");
 
   if (EventType == TX_ON_TIMER)
   {
@@ -434,14 +497,6 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
-  
-  /* Check join status - if not joined, trigger a new join attempt */
-  if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
-  {
-    SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
-    LmHandlerJoin(ActivationType, true);
-    return; /* Exit - will send data after join succeeds */
-  }
   
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
@@ -752,46 +807,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
 static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
 {
   /* USER CODE BEGIN OnJoinRequest_1 */
-  char rtt_buf[128];
-  
-  SEGGER_RTT_WriteString(0, "\r\n=== OnJoinRequest Callback ===\r\n");
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %s (%d)\r\n", 
-           (joinParams->Status == LORAMAC_HANDLER_SUCCESS) ? "SUCCESS" : "FAILED",
-           joinParams->Status);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Mode: %s\r\n", 
-           (joinParams->Mode == ACTIVATION_TYPE_OTAA) ? "OTAA" : "ABP");
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", 
-           joinParams->Datarate, joinParams->TxPower);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
-  {
-    SEGGER_RTT_WriteString(0, "JOIN SUCCESS!\r\n");
-    
-    /* Set flag for multi-region pre-join */
-    g_multiregion_join_success = true;
-    
-    /* ONLY start timer if NOT in pre-join mode */
-    if (g_multiregion_in_prejoin) {
-      SEGGER_RTT_WriteString(0, "Pre-join mode: Skipping Tx timer start\r\n");
-    } else {
-      /* Start the Tx timer now that we're joined */
-      if (EventType == TX_ON_TIMER)
-      {
-        SEGGER_RTT_WriteString(0, "Starting Tx timer...\r\n");
-        UTIL_TIMER_Start(&TxTimer);
-      }
-    }
-  }
-  else
-  {
-    SEGGER_RTT_WriteString(0, "JOIN FAILED - will retry on next timer event\r\n");
-    g_multiregion_join_success = false;
-  }
+  // ABP mode - join callback not used (keeping for compatibility)
+  SEGGER_RTT_WriteString(0, "OnJoinRequest: ABP mode - join not used\r\n");
   /* USER CODE END OnJoinRequest_1 */
 }
 

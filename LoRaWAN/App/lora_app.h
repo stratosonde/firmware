@@ -142,6 +142,13 @@ extern "C" {
 
 #undef LORAWAN_DEFAULT_DATA_RATE
 #define LORAWAN_DEFAULT_DATA_RATE                   DR_2  /* For larger payloads on US915 */
+
+/* CRITICAL: Use ABP for multi-region support */
+#undef LORAWAN_DEFAULT_ACTIVATION_TYPE
+#define LORAWAN_DEFAULT_ACTIVATION_TYPE             ACTIVATION_TYPE_ABP
+
+#undef LORAWAN_FORCE_REJOIN_AT_BOOT
+#define LORAWAN_FORCE_REJOIN_AT_BOOT                false  /* ABP doesn't need rejoin */
 /* USER CODE END EC */
 
 /* Exported macros -----------------------------------------------------------*/
@@ -156,14 +163,6 @@ extern "C" {
 void LoRaWAN_Init(void);
 
 /* USER CODE BEGIN EFP */
-/* Multi-region pre-join support - flag to track join success */
-extern volatile uint8_t g_multiregion_join_success;
-extern volatile uint8_t g_multiregion_in_prejoin;
-
-void LoRaWAN_SetPreJoinMode(uint8_t enabled);
-uint8_t LoRaWAN_GetJoinSuccess(void);
-void LoRaWAN_ResetJoinSuccess(void);
-
 /**
  * @brief Reinitialize the entire LoRaWAN stack for a new region
  * @param new_region: Target region to configure after reinit

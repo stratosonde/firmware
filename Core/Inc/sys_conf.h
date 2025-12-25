@@ -87,6 +87,15 @@ extern "C" {
 /* Override: Disable low power during debugging to allow LoRaWAN operation */
 #undef LOW_POWER_DISABLE
 #define LOW_POWER_DISABLE                    1
+
+/* Multi-region ABP mode toggle */
+#define MULTIREGION_ABP_MODE                 0  /* 0 = traditional ABP, 1 = multiregion ABP */
+
+/* LoRaWAN Activation Type */
+#define LORAWAN_DEFAULT_ACTIVATION_TYPE      ACTIVATION_TYPE_ABP
+
+/* Active Region for Traditional ABP mode */
+#define ACTIVE_REGION                        LORAMAC_REGION_US915
 /* USER CODE END EC */
 
 /* External variables --------------------------------------------------------*/

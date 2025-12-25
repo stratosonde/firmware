@@ -95,16 +95,32 @@ extern "C" {
  *   FF = Frequency remainder (15=915, 68=868, etc.)
  */
 
-// Default DevEUI (US915) - used by FORMAT32_KEY macro (no 0x prefix needed)
-#define LORAWAN_DEVICE_EUI                                 60,81,F9,53,25,0E,09,15
+// Default DevEUI (US915 ABP) - used by FORMAT32_KEY macro (no 0x prefix needed)
+#define LORAWAN_DEVICE_EUI                                 60,81,F9,53,25,0F,09,15
 
-// Region-specific DevEUIs (used by multiregion_context.c - need 0x prefix for direct array init)
-#define LORAWAN_DEVICE_EUI_US915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x15  // 915 MHz, Americas
-#define LORAWAN_DEVICE_EUI_EU868                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x68  // 868 MHz, Europe
-#define LORAWAN_DEVICE_EUI_AS923                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x23  // 923 MHz, Asia
-#define LORAWAN_DEVICE_EUI_AU915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x19,0x15  // 915 MHz, Australia (counter=1)
-#define LORAWAN_DEVICE_EUI_IN865                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x65  // 865 MHz, India
-#define LORAWAN_DEVICE_EUI_KR920                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x20  // 920 MHz, Korea
+// =============================================================================
+// ABP Multi-Region Configuration
+// =============================================================================
+// NOTE: Get DevAddr, AppSKey, NwkSKey from Chirpstack after creating ABP devices
+// =============================================================================
+
+// US915 ABP Device (DevEUI: 60:81:F9:53:25:0F:09:15)
+#define LORAWAN_DEVICE_EUI_US915                           0x60,0x81,0xF9,0x53,0x25,0x0F,0x09,0x15
+#define LORAWAN_DEV_ADDR_US915                             0x26091500  // DevAddr with 0915 region indicator
+#define LORAWAN_APP_SKEY_US915                             { 0xF0,0x0C,0x2A,0x6E,0xBC,0x60,0x3A,0x71,0xF9,0xE4,0xE4,0x72,0x09,0x15,0xAA,0xAA }  // 16 bytes, ends with 0915AAAA
+#define LORAWAN_NWK_SKEY_US915                             { 0xF0,0x0C,0x2A,0x6E,0xBC,0x60,0x3A,0x71,0xF9,0xE4,0xE4,0x72,0x09,0x15,0xBB,0xBB }  // 16 bytes, ends with 0915BBBB
+
+// EU868 ABP Device (DevEUI: 60:81:F9:53:25:0F:08:68)
+#define LORAWAN_DEVICE_EUI_EU868                           0x60,0x81,0xF9,0x53,0x25,0x0F,0x08,0x68
+#define LORAWAN_DEV_ADDR_EU868                             0x26086800  // DevAddr with 0868 region indicator
+#define LORAWAN_APP_SKEY_EU868                             { 0xF0,0x0C,0x2A,0x6E,0xBC,0x60,0x3A,0x71,0xF9,0xE4,0xE4,0x72,0x08,0x68,0xAA,0xAA }  // 16 bytes, ends with 0868AAAA
+#define LORAWAN_NWK_SKEY_EU868                             { 0xF0,0x0C,0x2A,0x6E,0xBC,0x60,0x3A,0x71,0xF9,0xE4,0xE4,0x72,0x08,0x68,0xBB,0xBB }  // 16 bytes, ends with 0868BBBB
+
+// Legacy region DevEUIs (not used for ABP, kept for reference)
+#define LORAWAN_DEVICE_EUI_AS923                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x23
+#define LORAWAN_DEVICE_EUI_AU915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x19,0x15
+#define LORAWAN_DEVICE_EUI_IN865                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x65
+#define LORAWAN_DEVICE_EUI_KR920                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x20
 
 /*!
  * App/Join server IEEE EUI (big endian)
@@ -128,14 +144,16 @@ extern "C" {
 #define LORAWAN_NWK_KEY                                    F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
 
 /*!
- * Forwarding Network session key
+ * Forwarding Network session key (LoRaWAN 1.0.x NwkSKey)
+ * For ABP US915: ends with 0915BBBB
  */
-#define LORAWAN_NWK_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_NWK_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,09,15,BB,BB
 
 /*!
- * Application session key
+ * Application session key (LoRaWAN 1.0.x AppSKey) 
+ * For ABP US915: ends with 0915AAAA
  */
-#define LORAWAN_APP_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_APP_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,09,15,AA,AA
 
 /*!
  * Format commissioning keys
