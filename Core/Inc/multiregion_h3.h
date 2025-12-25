@@ -47,13 +47,6 @@ LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon);
  */
 LoRaMacRegion_t H3Region_ToLoRaMacRegion(RegionId h3Region);
 
-/**
- * @brief  Get current active LoRaWAN region
- * @retval LoRaMacRegion_t: Currently active region
- * @note   Placeholder until multiregion context manager is implemented
- */
-LoRaMacRegion_t MultiRegion_GetActiveRegion(void);
-
 #ifdef __cplusplus
 }
 #endif

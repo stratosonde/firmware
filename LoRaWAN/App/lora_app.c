@@ -41,6 +41,7 @@
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"
 #include "multiregion_h3.h"
+#include "multiregion_context.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -223,6 +224,12 @@ static void OnSystemReset(void);
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV_MULTIREGION */
+/* Multi-region pre-join support */
+volatile uint8_t g_multiregion_join_success = 0;
+volatile uint8_t g_multiregion_in_prejoin = 0;
+/* USER CODE END PV_MULTIREGION */
+
 /**
   * @brief LoRaWAN default activation type
   */
@@ -260,8 +267,9 @@ static LmHandlerCallbacks_t LmHandlerCallbacks =
 
 /**
   * @brief LoRaWAN handler parameters
+  * @note Made non-static to allow access from multiregion_context.c
   */
-static LmHandlerParams_t LmHandlerParams =
+LmHandlerParams_t LmHandlerParams =
 {
   .ActiveRegion =             ACTIVE_REGION,
   .DefaultClass =             LORAWAN_DEFAULT_CLASS,
@@ -300,6 +308,36 @@ static UTIL_TIMER_Object_t StopJoinTimer;
 /* Exported functions ---------------------------------------------------------*/
 /* USER CODE BEGIN EF */
 
+/**
+ * @brief Reinitialize the entire LoRaWAN stack for a new region
+ * @note This performs DeInit/Init cycle to clear ALL state between region joins
+ * @note Caller must set DevEUI and call LmHandlerConfigure() after this returns
+ */
+void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
+{
+  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Starting full stack reset...\r\n");
+  
+  // Halt current operations
+  LmHandlerHalt();
+  HAL_Delay(100);
+  
+  // Complete teardown
+  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Calling LmHandlerDeInit...\r\n");
+  LmHandlerDeInit();
+  HAL_Delay(200);
+  
+  // Rebuild from scratch
+  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Calling LmHandlerInit...\r\n");
+  LmHandlerInit(&LmHandlerCallbacks, APP_VERSION);
+  HAL_Delay(100);
+  
+  // Set region parameter but DON'T configure yet
+  // Configuration must be done AFTER DevEUI is set by caller
+  LmHandlerParams.ActiveRegion = new_region;
+  
+  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Stack reset complete (region set, not configured)\r\n");
+}
+
 /* USER CODE END EF */
 
 void LoRaWAN_Init(void)
@@ -329,9 +367,36 @@ void LoRaWAN_Init(void)
   LmHandlerConfigure(&LmHandlerParams);
 
   /* USER CODE BEGIN LoRaWAN_Init_2 */
+  /* Initialize multi-region context manager */
+  MultiRegion_Init();
+  APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
+  
+  /* CRITICAL: Erase old LoRaWAN NVM to prevent DevEUI restoration conflicts */
+  SEGGER_RTT_WriteString(0, "Erasing old LoRaWAN NVM before pre-join...\r\n");
+  extern FLASH_IF_StatusTypedef FLASH_IF_Erase(void *pFlashAddress, uint32_t page_size);
+  FLASH_IF_Erase(LORAWAN_NVM_BASE_ADDRESS, FLASH_PAGE_SIZE);
+  HAL_Delay(100);
+  
+  /* Pre-join US915 and EU868 regions for testing */
+  /* NOTE: This will take ~60 seconds (30s per region join) */
+  SEGGER_RTT_WriteString(0, "Setting pre-join mode flag...\r\n");
+  g_multiregion_in_prejoin = true;  // Tell callback not to start timer
+  
+  MultiRegion_PreJoinAllRegions();
+  
+  g_multiregion_in_prejoin = false;  // Clear flag
+  SEGGER_RTT_WriteString(0, "Pre-join mode flag cleared\r\n");
+  
+  /* After pre-join, disable ForceRejoin to avoid re-joining */
+  ForceRejoin = false;
+  APP_LOG(TS_ON, VLEVEL_H, "Multi-region pre-join complete, ForceRejoin disabled\r\n");
+  
   /* USER CODE END LoRaWAN_Init_2 */
 
-  LmHandlerJoin(ActivationType, ForceRejoin);
+  // Skip join - pre-join already joined both US915 and EU868
+  // Already on US915 from MultiRegion_SwitchToRegion() at end of pre-join
+  // LmHandlerJoin(ActivationType, ForceRejoin);
+  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - already joined from pre-join\r\n");
 
   if (EventType == TX_ON_TIMER)
   {
@@ -385,7 +450,7 @@ static void SendTxData(void)
    * We power on for longer on first attempts to allow cold/warm fix
    * This keeps the GNSS operation bounded and doesn't block LoRaWAN timing
    */
-  #define GNSS_COLLECTION_TIME_MS  45000  /* 45 seconds - allows cold start fix */
+  #define GNSS_COLLECTION_TIME_MS  120000  /* 45 seconds - allows cold start fix */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Declare gps_start and ttf_ms at function scope */
@@ -514,6 +579,18 @@ static void SendTxData(void)
                lon_int / 1000000, abs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
       SEGGER_RTT_WriteString(0, h3_msg);
+      
+      /* Auto-switch region if enabled and necessary */
+      LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
+          hgnss.data.latitude, 
+          hgnss.data.longitude
+      );
+      
+      if (switch_status == LORAMAC_HANDLER_SUCCESS) {
+        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
+      } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
+        SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
+      }
     }
     else
     {
@@ -580,8 +657,10 @@ static void SendTxData(void)
   // Add GNSS HDOP on channel 8 (Horizontal Dilution of Precision)
   CayenneLppAddAnalogInput(8, sensor_data.gnss_hdop);
   
-  // Add TTF (Time To Fix) on channel 9 (in milliseconds) - captured at moment of fix
-  CayenneLppAddAnalogInput(9, (float)ttf_ms);
+  // Add TTF (Time To Fix) on channel 9 (in seconds, 0.01s resolution)
+  // Convert from milliseconds to seconds to avoid int16_t overflow in Cayenne LPP
+  // CayenneLpp analog uses int16_t with 0.01 resolution, max value = 327.67
+  CayenneLppAddAnalogInput(9, (float)ttf_ms / 1000.0f);
 
   /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
   int hdop_int = (int)(sensor_data.gnss_hdop * 10);
@@ -693,16 +772,25 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   {
     SEGGER_RTT_WriteString(0, "JOIN SUCCESS!\r\n");
     
-    /* Start the Tx timer now that we're joined */
-    if (EventType == TX_ON_TIMER)
-    {
-      SEGGER_RTT_WriteString(0, "Starting Tx timer...\r\n");
-      UTIL_TIMER_Start(&TxTimer);
+    /* Set flag for multi-region pre-join */
+    g_multiregion_join_success = true;
+    
+    /* ONLY start timer if NOT in pre-join mode */
+    if (g_multiregion_in_prejoin) {
+      SEGGER_RTT_WriteString(0, "Pre-join mode: Skipping Tx timer start\r\n");
+    } else {
+      /* Start the Tx timer now that we're joined */
+      if (EventType == TX_ON_TIMER)
+      {
+        SEGGER_RTT_WriteString(0, "Starting Tx timer...\r\n");
+        UTIL_TIMER_Start(&TxTimer);
+      }
     }
   }
   else
   {
     SEGGER_RTT_WriteString(0, "JOIN FAILED - will retry on next timer event\r\n");
+    g_multiregion_join_success = false;
   }
   /* USER CODE END OnJoinRequest_1 */
 }

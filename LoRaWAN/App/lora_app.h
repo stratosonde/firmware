@@ -28,7 +28,9 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdint.h>
+#include <stdbool.h>
+#include "LoRaMacInterfaces.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -154,7 +156,20 @@ extern "C" {
 void LoRaWAN_Init(void);
 
 /* USER CODE BEGIN EFP */
+/* Multi-region pre-join support - flag to track join success */
+extern volatile uint8_t g_multiregion_join_success;
+extern volatile uint8_t g_multiregion_in_prejoin;
 
+void LoRaWAN_SetPreJoinMode(uint8_t enabled);
+uint8_t LoRaWAN_GetJoinSuccess(void);
+void LoRaWAN_ResetJoinSuccess(void);
+
+/**
+ * @brief Reinitialize the entire LoRaWAN stack for a new region
+ * @param new_region: Target region to configure after reinit
+ * @note This performs a complete stack teardown and rebuild to ensure clean state
+ */
+void LoRaApp_ReInitStack(LoRaMacRegion_t new_region);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

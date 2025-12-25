@@ -13,6 +13,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "multiregion_h3.h"
+#include "multiregion_context.h"  // For MultiRegion_GetActiveRegion()
 #include "sys_app.h"  // For debug logging
 #include <string.h>
 #include <stdio.h>
@@ -21,7 +22,7 @@
 #define H3_MAX_DISTANCE_KM  500.0f  // Maximum distance to consider for nearest neighbor
 
 /* Private variables ---------------------------------------------------------*/
-static LoRaMacRegion_t currentRegion = LORAMAC_REGION_US915;  // Default region
+// Removed static currentRegion - now using MultiRegion_GetActiveRegion() from multiregion_context.c
 
 /* Private function prototypes -----------------------------------------------*/
 static void LogRegionDetection(const char* h3RegionName, float lat, float lon, LoRaMacRegion_t loraRegion);
@@ -95,14 +96,7 @@ LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon)
     return loRaRegion;
 }
 
-/**
- * @brief  Get current active LoRaWAN region
- * @note   Placeholder until multiregion context manager is implemented
- */
-LoRaMacRegion_t MultiRegion_GetActiveRegion(void)
-{
-    return currentRegion;
-}
+// MultiRegion_GetActiveRegion() now implemented in multiregion_context.c
 
 /* Private functions ---------------------------------------------------------*/
 
