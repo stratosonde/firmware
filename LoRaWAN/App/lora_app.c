@@ -220,10 +220,7 @@ static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity);
 static void OnSystemReset(void);
 
 /* USER CODE BEGIN PFP */
-/**
- * @brief Setup multi-region with Chirpstack session keys
- */
-static void SetupMultiRegionChirpstackKeys(void);
+
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
@@ -371,15 +368,44 @@ void LoRaWAN_Init(void)
   LmHandlerConfigure(&LmHandlerParams);
 
   /* USER CODE BEGIN LoRaWAN_Init_2 */
-  /* Setup multi-region with Chirpstack session keys from OTAA joins */
-  SetupMultiRegionChirpstackKeys();
   
+  /* Initialize Multi-region context manager */
+  MultiRegion_Init();
+  APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
+  
+  /* Auto-detect provision state: Check if we have valid saved ABP contexts */
+  if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) &&
+      MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868)) {
+    
+    /* Already provisioned - use saved ABP contexts from flash */
+    SEGGER_RTT_WriteString(0, "Found valid ABP contexts - using saved sessions\r\n");
+    APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP contexts for US915 and EU868\r\n");
+    
+    /* Switch to US915 as starting region */
+    MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    
+  } else {
+    
+    /* Not provisioned yet - run OTAA provision sequence */
+    SEGGER_RTT_WriteString(0, "No valid contexts found - running OTAA provision\r\n");
+    APP_LOG(TS_ON, VLEVEL_H, "Starting OTAA multi-region provision\r\n");
+    
+    /* Pre-join all regions via OTAA (includes post-join data packets) */
+    /* This will: */
+    /*   1. Join each region via OTAA */
+    /*   2. Save session keys/DevAddr/counters to flash */
+    /*   3. Send 2 post-join data packets per region */
+    /*   4. Display session keys via RTT (for Chirpstack server setup) */
+    MultiRegion_PreJoinAllRegions();
+    
+    APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
+  }
+
   /* USER CODE END LoRaWAN_Init_2 */
 
-  // Skip join - using ABP with session keys from previous OTAA joins
-  // Already on US915 from MultiRegion_SwitchToRegion() at end of setup
+  // Skip LmHandlerJoin - already handled by auto-provision logic above
   // LmHandlerJoin(ActivationType, ForceRejoin);
-  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - using ABP with OTAA-derived session keys\r\n");
+  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - using auto-provision\r\n");
 
   if (EventType == TX_ON_TIMER)
   {
@@ -405,80 +431,7 @@ void LoRaWAN_Init(void)
 
 /* Private functions ---------------------------------------------------------*/
 /* USER CODE BEGIN PrFD */
-/**
- * @brief Setup multi-region with Chirpstack session keys from OTAA joins
- */
-static void SetupMultiRegionChirpstackKeys(void)
-{
-    SEGGER_RTT_WriteString(0, "\r\n========================================\r\n");
-    SEGGER_RTT_WriteString(0, "=== CHIRPSTACK MULTIREGION SETUP ===\r\n");
-    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
-    
-    // Initialize MultiRegion manager
-    MultiRegion_Init();
-    
-    // US915 session keys from Chirpstack OTAA join (StratoUS)
-    // DevAddr: 0x78000000
-    const uint8_t us915_app_skey[] = {
-        0x3d,0x1b,0x0c,0xf1,0x7a,0x53,0x08,0x5a,
-        0x18,0x85,0x9c,0xb5,0xb9,0xb3,0x28,0xbc
-    };
-    const uint8_t us915_nwk_skey[] = {
-        0xcc,0x9b,0xbe,0xa4,0x8c,0x3c,0x4d,0x45,
-        0x9d,0x18,0xf7,0xb2,0xe7,0x84,0x60,0x2a
-    };
-    
-    // Initialize US915
-    bool us915_ok = MultiRegion_InitializeRegionFromChirpstack(
-        LORAMAC_REGION_US915,
-        0x78000000,
-        us915_app_skey,
-        us915_nwk_skey
-    );
-    
-    if (us915_ok) {
-        SEGGER_RTT_WriteString(0, "US915 context initialized\r\n");
-    } else {
-        SEGGER_RTT_WriteString(0, "US915 initialization failed\r\n");
-    }
-    
-    // EU868 session keys from Chirpstack OTAA join (StratoEU)
-    // DevAddr: 0x78000001
-    const uint8_t eu868_app_skey[] = {
-        0x77,0xdd,0x12,0x65,0xfe,0xfa,0x80,0xf2,
-        0x38,0xd0,0x1c,0xfd,0xfe,0x3e,0x49,0x67
-    };
-    const uint8_t eu868_nwk_skey[] = {
-        0xe7,0x7e,0xa1,0xcf,0x37,0x37,0x8d,0x8d,
-        0xa5,0x43,0xd3,0xa5,0x81,0x21,0x59,0xbb
-    };
-    
-    // Initialize EU868
-    bool eu868_ok = MultiRegion_InitializeRegionFromChirpstack(
-        LORAMAC_REGION_EU868,
-        0x78000001,
-        eu868_app_skey,
-        eu868_nwk_skey
-    );
-    
-    if (eu868_ok) {
-        SEGGER_RTT_WriteString(0, "EU868 context initialized\r\n");
-    } else {
-        SEGGER_RTT_WriteString(0, "EU868 initialization failed\r\n");
-    }
-    
-    // Switch to US915 as starting region
-    SEGGER_RTT_WriteString(0, "\r\nSwitching to US915 as starting region...\r\n");
-    MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
-    
-    SEGGER_RTT_WriteString(0, "\r\n========================================\r\n");
-    if (us915_ok && eu868_ok) {
-        SEGGER_RTT_WriteString(0, "=== MULTIREGION SETUP COMPLETE ===\r\n");
-    } else {
-        SEGGER_RTT_WriteString(0, "=== SOME REGIONS FAILED ===\r\n");
-    }
-    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
-}
+
 /* USER CODE END PrFD */
 
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
