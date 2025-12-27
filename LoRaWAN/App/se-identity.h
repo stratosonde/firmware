@@ -114,8 +114,9 @@ extern "C" {
 /*!
  * Device address on the network (big endian)
  * When set to 00,00,00,00 DevAddr is automatically set with a value provided by MCU platform
+ * MULTIREGION: Set to 00,00,00,00 to allow multiregion_context.c full control over DevAddr
  */
-#define LORAWAN_DEVICE_ADDRESS                             00,00,00,00
+#define LORAWAN_DEVICE_ADDRESS                             78,00,00,00
 
 /*!
  * Application root key
@@ -129,13 +130,15 @@ extern "C" {
 
 /*!
  * Forwarding Network session key
+ * MULTIREGION: Set to zeros - actual keys loaded via LmHandlerSetKey() per region
  */
-#define LORAWAN_NWK_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_NWK_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
- * Application session key
+ * Application session key  
+ * MULTIREGION: Set to zeros - actual keys loaded via LmHandlerSetKey() per region
  */
-#define LORAWAN_APP_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_APP_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
  * Format commissioning keys

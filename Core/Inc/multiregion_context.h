@@ -182,6 +182,30 @@ bool MultiRegion_ClearAllContexts(void);
  */
 bool MultiRegion_PreJoinAllRegions(void);
 
+/**
+ * @brief Initialize a region context from Chirpstack session keys (ABP)
+ * @param region: Target LoRaWAN region
+ * @param dev_addr: DevAddr from Chirpstack
+ * @param app_s_key: AppSKey from Chirpstack (16 bytes)
+ * @param nwk_s_key: NwkSKey from Chirpstack (16 bytes)
+ * @retval bool: true if initialization successful
+ * @note This creates an ABP context with Chirpstack-provided session keys
+ * @note Use this instead of OTAA join when you have the keys from Chirpstack
+ */
+bool MultiRegion_InitializeRegionFromChirpstack(
+    LoRaMacRegion_t region,
+    uint32_t dev_addr,
+    const uint8_t *app_s_key,
+    const uint8_t *nwk_s_key
+);
+
+/**
+ * @brief Display current session keys for Chirpstack ABP configuration
+ * @retval None
+ * @note Outputs session keys via SEGGER_RTT for copy/paste into Chirpstack
+ */
+void MultiRegion_DisplaySessionKeys(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -205,18 +205,16 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
                     vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
   
-  SEGGER_RTT_WriteString(0, "DEBUG: Point 1 - After battery print\r\n");
-  
+ 
   /* Use real GNSS data if available from hgnss (populated by SendTxData's GPS collection)
    * GPS is powered on/off in SendTxData before calling EnvSensors_Read
    * hgnss.data contains the latest parsed NMEA data */
-  SEGGER_RTT_WriteString(0, "DEBUG: Point 2 - Before if check\r\n");
   
   if (hgnss.is_initialized && hgnss.data.valid && 
       hgnss.data.fix_quality != GNSS_FIX_INVALID &&
       GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
   {
-    SEGGER_RTT_WriteString(0, "DEBUG: Point 3 - In valid fix branch\r\n");
+
     /* Convert decimal degrees to scaled integer format for Cayenne LPP */
     sensor_data->latitude = (int32_t)((hgnss.data.latitude * MAX_GPS_POS) / 90.0f);
     sensor_data->longitude = (int32_t)((hgnss.data.longitude * MAX_GPS_POS) / 180.0f);
@@ -226,12 +224,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     sensor_data->gnss_hdop = hgnss.data.hdop;
     sensor_data->gnss_valid = true;
     
-    SEGGER_RTT_WriteString(0, "DEBUG: Point 4 - Before printf\r\n");
     SEGGER_RTT_printf(0, "GNSS: Valid fix | Sats:%d\r\n", hgnss.data.satellites);
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "DEBUG: Point 5 - In no fix branch\r\n");
     /* No valid GPS fix - use default coordinates */
     sensor_data->latitude = (int32_t)((STSOP_LATTITUDE * MAX_GPS_POS) / 90);
     sensor_data->longitude = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
@@ -245,7 +241,6 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
                       hgnss.data.satellites_in_view);
   }
 
-  SEGGER_RTT_WriteString(0, "DEBUG: Point 6 - About to return\r\n");
   return 0;
   /* USER CODE END EnvSensors_Read */
 }

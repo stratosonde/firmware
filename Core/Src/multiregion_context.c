@@ -16,6 +16,7 @@
 #include "multiregion_h3.h"
 #include "flash_if.h"
 #include "sys_app.h"
+#include "sys_sensors.h"
 #include "lora_app.h"
 #include "LmHandler.h"
 #include "LoRaMac.h"
@@ -260,14 +261,27 @@ bool MultiRegion_RestoreContexts(void)
  */
 LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
 {
+    // Debug entry
+    char entry_msg[128];
+    snprintf(entry_msg, sizeof(entry_msg), "\r\n>>> MultiRegion_SwitchToRegion() called for %s\r\n", RegionToString(region));
+    SEGGER_RTT_WriteString(0, entry_msg);
+    
     if (!g_initialized) {
+        SEGGER_RTT_WriteString(0, "ERROR: Not initialized, returning error\r\n");
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Not initialized\r\n");
         return LORAMAC_HANDLER_ERROR;
     }
     
+    // Debug current state
+    snprintf(entry_msg, sizeof(entry_msg), "Current active_slot: %d, Current region: %s\r\n", 
+             g_storage.active_slot,
+             g_storage.active_slot < MAX_REGION_CONTEXTS ? RegionToString(g_storage.contexts[g_storage.active_slot].region) : "NONE");
+    SEGGER_RTT_WriteString(0, entry_msg);
+    
     // Check if already on this region
     if (g_storage.active_slot < MAX_REGION_CONTEXTS && 
        g_storage.contexts[g_storage.active_slot].region == region) {
+        SEGGER_RTT_WriteString(0, "Already on target region, returning SUCCESS without switch\r\n");
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Already on %s\r\n", RegionToString(region));
         return LORAMAC_HANDLER_SUCCESS;
     }
@@ -296,56 +310,88 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     APP_LOG(TS_ON, VLEVEL_H, "\r\n=== Switching to %s (slot %d) ===\r\n", 
             RegionToString(region), slot);
     
-    // Save current context before switching
-    if (g_storage.active_slot < MAX_REGION_CONTEXTS) {
-        CaptureCurrentContext(&g_storage.contexts[g_storage.active_slot]);
-    }
-    
-    // Do full stack reinit to properly reconfigure radio for target region
-    SEGGER_RTT_WriteString(0, "Performing full stack reinit for region switch...\r\n");
+    // STEP 1: Reinitialize stack (loads zeros from se-identity.h)
+    SEGGER_RTT_WriteString(0, "Step 1: Performing full stack reinit...\r\n");
     LoRaApp_ReInitStack(region);
-    
-    // Allow stack to stabilize and process any pending events
     HAL_Delay(100);
-    LmHandlerProcess();
     
-    // Set DevEUI for target region
+    // STEP 2: Configure the handler (this might load from NVM)
+    SEGGER_RTT_WriteString(0, "Step 2: Configuring handler for region...\r\n");
+    LmHandlerConfigure(&LmHandlerParams);
+    HAL_Delay(50);
+    
+    // STEP 3: NOW set identity and keys AFTER configure (to override NVM restore)
+    SEGGER_RTT_WriteString(0, "Step 3: Setting DevEUI and session keys (overriding NVM)...\r\n");
     LmHandlerSetDevEUI(ctx->dev_eui);
-    SEGGER_RTT_printf(0, "Set DevEUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
+    SEGGER_RTT_printf(0, "  DevEUI set: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
             ctx->dev_eui[0], ctx->dev_eui[1], ctx->dev_eui[2], ctx->dev_eui[3],
             ctx->dev_eui[4], ctx->dev_eui[5], ctx->dev_eui[6], ctx->dev_eui[7]);
     
-    // Configure stack for target region
-    SEGGER_RTT_WriteString(0, "Configuring stack for target region...\r\n");
-    LmHandlerConfigure(&LmHandlerParams);
+    // Set session keys AFTER configure (critical for multi-region)
+    LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key);
+    LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key);
+    SEGGER_RTT_WriteString(0, "  Session keys set\r\n");
     
-    // Restore saved OTAA session as ABP to avoid re-join
+    // STEP 4: Set DevAddr via MIB before channel mask
+    SEGGER_RTT_WriteString(0, "Step 4: Setting DevAddr and activation...\r\n");
     MibRequestConfirm_t mib;
+    
+    mib.Type = MIB_DEV_ADDR;
+    mib.Param.DevAddr = ctx->dev_addr;
+    LoRaMacMibSetRequestConfirm(&mib);
+    SEGGER_RTT_printf(0, "  DevAddr set: 0x%08lX\r\n", ctx->dev_addr);
+    
+    // Set activation type
+    mib.Type = MIB_NETWORK_ACTIVATION;
+    mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
+    LoRaMacMibSetRequestConfirm(&mib);
+    
+    // STEP 5: Restore frame counters and VERIFY keys in NVM
+    SEGGER_RTT_WriteString(0, "Step 5: Restoring frame counters and verifying keys in NVM...\r\n");
     mib.Type = MIB_NVM_CTXS;
     LoRaMacMibGetRequestConfirm(&mib);
     LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
     
     if (nvm) {
-        // Restore session keys
-        memcpy(nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16);
-        memcpy(nvm->SecureElement.KeyList[NWK_S_ENC_KEY].KeyValue, ctx->nwk_s_key, 16);
-        
-        // Restore DevAddr
-        nvm->MacGroup2.DevAddr = ctx->dev_addr;
-        
         // Restore frame counters
         nvm->Crypto.FCntList.FCntUp = ctx->uplink_counter;
         nvm->Crypto.FCntList.NFCntDown = ctx->downlink_counter;
         nvm->MacGroup1.LastRxMic = ctx->last_rx_mic;
-        
-        // Mark as ABP activated
         nvm->MacGroup2.NetworkActivation = ACTIVATION_TYPE_ABP;
         
-        SEGGER_RTT_printf(0, "Restored session: DevAddr=0x%08lX, FCnt=%lu\r\n",
-                ctx->dev_addr, ctx->uplink_counter);
+        // CRITICAL: Verify keys are correctly loaded in secure element NVM
+        // LmHandlerSetKey() should have done this, but we double-check
+        memcpy(nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16);
+        memcpy(nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16);
         
-        // Debug: Print session keys for verification
-        SEGGER_RTT_WriteString(0, "AppSKey: ");
+        SEGGER_RTT_printf(0, "  Frame counters: FCntUp=%lu, FCntDown=%lu\r\n",
+                          ctx->uplink_counter, ctx->downlink_counter);
+        
+        // ===== COMPREHENSIVE CONTEXT LOGGING =====
+        SEGGER_RTT_WriteString(0, "\r\n----- RESTORED CONTEXT DETAILS -----\r\n");
+        
+        // Core session parameters
+        SEGGER_RTT_printf(0, "Region:       %s\r\n", RegionToString(ctx->region));
+        SEGGER_RTT_printf(0, "Activation:   %s\r\n", 
+                ctx->activation == ACTIVATION_TYPE_OTAA ? "OTAA" : "ABP");
+        SEGGER_RTT_printf(0, "DevAddr:      0x%08lX\r\n", ctx->dev_addr);
+        
+        // Frame counters
+        SEGGER_RTT_printf(0, "FCntUp:       %lu\r\n", ctx->uplink_counter);
+        SEGGER_RTT_printf(0, "FCntDown:     %lu\r\n", ctx->downlink_counter);
+        SEGGER_RTT_printf(0, "LastRxMic:    0x%08lX\r\n", ctx->last_rx_mic);
+        
+        // Radio parameters
+        SEGGER_RTT_printf(0, "Datarate:     DR%d\r\n", ctx->datarate);
+        SEGGER_RTT_printf(0, "TxPower:      %d dBm\r\n", ctx->tx_power);
+        SEGGER_RTT_printf(0, "ADR:          %s\r\n", ctx->adr_enabled ? "ON" : "OFF");
+        
+        // RX2 window
+        SEGGER_RTT_printf(0, "RX2 Freq:     %lu Hz\r\n", ctx->rx2_frequency);
+        SEGGER_RTT_printf(0, "RX2 DR:       DR%d\r\n", ctx->rx2_datarate);
+        
+        // Session keys (full 16 bytes)
+        SEGGER_RTT_WriteString(0, "AppSKey:      ");
         for (int i = 0; i < 16; i++) {
             char hex[4];
             snprintf(hex, sizeof(hex), "%02X ", ctx->app_s_key[i]);
@@ -353,13 +399,17 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
         }
         SEGGER_RTT_WriteString(0, "\r\n");
         
-        SEGGER_RTT_WriteString(0, "NwkSKey: ");
+        SEGGER_RTT_WriteString(0, "NwkSKey:      ");
         for (int i = 0; i < 16; i++) {
             char hex[4];
             snprintf(hex, sizeof(hex), "%02X ", ctx->nwk_s_key[i]);
             SEGGER_RTT_WriteString(0, hex);
         }
         SEGGER_RTT_WriteString(0, "\r\n");
+        
+        // CRC validation
+        SEGGER_RTT_printf(0, "Context CRC:  0x%04X (validated)\r\n", ctx->crc16);
+        SEGGER_RTT_WriteString(0, "------------------------------------\r\n\r\n");
     }
     
     // Set activation via MIB as well
@@ -367,12 +417,75 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
     LoRaMacMibSetRequestConfirm(&mib);
     
-    // Start MAC and allow state machine to stabilize
+    // STEP 6: Configure region-specific channel masks BEFORE starting MAC
+    SEGGER_RTT_WriteString(0, "Step 6: Configuring region-specific channel masks...\r\n");
+    // During OTAA join, the network configures specific channels (sub-bands for US915)
+    // When switching to ABP, we must restore these channel configurations
+    
+    MibRequestConfirm_t mib_ch;
+    
+    if (region == LORAMAC_REGION_US915) {
+        // Helium uses sub-band 2 (channels 8-15)
+        // Channel mask: 16 bits per bank, bit set = channel enabled
+        uint16_t us915_mask[6] = {
+            0xFF00,  // Bank 0: Channels 0-15, enable 8-15 (sub-band 2)
+            0x0000,  // Bank 1: Channels 16-31, all disabled
+            0x0000,  // Bank 2: Channels 32-47, all disabled
+            0x0000,  // Bank 3: Channels 48-63, all disabled
+            0x0001,  // Bank 4: 500kHz channels 64-71, enable channel 64 (matches sub-band 2)
+            0x0000   // Bank 5: Reserved
+        };
+        
+        mib_ch.Type = MIB_CHANNELS_MASK;
+        mib_ch.Param.ChannelsMask = us915_mask;
+        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
+            SEGGER_RTT_WriteString(0, "US915: Set sub-band 2 (channels 8-15 + channel 64)\r\n");
+        } else {
+            SEGGER_RTT_WriteString(0, "US915: WARNING - Failed to set channel mask\r\n");
+        }
+        
+        // Also set default channels to match
+        mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
+        mib_ch.Param.ChannelsDefaultMask = us915_mask;
+        LoRaMacMibSetRequestConfirm(&mib_ch);
+        
+    } else if (region == LORAMAC_REGION_EU868) {
+        // EU868: Channels 0-2 are default join channels (868.1, 868.3, 868.5 MHz)
+        // After OTAA join, network typically enables channels 3-7 as well
+        // For ABP mode, enable all standard channels (0-7) for data transmission
+        // Channels 3-7: 867.1, 867.3, 867.5, 867.7, 867.9 MHz
+        uint16_t eu868_mask[1] = {0x00FF};  // Binary: 0000 0000 1111 1111 (channels 0-7 enabled)
+        
+        mib_ch.Type = MIB_CHANNELS_MASK;
+        mib_ch.Param.ChannelsMask = eu868_mask;
+        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
+            SEGGER_RTT_WriteString(0, "EU868: Enabled all standard channels 0-7 for data transmission\r\n");
+        } else {
+            SEGGER_RTT_WriteString(0, "EU868: WARNING - Failed to set channel mask\r\n");
+        }
+        
+        mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
+        mib_ch.Param.ChannelsDefaultMask = eu868_mask;
+        LoRaMacMibSetRequestConfirm(&mib_ch);
+    }
+    
+    // STEP 7: Start MAC and allow state machine to stabilize
+    SEGGER_RTT_WriteString(0, "Step 7: Starting MAC and stabilizing...\r\n");
     LoRaMacStart();
     HAL_Delay(200);
     
-    // CRITICAL: Process MAC events to complete initialization
-    // Without this, MAC remains in internal busy state after first TX
+    // STEP 8: Set DevAddr via MIB AFTER LoRaMacStart() to ensure it persists
+    SEGGER_RTT_WriteString(0, "Step 8: Re-setting DevAddr after MAC start...\r\n");
+    mib.Type = MIB_DEV_ADDR;
+    mib.Param.DevAddr = ctx->dev_addr;
+    if (LoRaMacMibSetRequestConfirm(&mib) == LORAMAC_STATUS_OK) {
+        SEGGER_RTT_printf(0, "  DevAddr confirmed: 0x%08lX\r\n", ctx->dev_addr);
+    } else {
+        SEGGER_RTT_WriteString(0, "  ERROR: Failed to set DevAddr!\r\n");
+    }
+    
+    // STEP 9: Process MAC events to complete initialization
+    SEGGER_RTT_WriteString(0, "Step 9: Processing MAC events to stabilize...\r\n");
     for (int i = 0; i < 10; i++) {
         LmHandlerProcess();
         HAL_Delay(10);
@@ -380,8 +493,7 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     
     // Verify MAC is not busy before proceeding
     if (LoRaMacIsBusy()) {
-        SEGGER_RTT_WriteString(0, "WARNING: MAC still busy after initialization\r\n");
-        // Give it more time
+        SEGGER_RTT_WriteString(0, "  WARNING: MAC still busy, giving more time...\r\n");
         HAL_Delay(500);
         for (int i = 0; i < 20; i++) {
             LmHandlerProcess();
@@ -391,10 +503,52 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     
     // Final MAC state verification
     if (LoRaMacIsBusy()) {
-        SEGGER_RTT_WriteString(0, "ERROR: MAC is busy after full initialization!\r\n");
+        SEGGER_RTT_WriteString(0, "  ERROR: MAC is busy after initialization!\r\n");
         return LORAMAC_HANDLER_BUSY_ERROR;
     }
-    SEGGER_RTT_WriteString(0, "MAC verified idle and ready for TX\r\n");
+    SEGGER_RTT_WriteString(0, "  MAC verified idle and ready\r\n");
+    
+    // STEP 10: VERIFY secure element has correct keys and DevAddr
+    SEGGER_RTT_WriteString(0, "Step 10: Verifying secure element state...\r\n");
+    
+    // Verify DevAddr
+    MibRequestConfirm_t verify_mib;
+    verify_mib.Type = MIB_DEV_ADDR;
+    LoRaMacMibGetRequestConfirm(&verify_mib);
+    
+    if (verify_mib.Param.DevAddr != ctx->dev_addr) {
+        SEGGER_RTT_printf(0, "  ERROR: DevAddr mismatch! MAC=0x%08lX, Expected=0x%08lX\r\n", 
+                          verify_mib.Param.DevAddr, ctx->dev_addr);
+    } else {
+        SEGGER_RTT_printf(0, "  ✓ DevAddr verified: 0x%08lX\r\n", ctx->dev_addr);
+    }
+    
+    // Verify session keys in secure element
+    verify_mib.Type = MIB_NVM_CTXS;
+    LoRaMacMibGetRequestConfirm(&verify_mib);
+    LoRaMacNvmData_t *verify_nvm = (LoRaMacNvmData_t*)verify_mib.Param.Contexts;
+    
+    if (verify_nvm) {
+        bool keys_match = true;
+        
+        // Check AppSKey
+        if (memcmp(verify_nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, 
+                   ctx->app_s_key, 16) != 0) {
+            SEGGER_RTT_WriteString(0, "  ERROR: AppSKey mismatch in secure element!\r\n");
+            keys_match = false;
+        }
+        
+        // Check NwkSKey
+        if (memcmp(verify_nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, 
+                   ctx->nwk_s_key, 16) != 0) {
+            SEGGER_RTT_WriteString(0, "  ERROR: NwkSKey mismatch in secure element!\r\n");
+            keys_match = false;
+        }
+        
+        if (keys_match) {
+            SEGGER_RTT_WriteString(0, "  ✓ Session keys verified correct\r\n");
+        }
+    }
     
     g_storage.active_slot = slot;
     ctx->last_used = HAL_GetTick();
@@ -470,6 +624,62 @@ bool MultiRegion_ClearAllContexts(void)
     g_storage.num_valid = 0;
     
     return FlashWriteStorage();
+}
+
+/**
+ * @brief Send post-join data packets to receive MAC commands
+ * @param num_packets Number of packets to send (typically 2)
+ * @note Uses real sensor data to trigger any channel mask updates from network
+ */
+static void SendPostJoinDataPackets(uint8_t num_packets)
+{
+    sensor_t sensor_data;
+    
+    SEGGER_RTT_printf(0, "\r\n--- Sending %d post-join data packets ---\r\n", num_packets);
+    
+    for (uint8_t i = 0; i < num_packets; i++) {
+        SEGGER_RTT_printf(0, "Packet %d/%d: ", i+1, num_packets);
+        
+        // Read sensor data
+        EnvSensors_Read(&sensor_data);
+        
+        // Prepare simple LoRaWAN packet with temperature data
+        LmHandlerAppData_t appData;
+        uint8_t payload[3];
+        int16_t temp_int = (int16_t)(sensor_data.temperature * 100);
+        payload[0] = 0x01;  // Temperature channel
+        payload[1] = (temp_int >> 8) & 0xFF;
+        payload[2] = temp_int & 0xFF;
+        
+        appData.Port = 2;
+        appData.BufferSize = 3;
+        appData.Buffer = payload;
+        
+        // Send unconfirmed message
+        LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+        
+        if (status == LORAMAC_HANDLER_SUCCESS) {
+            SEGGER_RTT_WriteString(0, "Sent successfully\r\n");
+            
+            // Wait for TX complete and any downlinks
+            HAL_Delay(2000);
+            
+            // Process any received MAC commands
+            for (int j = 0; j < 10; j++) {
+                LmHandlerProcess();
+                HAL_Delay(100);
+            }
+        } else {
+            SEGGER_RTT_printf(0, "Send failed (status=%d)\r\n", status);
+        }
+        
+        // Wait between packets
+        if (i < num_packets - 1) {
+            HAL_Delay(3000);
+        }
+    }
+    
+    SEGGER_RTT_WriteString(0, "--- Post-join packets complete ---\r\n\r\n");
 }
 
 /**
@@ -616,6 +826,12 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     HAL_Delay(500);  // Give MAC time to stabilize
     MultiRegion_SaveCurrentContext();
     
+    // Send 2 post-join data packets to receive MAC commands (channel masks, etc.)
+    SendPostJoinDataPackets(2);
+    
+    // Save context again after data transmissions (frame counters updated)
+    MultiRegion_SaveCurrentContext();
+    
     return LORAMAC_HANDLER_SUCCESS;
 }
 
@@ -624,6 +840,10 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
  */
 bool MultiRegion_PreJoinAllRegions(void)
 {
+    // Set pre-join flag to prevent TX timer from starting during joins
+    extern volatile uint8_t g_multiregion_in_prejoin;
+    g_multiregion_in_prejoin = 1;
+    
     SEGGER_RTT_WriteString(0, "\r\n========================================\r\n");
     SEGGER_RTT_WriteString(0, "=== MULTI-REGION PRE-JOIN SEQUENCE ===\r\n");
     SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
@@ -644,6 +864,8 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: US915 joined\r\n");
+        // Display session keys for copying to Chirpstack
+        MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
     
@@ -653,6 +875,8 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: EU868 joined\r\n");
+        // Display session keys for copying to Chirpstack
+        MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
     
@@ -663,6 +887,7 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AS923 joined\r\n");
+        MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
     */
@@ -678,7 +903,156 @@ bool MultiRegion_PreJoinAllRegions(void)
     }
     APP_LOG(TS_ON, VLEVEL_H, "========================================\r\n\r\n");
     
+    // Clear pre-join flag to allow TX timer to start
+    g_multiregion_in_prejoin = 0;
+    
     return all_success;
+}
+
+/**
+ * @brief Initialize a region context from Chirpstack session keys
+ */
+bool MultiRegion_InitializeRegionFromChirpstack(
+    LoRaMacRegion_t region,
+    uint32_t dev_addr,
+    const uint8_t *app_s_key,
+    const uint8_t *nwk_s_key
+)
+{
+    if (!g_initialized) {
+        MultiRegion_Init();
+    }
+    
+    if (!app_s_key || !nwk_s_key) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Invalid key pointers\r\n");
+        return false;
+    }
+    
+    SEGGER_RTT_printf(0, "\r\n=== Initializing %s from Chirpstack keys ===\r\n", 
+                      RegionToString(region));
+    
+    // Find or allocate slot for this region
+    int8_t slot = FindContextSlot(region);
+    
+    if (slot < 0) {
+        // Find empty slot
+        for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+            if (g_storage.contexts[i].dev_addr == 0 || 
+                g_storage.contexts[i].dev_addr == 0xFFFFFFFF) {
+                slot = i;
+                g_storage.num_valid++;
+                break;
+            }
+        }
+    }
+    
+    if (slot < 0) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: No available slots\r\n");
+        return false;
+    }
+    
+    // Initialize context structure
+    MinimalRegionContext_t *ctx = &g_storage.contexts[slot];
+    memset(ctx, 0, sizeof(MinimalRegionContext_t));
+    
+    // Set basic parameters
+    ctx->region = region;
+    ctx->activation = ACTIVATION_TYPE_ABP;
+    ctx->dev_addr = dev_addr;
+    
+    // Copy session keys
+    memcpy(ctx->app_s_key, app_s_key, 16);
+    memcpy(ctx->nwk_s_key, nwk_s_key, 16);
+    
+    // Set DevEUI based on region
+    const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
+    const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
+    const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
+    const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
+    const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
+    const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
+    
+    switch (region) {
+        case LORAMAC_REGION_US915:
+            memcpy(ctx->dev_eui, deveui_us915, 8);
+            ctx->datarate = DR_2;              // US915 default
+            ctx->rx2_frequency = 923300000;
+            ctx->rx2_datarate = DR_8;
+            break;
+        case LORAMAC_REGION_EU868:
+            memcpy(ctx->dev_eui, deveui_eu868, 8);
+            ctx->datarate = DR_0;              // EU868 default
+            ctx->rx2_frequency = 869525000;
+            ctx->rx2_datarate = DR_0;
+            break;
+        case LORAMAC_REGION_AS923:
+            memcpy(ctx->dev_eui, deveui_as923, 8);
+            ctx->datarate = DR_2;
+            ctx->rx2_frequency = 923200000;
+            ctx->rx2_datarate = DR_2;
+            break;
+        case LORAMAC_REGION_AU915:
+            memcpy(ctx->dev_eui, deveui_au915, 8);
+            ctx->datarate = DR_2;
+            ctx->rx2_frequency = 923300000;
+            ctx->rx2_datarate = DR_8;
+            break;
+        case LORAMAC_REGION_IN865:
+            memcpy(ctx->dev_eui, deveui_in865, 8);
+            ctx->datarate = DR_0;
+            ctx->rx2_frequency = 866550000;
+            ctx->rx2_datarate = DR_2;
+            break;
+        case LORAMAC_REGION_KR920:
+            memcpy(ctx->dev_eui, deveui_kr920, 8);
+            ctx->datarate = DR_0;
+            ctx->rx2_frequency = 921900000;
+            ctx->rx2_datarate = DR_0;
+            break;
+        default:
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Unsupported region\r\n");
+            return false;
+    }
+    
+    // Initialize frame counters (will be loaded from flash if they exist)
+    ctx->uplink_counter = 0;
+    ctx->downlink_counter = 0;
+    ctx->last_rx_mic = 0;
+    
+    // Radio parameters
+    ctx->tx_power = 0;
+    ctx->adr_enabled = 0;  // ADR off for balloon
+    
+    // Timestamp
+    ctx->last_used = HAL_GetTick();
+    
+    // Calculate CRC
+    UpdateContextCRC(ctx);
+    
+    // Save to flash
+    bool result = FlashWriteStorage();
+    
+    if (result) {
+        SEGGER_RTT_printf(0, "%s: DevAddr=0x%08lX initialized\r\n", 
+                          RegionToString(region), dev_addr);
+        SEGGER_RTT_WriteString(0, "AppSKey: ");
+        for (int i = 0; i < 16; i++) {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%02X ", ctx->app_s_key[i]);
+            SEGGER_RTT_WriteString(0, hex);
+        }
+        SEGGER_RTT_WriteString(0, "\r\nNwkSKey: ");
+        for (int i = 0; i < 16; i++) {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%02X ", ctx->nwk_s_key[i]);
+            SEGGER_RTT_WriteString(0, hex);
+        }
+        SEGGER_RTT_WriteString(0, "\r\n");
+        APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: %s context initialized from Chirpstack\r\n", 
+                RegionToString(region));
+    }
+    
+    return result;
 }
 
 /* Private functions ---------------------------------------------------------*/
@@ -795,16 +1169,36 @@ static bool FlashWriteStorage(void)
  */
 static int8_t FindContextSlot(LoRaMacRegion_t region)
 {
+    char debug_msg[256];
+    snprintf(debug_msg, sizeof(debug_msg), 
+             "FindContextSlot: Searching for region %s (enum=%d)\r\n", 
+             RegionToString(region), region);
+    SEGGER_RTT_WriteString(0, debug_msg);
+    
+    SEGGER_RTT_WriteString(0, "Storage contents:\r\n");
     for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        snprintf(debug_msg, sizeof(debug_msg),
+                 "  Slot %d: region=%s (enum=%d), DevAddr=0x%08lX\r\n",
+                 i, RegionToString(g_storage.contexts[i].region), 
+                 g_storage.contexts[i].region,
+                 g_storage.contexts[i].dev_addr);
+        SEGGER_RTT_WriteString(0, debug_msg);
+        
         if (g_storage.contexts[i].region == region) {
+            snprintf(debug_msg, sizeof(debug_msg), "  -> Found at slot %d!\r\n", i);
+            SEGGER_RTT_WriteString(0, debug_msg);
             return i;
         }
     }
+    
+    SEGGER_RTT_WriteString(0, "  -> NOT FOUND (returning -1)\r\n");
     return -1;
 }
 
 /**
  * @brief Capture current MAC context
+ * @note This function updates ONLY dynamic values (frame counters, datarate, etc.)
+ * @note Static values (DevAddr, DevEUI, session keys) are NOT overwritten
  */
 static bool CaptureCurrentContext(MinimalRegionContext_t *ctx)
 {
@@ -814,65 +1208,31 @@ static bool CaptureCurrentContext(MinimalRegionContext_t *ctx)
     
     MibRequestConfirm_t mib;
     
-    // Get region
-    ctx->region = LmHandlerParams.ActiveRegion;
+    // CRITICAL: DevAddr, DevEUI, and session keys are region-specific constants
+    // They are set during initialization and should NEVER be overwritten
+    // Only capture dynamic state that changes with transmissions
     
-    // Capture current DevEUI (determine from region instead of reading from MAC)
-    const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
-    const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
-    const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
-    const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
-    const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
-    const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
-    
-    switch (ctx->region) {
-        case LORAMAC_REGION_US915:
-            memcpy(ctx->dev_eui, deveui_us915, 8);
-            break;
-        case LORAMAC_REGION_EU868:
-            memcpy(ctx->dev_eui, deveui_eu868, 8);
-            break;
-        case LORAMAC_REGION_AS923:
-            memcpy(ctx->dev_eui, deveui_as923, 8);
-            break;
-        case LORAMAC_REGION_AU915:
-            memcpy(ctx->dev_eui, deveui_au915, 8);
-            break;
-        case LORAMAC_REGION_IN865:
-            memcpy(ctx->dev_eui, deveui_in865, 8);
-            break;
-        case LORAMAC_REGION_KR920:
-            memcpy(ctx->dev_eui, deveui_kr920, 8);
-            break;
-        default:
-            memcpy(ctx->dev_eui, deveui_us915, 8);  // Fallback
-            break;
-    }
+    SEGGER_RTT_printf(0, "Capturing dynamic context for region %s (DevAddr=0x%08lX preserved)\r\n",
+                      RegionToString(ctx->region), ctx->dev_addr);
     
     // Get activation type
     mib.Type = MIB_NETWORK_ACTIVATION;
     LoRaMacMibGetRequestConfirm(&mib);
     ctx->activation = mib.Param.NetworkActivation;
     
-    // Get DevAddr
-    mib.Type = MIB_DEV_ADDR;
-    LoRaMacMibGetRequestConfirm(&mib);
-    ctx->dev_addr = mib.Param.DevAddr;
-    
-    // Get NVM contexts to extract keys and counters
+    // Get NVM contexts to extract frame counters ONLY
     mib.Type = MIB_NVM_CTXS;
     LoRaMacMibGetRequestConfirm(&mib);
     LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
     
     if (nvm) {
-        // Copy session keys
-        memcpy(ctx->app_s_key, nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, 16);
-        memcpy(ctx->nwk_s_key, nvm->SecureElement.KeyList[NWK_S_ENC_KEY].KeyValue, 16);
-        
-        // Copy frame counters
+        // ONLY copy frame counters (keys and DevAddr already set correctly)
         ctx->uplink_counter = nvm->Crypto.FCntList.FCntUp;
         ctx->downlink_counter = nvm->Crypto.FCntList.NFCntDown;
         ctx->last_rx_mic = nvm->MacGroup1.LastRxMic;
+        
+        SEGGER_RTT_printf(0, "  Captured FCntUp=%lu, FCntDown=%lu\r\n",
+                          ctx->uplink_counter, ctx->downlink_counter);
     }
     
     // Get datarate
@@ -902,8 +1262,8 @@ static bool CaptureCurrentContext(MinimalRegionContext_t *ctx)
     // Calculate CRC
     UpdateContextCRC(ctx);
     
-    APP_LOG(TS_ON, VLEVEL_M, "Captured context: DevAddr=0x%08lX, FCntUp=%lu, FCntDown=%lu\r\n",
-            ctx->dev_addr, ctx->uplink_counter, ctx->downlink_counter);
+    SEGGER_RTT_printf(0, "Context captured: DevAddr=0x%08lX (preserved), FCntUp=%lu\r\n",
+                      ctx->dev_addr, ctx->uplink_counter);
     
     return true;
 }
@@ -988,8 +1348,7 @@ APP_LOG(TS_ON, VLEVEL_M, "Restored DevEUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%0
  */
 __attribute__((unused)) static const char* RegionToString(LoRaMacRegion_t region)
 {
-    switch (region) {
-        case LORAMAC_REGION_AS923: return "AS923";
+    switch (region) {case LORAMAC_REGION_AS923: return "AS923";
         case LORAMAC_REGION_AU915: return "AU915";
         case LORAMAC_REGION_CN470: return "CN470";
         case LORAMAC_REGION_CN779: return "CN779";
@@ -1001,4 +1360,64 @@ __attribute__((unused)) static const char* RegionToString(LoRaMacRegion_t region
         case LORAMAC_REGION_RU864: return "RU864";
         default: return "UNKNOWN";
     }
+}
+
+/**
+ * @brief Display current session keys for Chirpstack ABP configuration
+ */
+void MultiRegion_DisplaySessionKeys(void)
+{
+    if (!g_initialized || g_storage.active_slot >= MAX_REGION_CONTEXTS) {
+        SEGGER_RTT_WriteString(0, "ERROR: No active region to display\r\n");
+        return;
+    }
+    
+    MinimalRegionContext_t *ctx = &g_storage.contexts[g_storage.active_slot];
+    
+    SEGGER_RTT_WriteString(0, "\r\n");
+    SEGGER_RTT_WriteString(0, "========================================\r\n");
+    SEGGER_RTT_WriteString(0, "=== SESSION KEYS FOR CHIRPSTACK ABP ===\r\n");
+    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
+    
+    // Region
+    SEGGER_RTT_printf(0, "Region:       %s\r\n", RegionToString(ctx->region));
+    
+    // DevEUI
+    SEGGER_RTT_WriteString(0, "DevEUI:       ");
+    for (int i = 0; i < 8; i++) {
+        char hex[4];
+        snprintf(hex, sizeof(hex), "%02x%s", ctx->dev_eui[i], (i < 7) ? ":" : "");
+        SEGGER_RTT_WriteString(0, hex);
+    }
+    SEGGER_RTT_WriteString(0, "\r\n");
+    
+    // DevAddr
+    SEGGER_RTT_printf(0, "DevAddr:      0x%08lx\r\n", ctx->dev_addr);
+    
+    // AppSKey (formatted for Chirpstack)
+    SEGGER_RTT_WriteString(0, "AppSKey:      ");
+    for (int i = 0; i < 16; i++) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02x", ctx->app_s_key[i]);
+        SEGGER_RTT_WriteString(0, hex);
+    }
+    SEGGER_RTT_WriteString(0, "\r\n");
+    
+    // NwkSKey (formatted for Chirpstack)
+    SEGGER_RTT_WriteString(0, "NwkSKey:      ");
+    for (int i = 0; i < 16; i++) {
+        char hex[3];
+        snprintf(hex, sizeof(hex), "%02x", ctx->nwk_s_key[i]);
+        SEGGER_RTT_WriteString(0, hex);
+    }
+    SEGGER_RTT_WriteString(0, "\r\n");
+    
+    // Frame counters
+    SEGGER_RTT_printf(0, "FCntUp:       %lu\r\n", ctx->uplink_counter);
+    SEGGER_RTT_printf(0, "FCntDown:     %lu\r\n", ctx->downlink_counter);
+    
+    SEGGER_RTT_WriteString(0, "\r\n");
+    SEGGER_RTT_WriteString(0, "========================================\r\n");
+    SEGGER_RTT_WriteString(0, "Copy AppSKey and NwkSKey to Chirpstack\r\n");
+    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
 }

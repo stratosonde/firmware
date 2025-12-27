@@ -220,7 +220,10 @@ static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity);
 static void OnSystemReset(void);
 
 /* USER CODE BEGIN PFP */
-
+/**
+ * @brief Setup multi-region with Chirpstack session keys
+ */
+static void SetupMultiRegionChirpstackKeys(void);
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
@@ -302,7 +305,8 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 static UTIL_TIMER_Object_t StopJoinTimer;
 
 /* USER CODE BEGIN PV */
-
+/* Test mode flag - disables auto-switching for manual region testing */
+static bool test_mode_manual_switching = true;  // Set to false for normal auto-switch operation
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -367,36 +371,15 @@ void LoRaWAN_Init(void)
   LmHandlerConfigure(&LmHandlerParams);
 
   /* USER CODE BEGIN LoRaWAN_Init_2 */
-  /* Initialize multi-region context manager */
-  MultiRegion_Init();
-  APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
-  
-  /* CRITICAL: Erase old LoRaWAN NVM to prevent DevEUI restoration conflicts */
-  SEGGER_RTT_WriteString(0, "Erasing old LoRaWAN NVM before pre-join...\r\n");
-  extern FLASH_IF_StatusTypedef FLASH_IF_Erase(void *pFlashAddress, uint32_t page_size);
-  FLASH_IF_Erase(LORAWAN_NVM_BASE_ADDRESS, FLASH_PAGE_SIZE);
-  HAL_Delay(100);
-  
-  /* Pre-join US915 and EU868 regions for testing */
-  /* NOTE: This will take ~60 seconds (30s per region join) */
-  SEGGER_RTT_WriteString(0, "Setting pre-join mode flag...\r\n");
-  g_multiregion_in_prejoin = true;  // Tell callback not to start timer
-  
-  MultiRegion_PreJoinAllRegions();
-  
-  g_multiregion_in_prejoin = false;  // Clear flag
-  SEGGER_RTT_WriteString(0, "Pre-join mode flag cleared\r\n");
-  
-  /* After pre-join, disable ForceRejoin to avoid re-joining */
-  ForceRejoin = false;
-  APP_LOG(TS_ON, VLEVEL_H, "Multi-region pre-join complete, ForceRejoin disabled\r\n");
+  /* Setup multi-region with Chirpstack session keys from OTAA joins */
+  SetupMultiRegionChirpstackKeys();
   
   /* USER CODE END LoRaWAN_Init_2 */
 
-  // Skip join - pre-join already joined both US915 and EU868
-  // Already on US915 from MultiRegion_SwitchToRegion() at end of pre-join
+  // Skip join - using ABP with session keys from previous OTAA joins
+  // Already on US915 from MultiRegion_SwitchToRegion() at end of setup
   // LmHandlerJoin(ActivationType, ForceRejoin);
-  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - already joined from pre-join\r\n");
+  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - using ABP with OTAA-derived session keys\r\n");
 
   if (EventType == TX_ON_TIMER)
   {
@@ -422,7 +405,80 @@ void LoRaWAN_Init(void)
 
 /* Private functions ---------------------------------------------------------*/
 /* USER CODE BEGIN PrFD */
-
+/**
+ * @brief Setup multi-region with Chirpstack session keys from OTAA joins
+ */
+static void SetupMultiRegionChirpstackKeys(void)
+{
+    SEGGER_RTT_WriteString(0, "\r\n========================================\r\n");
+    SEGGER_RTT_WriteString(0, "=== CHIRPSTACK MULTIREGION SETUP ===\r\n");
+    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
+    
+    // Initialize MultiRegion manager
+    MultiRegion_Init();
+    
+    // US915 session keys from Chirpstack OTAA join (StratoUS)
+    // DevAddr: 0x78000000
+    const uint8_t us915_app_skey[] = {
+        0x3d,0x1b,0x0c,0xf1,0x7a,0x53,0x08,0x5a,
+        0x18,0x85,0x9c,0xb5,0xb9,0xb3,0x28,0xbc
+    };
+    const uint8_t us915_nwk_skey[] = {
+        0xcc,0x9b,0xbe,0xa4,0x8c,0x3c,0x4d,0x45,
+        0x9d,0x18,0xf7,0xb2,0xe7,0x84,0x60,0x2a
+    };
+    
+    // Initialize US915
+    bool us915_ok = MultiRegion_InitializeRegionFromChirpstack(
+        LORAMAC_REGION_US915,
+        0x78000000,
+        us915_app_skey,
+        us915_nwk_skey
+    );
+    
+    if (us915_ok) {
+        SEGGER_RTT_WriteString(0, "US915 context initialized\r\n");
+    } else {
+        SEGGER_RTT_WriteString(0, "US915 initialization failed\r\n");
+    }
+    
+    // EU868 session keys from Chirpstack OTAA join (StratoEU)
+    // DevAddr: 0x78000001
+    const uint8_t eu868_app_skey[] = {
+        0x77,0xdd,0x12,0x65,0xfe,0xfa,0x80,0xf2,
+        0x38,0xd0,0x1c,0xfd,0xfe,0x3e,0x49,0x67
+    };
+    const uint8_t eu868_nwk_skey[] = {
+        0xe7,0x7e,0xa1,0xcf,0x37,0x37,0x8d,0x8d,
+        0xa5,0x43,0xd3,0xa5,0x81,0x21,0x59,0xbb
+    };
+    
+    // Initialize EU868
+    bool eu868_ok = MultiRegion_InitializeRegionFromChirpstack(
+        LORAMAC_REGION_EU868,
+        0x78000001,
+        eu868_app_skey,
+        eu868_nwk_skey
+    );
+    
+    if (eu868_ok) {
+        SEGGER_RTT_WriteString(0, "EU868 context initialized\r\n");
+    } else {
+        SEGGER_RTT_WriteString(0, "EU868 initialization failed\r\n");
+    }
+    
+    // Switch to US915 as starting region
+    SEGGER_RTT_WriteString(0, "\r\nSwitching to US915 as starting region...\r\n");
+    MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    
+    SEGGER_RTT_WriteString(0, "\r\n========================================\r\n");
+    if (us915_ok && eu868_ok) {
+        SEGGER_RTT_WriteString(0, "=== MULTIREGION SETUP COMPLETE ===\r\n");
+    } else {
+        SEGGER_RTT_WriteString(0, "=== SOME REGIONS FAILED ===\r\n");
+    }
+    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
+}
 /* USER CODE END PrFD */
 
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
@@ -580,16 +636,20 @@ static void SendTxData(void)
                region_name, (unsigned long)h3_elapsed);
       SEGGER_RTT_WriteString(0, h3_msg);
       
-      /* Auto-switch region if enabled and necessary */
-      LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
-          hgnss.data.latitude, 
-          hgnss.data.longitude
-      );
-      
-      if (switch_status == LORAMAC_HANDLER_SUCCESS) {
-        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
-      } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
-        SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
+      /* Auto-switch region if enabled and not in test mode */
+      if (!test_mode_manual_switching) {
+        LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
+            hgnss.data.latitude, 
+            hgnss.data.longitude
+        );
+        
+        if (switch_status == LORAMAC_HANDLER_SUCCESS) {
+          SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
+        } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
+          SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
+        }
+      } else {
+        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch DISABLED (test mode)\r\n");
       }
     }
     else
@@ -600,6 +660,51 @@ static void SendTxData(void)
   else
   {
     SEGGER_RTT_WriteString(0, "GPS: Power on failed!\r\n");
+  }
+
+  /* TEST: Manual region switching - AFTER GPS auto-switch to override it */
+  static uint8_t tx_count = 0;
+  tx_count++;
+  
+  if (tx_count == 3) {
+    SEGGER_RTT_WriteString(0, "\r\n*** TEST: Switching to EU868 after 3 US915 transmissions ***\r\n");
+    
+    // CRITICAL FIX: Check MAC not busy before switching
+    extern bool LoRaMacIsBusy(void);
+    if (LoRaMacIsBusy()) {
+      SEGGER_RTT_WriteString(0, "MAC busy, delaying region switch to next cycle\r\n");
+    } else {
+      LmHandlerErrorStatus_t result = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+      
+      // Debug: Print switch result and current region
+      char debug_msg[128];
+      LoRaMacRegion_t current = MultiRegion_GetActiveRegion();
+      const char* region_str = (current == LORAMAC_REGION_EU868) ? "EU868" : 
+                               (current == LORAMAC_REGION_US915) ? "US915" : "OTHER";
+      snprintf(debug_msg, sizeof(debug_msg), "Switch result: %d | Current region after switch: %s\r\n", result, region_str);
+      SEGGER_RTT_WriteString(0, debug_msg);
+    }
+  }
+  
+  if (tx_count == 6) {
+    SEGGER_RTT_WriteString(0, "\r\n*** TEST: Switching back to US915 after 3 EU868 transmissions ***\r\n");
+    
+    // CRITICAL FIX: Check MAC not busy before switching
+    extern bool LoRaMacIsBusy(void);
+    if (LoRaMacIsBusy()) {
+      SEGGER_RTT_WriteString(0, "MAC busy, delaying region switch to next cycle\r\n");
+    } else {
+      LmHandlerErrorStatus_t result = MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+      
+      // Debug: Print switch result and current region
+      char debug_msg[128];
+      LoRaMacRegion_t current = MultiRegion_GetActiveRegion();
+      const char* region_str = (current == LORAMAC_REGION_EU868) ? "EU868" : 
+                               (current == LORAMAC_REGION_US915) ? "US915" : "OTHER";
+      snprintf(debug_msg, sizeof(debug_msg), "Switch result: %d | Current region after switch: %s\r\n", result, region_str);
+      SEGGER_RTT_WriteString(0, debug_msg);
+      tx_count = 0;  // Reset for continuous testing
+    }
   }
 
   /* Add separator before sensor read to prevent RTT buffer overwrite */
@@ -745,6 +850,13 @@ static void OnTxData(LmHandlerTxParams_t *params)
   {
     snprintf(rtt_buf, sizeof(rtt_buf), "  AckReceived: %d\r\n", params->AckReceived);
     SEGGER_RTT_WriteString(0, rtt_buf);
+  }
+  
+  // CRITICAL FIX: Capture context after successful TX (not before region switch)
+  // This ensures correct DevAddr, FCnt, and session state are saved
+  if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
+    SEGGER_RTT_WriteString(0, "  TX successful - capturing context\r\n");
+    MultiRegion_SaveCurrentContext();
   }
   /* USER CODE END OnTxData_1 */
 }

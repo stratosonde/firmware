@@ -97,7 +97,7 @@ extern "C" {
 #define REGION_EU868
 /*#define REGION_KR920*/
 /*#define REGION_IN865*/
-/*#define REGION_US915*/
+#define REGION_US915  /* Enable for multi-region switching */
 /*#define REGION_RU864*/
 
 /*!
@@ -127,6 +127,7 @@ extern "C" {
 /*!
  * @brief Enables/Disables the context storage management storage
  * @note  Must be enabled for LoRaWAN 1.0.4 or later.
+ * @note  CRITICAL: MUST be enabled for ABP session persistence across resets
  */
 #define CONTEXT_MANAGEMENT_ENABLED                      0
 
