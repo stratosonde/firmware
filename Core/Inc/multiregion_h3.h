@@ -47,6 +47,14 @@ LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon);
  */
 LoRaMacRegion_t H3Region_ToLoRaMacRegion(RegionId h3Region);
 
+/**
+ * @brief  Profile H3lite performance with test coordinates
+ * @retval None
+ * @note   Tests timing for in-region, offshore, and ring search scenarios
+ *         Outputs comprehensive results via SEGGER_RTT
+ */
+void MultiRegion_ProfileH3Performance(void);
+
 #ifdef __cplusplus
 }
 #endif

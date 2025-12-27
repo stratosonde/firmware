@@ -163,6 +163,13 @@ int main(void)
     Error_Handler();
   }
   SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
+  
+  // Optional: Run H3Lite profiling suite (enable for testing only)
+  #ifdef H3LITE_PROFILING_ENABLED
+  SEGGER_RTT_WriteString(0, "\r\nRunning H3Lite profiling suite...\r\n");
+  MultiRegion_ProfileH3Performance();
+  #endif
+  
   SEGGER_RTT_WriteString(0, "Starting LoRaWAN...\r\n");
 
   /* Removed system_sleep() call to keep I2C and UART active for debug */
