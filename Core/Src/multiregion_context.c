@@ -278,11 +278,13 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
              g_storage.active_slot < MAX_REGION_CONTEXTS ? RegionToString(g_storage.contexts[g_storage.active_slot].region) : "NONE");
     SEGGER_RTT_WriteString(0, entry_msg);
     
-    // Check if already on this region
+    // Check if already on this region AND MAC is actually joined
+    // On boot, even though we're on the target region, MAC isn't joined yet so we need to restore
     if (g_storage.active_slot < MAX_REGION_CONTEXTS && 
-       g_storage.contexts[g_storage.active_slot].region == region) {
-        SEGGER_RTT_WriteString(0, "Already on target region, returning SUCCESS without switch\r\n");
-        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Already on %s\r\n", RegionToString(region));
+       g_storage.contexts[g_storage.active_slot].region == region &&
+       LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
+        SEGGER_RTT_WriteString(0, "Already on target region with active MAC session, skipping restore\r\n");
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Already on %s with active session\r\n", RegionToString(region));
         return LORAMAC_HANDLER_SUCCESS;
     }
     

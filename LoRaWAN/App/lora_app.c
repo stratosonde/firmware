@@ -302,8 +302,6 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 static UTIL_TIMER_Object_t StopJoinTimer;
 
 /* USER CODE BEGIN PV */
-/* Test mode flag - disables auto-switching for manual region testing */
-static bool test_mode_manual_switching = true;  // Set to false for normal auto-switch operation
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -383,6 +381,10 @@ void LoRaWAN_Init(void)
     
     /* Switch to US915 as starting region */
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    
+    /* Display session keys for Chirpstack verification */
+    SEGGER_RTT_WriteString(0, "\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
+    MultiRegion_DisplaySessionKeys();
     
   } else {
     
@@ -589,20 +591,16 @@ static void SendTxData(void)
                region_name, (unsigned long)h3_elapsed);
       SEGGER_RTT_WriteString(0, h3_msg);
       
-      /* Auto-switch region if enabled and not in test mode */
-      if (!test_mode_manual_switching) {
-        LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
-            hgnss.data.latitude, 
-            hgnss.data.longitude
-        );
-        
-        if (switch_status == LORAMAC_HANDLER_SUCCESS) {
-          SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
-        } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
-          SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
-        }
-      } else {
-        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch DISABLED (test mode)\r\n");
+      /* Production: Auto-switch region based on H3lite lookup */
+      LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
+          hgnss.data.latitude, 
+          hgnss.data.longitude
+      );
+      
+      if (switch_status == LORAMAC_HANDLER_SUCCESS) {
+        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
+      } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
+        SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
       }
     }
     else
@@ -613,51 +611,6 @@ static void SendTxData(void)
   else
   {
     SEGGER_RTT_WriteString(0, "GPS: Power on failed!\r\n");
-  }
-
-  /* TEST: Manual region switching - AFTER GPS auto-switch to override it */
-  static uint8_t tx_count = 0;
-  tx_count++;
-  
-  if (tx_count == 3) {
-    SEGGER_RTT_WriteString(0, "\r\n*** TEST: Switching to EU868 after 3 US915 transmissions ***\r\n");
-    
-    // CRITICAL FIX: Check MAC not busy before switching
-    extern bool LoRaMacIsBusy(void);
-    if (LoRaMacIsBusy()) {
-      SEGGER_RTT_WriteString(0, "MAC busy, delaying region switch to next cycle\r\n");
-    } else {
-      LmHandlerErrorStatus_t result = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
-      
-      // Debug: Print switch result and current region
-      char debug_msg[128];
-      LoRaMacRegion_t current = MultiRegion_GetActiveRegion();
-      const char* region_str = (current == LORAMAC_REGION_EU868) ? "EU868" : 
-                               (current == LORAMAC_REGION_US915) ? "US915" : "OTHER";
-      snprintf(debug_msg, sizeof(debug_msg), "Switch result: %d | Current region after switch: %s\r\n", result, region_str);
-      SEGGER_RTT_WriteString(0, debug_msg);
-    }
-  }
-  
-  if (tx_count == 6) {
-    SEGGER_RTT_WriteString(0, "\r\n*** TEST: Switching back to US915 after 3 EU868 transmissions ***\r\n");
-    
-    // CRITICAL FIX: Check MAC not busy before switching
-    extern bool LoRaMacIsBusy(void);
-    if (LoRaMacIsBusy()) {
-      SEGGER_RTT_WriteString(0, "MAC busy, delaying region switch to next cycle\r\n");
-    } else {
-      LmHandlerErrorStatus_t result = MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
-      
-      // Debug: Print switch result and current region
-      char debug_msg[128];
-      LoRaMacRegion_t current = MultiRegion_GetActiveRegion();
-      const char* region_str = (current == LORAMAC_REGION_EU868) ? "EU868" : 
-                               (current == LORAMAC_REGION_US915) ? "US915" : "OTHER";
-      snprintf(debug_msg, sizeof(debug_msg), "Switch result: %d | Current region after switch: %s\r\n", result, region_str);
-      SEGGER_RTT_WriteString(0, debug_msg);
-      tx_count = 0;  // Reset for continuous testing
-    }
   }
 
   /* Add separator before sensor read to prevent RTT buffer overwrite */
