@@ -32,7 +32,10 @@
 /* USER CODE BEGIN EV */
 extern I2C_HandleTypeDef hi2c2;
 extern SPI_HandleTypeDef hspi2;
+extern UART_HandleTypeDef huart1;
 void SystemClock_Config(void);
+void MX_DMA_Init(void);
+void MX_USART1_UART_Init(void);
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -123,6 +126,15 @@ void PWR_ExitStopMode(void)
   /* SPI2 is used for external flash (W25Q16JV) - must be restored after wake */
   HAL_SPI_DeInit(&hspi2);
   HAL_SPI_Init(&hspi2);
+  
+  /* Re-initialize DMA since registers are lost in STOP2 mode */
+  /* DMA is used by USART1 for GNSS data reception */
+  MX_DMA_Init();
+  
+  /* Re-initialize USART1 since registers are lost in STOP2 mode */
+  /* USART1 is used for GNSS (ATGM336H) communication */
+  HAL_UART_DeInit(&huart1);
+  HAL_UART_Init(&huart1);
   /* USER CODE END ExitStopMode_1 */
   /* Resume sysTick : work around for debugger problem in dual core */
   HAL_ResumeTick();

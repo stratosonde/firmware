@@ -84,9 +84,9 @@ extern "C" {
 #define LOW_POWER_DISABLE                    0
 
 /* USER CODE BEGIN EC */
-/* Override: Disable low power during debugging to allow LoRaWAN operation */
+/* Enable low power mode - STOP2 mode between transmissions (~5 µA sleep current) */
 #undef LOW_POWER_DISABLE
-#define LOW_POWER_DISABLE                    1
+#define LOW_POWER_DISABLE                    0
 /* USER CODE END EC */
 
 /* External variables --------------------------------------------------------*/

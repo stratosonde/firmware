@@ -135,7 +135,7 @@ extern "C" {
 #define ACTIVE_REGION                               LORAMAC_REGION_US915
 
 #undef APP_TX_DUTYCYCLE
-#define APP_TX_DUTYCYCLE                            30000  /* 30 seconds */
+#define APP_TX_DUTYCYCLE                            60000  /* 30 seconds */
 
 #undef LORAWAN_ADR_STATE
 #define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_OFF

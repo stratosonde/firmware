@@ -92,6 +92,11 @@ void MultiRegion_Init(void)
         }
     }
     
+    // ONE-TIME: Erase old corrupted flash data (can remove this after first successful run)
+    SEGGER_RTT_WriteString(0, "MultiRegion: Erasing old flash data...\r\n");
+    FLASH_IF_Erase((void*)MULTIREGION_FLASH_BASE_ADDR, MULTIREGION_FLASH_PAGE_SIZE);
+    HAL_Delay(100);
+    
     // Initialize fresh storage
     memset(&g_storage, 0, sizeof(g_storage));
     g_storage.magic = MULTIREGION_MAGIC;
@@ -99,8 +104,11 @@ void MultiRegion_Init(void)
     g_storage.active_slot = 0xFF;  // No active region yet
     g_storage.num_valid = 0;
     
+    // Note: We rely on DevAddr==0 to detect empty slots, not region value
+    // memset already zeroed everything, which is perfect for our needs
+    
     g_initialized = true;
-    SEGGER_RTT_WriteString(0, "MultiRegion: Initialized with fresh storage\r\n");
+    SEGGER_RTT_WriteString(0, "MultiRegion: Initialized with fresh storage (DevAddr-based validation)\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Initialized with fresh storage\r\n");
 }
 
@@ -178,8 +186,9 @@ bool MultiRegion_SaveCurrentContext(void)
     
     if (slot < 0) {
         SEGGER_RTT_WriteString(0, "No existing slot found, searching for empty slot...\r\n");
-        // Find empty slot
+        // Find empty slot - relies purely on DevAddr (cleaner approach)
         for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+            // DevAddr==0 means empty - region value doesn't matter
             if (g_storage.contexts[i].dev_addr == 0 || 
                 g_storage.contexts[i].dev_addr == 0xFFFFFFFF) {
                 slot = i;
@@ -202,9 +211,71 @@ bool MultiRegion_SaveCurrentContext(void)
         return false;
     }
     
-    // Capture current context
-    SEGGER_RTT_WriteString(0, "Calling CaptureCurrentContext...\r\n");
+    // Get context pointer
     MinimalRegionContext_t *ctx = &g_storage.contexts[slot];
+    
+    // CRITICAL FIX: If this is a new slot (DevAddr==0), initialize static fields FIRST
+    // CaptureCurrentContext() only updates dynamic fields
+    if (ctx->dev_addr == 0 || ctx->dev_addr == 0xFFFFFFFF) {
+        SEGGER_RTT_WriteString(0, "New slot (DevAddr=0) - initializing static fields from MAC...\r\n");
+        
+        // Set region FIRST
+        ctx->region = current_region;
+        SEGGER_RTT_printf(0, "  Set ctx->region = %s\r\n", RegionToString(current_region));
+        
+        // Get DevAddr from MAC
+        mib.Type = MIB_DEV_ADDR;
+        LoRaMacMibGetRequestConfirm(&mib);
+        ctx->dev_addr = mib.Param.DevAddr;
+        SEGGER_RTT_printf(0, "  Set ctx->dev_addr = 0x%08lX\r\n", ctx->dev_addr);
+        
+        // Set DevEUI based on region (safer than querying MAC during join)
+        const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
+        const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
+        const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
+        const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
+        const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
+        const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
+        
+        switch (current_region) {
+            case LORAMAC_REGION_US915:
+                memcpy(ctx->dev_eui, deveui_us915, 8);
+                break;
+            case LORAMAC_REGION_EU868:
+                memcpy(ctx->dev_eui, deveui_eu868, 8);
+                break;
+            case LORAMAC_REGION_AS923:
+                memcpy(ctx->dev_eui, deveui_as923, 8);
+                break;
+            case LORAMAC_REGION_AU915:
+                memcpy(ctx->dev_eui, deveui_au915, 8);
+                break;
+            case LORAMAC_REGION_IN865:
+                memcpy(ctx->dev_eui, deveui_in865, 8);
+                break;
+            case LORAMAC_REGION_KR920:
+                memcpy(ctx->dev_eui, deveui_kr920, 8);
+                break;
+            default:
+                SEGGER_RTT_WriteString(0, "  ERROR: Unknown region for DevEUI\r\n");
+                return false;
+        }
+        SEGGER_RTT_WriteString(0, "  Set ctx->dev_eui from region constant\r\n");
+        
+        // Get session keys from secure element NVM
+        mib.Type = MIB_NVM_CTXS;
+        LoRaMacMibGetRequestConfirm(&mib);
+        LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
+        
+        if (nvm) {
+            memcpy(ctx->app_s_key, nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, 16);
+            memcpy(ctx->nwk_s_key, nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, 16);
+            SEGGER_RTT_WriteString(0, "  Set session keys from secure element\r\n");
+        }
+    }
+    
+    // Now capture dynamic context (frame counters, datarate, etc.)
+    SEGGER_RTT_WriteString(0, "Calling CaptureCurrentContext for dynamic fields...\r\n");
     if (!CaptureCurrentContext(ctx)) {
         SEGGER_RTT_WriteString(0, "ERROR: Failed to capture context\r\n");
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Failed to capture context\r\n");
@@ -860,7 +931,8 @@ bool MultiRegion_PreJoinAllRegions(void)
     
     bool all_success = true;
     
-    // Join US915
+    // ========== US915 (ENABLED) ==========
+    SEGGER_RTT_WriteString(0, "\r\n--- Joining US915 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: US915 join\r\n");
         all_success = false;
@@ -871,7 +943,9 @@ bool MultiRegion_PreJoinAllRegions(void)
     }
     HAL_Delay(5000);
     
-    // Join EU868
+    // ========== EU868 (DISABLED - uncomment to enable) ==========
+    /*
+    SEGGER_RTT_WriteString(0, "\r\n--- Joining EU868 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_EU868) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: EU868 join\r\n");
         all_success = false;
@@ -881,14 +955,29 @@ bool MultiRegion_PreJoinAllRegions(void)
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
+    */
     
-    // Optionally join AS923
+    // ========== AS923 (DISABLED - uncomment to enable) ==========
     /*
+    SEGGER_RTT_WriteString(0, "\r\n--- Joining AS923 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_AS923) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: AS923 join\r\n");
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AS923 joined\r\n");
+        MultiRegion_DisplaySessionKeys();
+    }
+    HAL_Delay(5000);
+    */
+    
+    // ========== AU915 (DISABLED - uncomment to enable) ==========
+    /*
+    SEGGER_RTT_WriteString(0, "\r\n--- Joining AU915 ---\r\n");
+    if (MultiRegion_JoinRegion(LORAMAC_REGION_AU915) != LORAMAC_HANDLER_SUCCESS) {
+        APP_LOG(TS_ON, VLEVEL_H, "FAILED: AU915 join\r\n");
+        all_success = false;
+    } else {
+        APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AU915 joined\r\n");
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
