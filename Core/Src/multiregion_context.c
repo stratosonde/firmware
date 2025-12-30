@@ -92,11 +92,6 @@ void MultiRegion_Init(void)
         }
     }
     
-    // ONE-TIME: Erase old corrupted flash data (can remove this after first successful run)
-    SEGGER_RTT_WriteString(0, "MultiRegion: Erasing old flash data...\r\n");
-    FLASH_IF_Erase((void*)MULTIREGION_FLASH_BASE_ADDR, MULTIREGION_FLASH_PAGE_SIZE);
-    HAL_Delay(100);
-    
     // Initialize fresh storage
     memset(&g_storage, 0, sizeof(g_storage));
     g_storage.magic = MULTIREGION_MAGIC;
@@ -262,15 +257,23 @@ bool MultiRegion_SaveCurrentContext(void)
         }
         SEGGER_RTT_WriteString(0, "  Set ctx->dev_eui from region constant\r\n");
         
-        // Get session keys from secure element NVM
-        mib.Type = MIB_NVM_CTXS;
-        LoRaMacMibGetRequestConfirm(&mib);
-        LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
+        // CRITICAL FIX: Get session keys from ACTIVE crypto context using LmHandler API
+        // After OTAA join, keys exist in active session but may not be in NVM yet
+        // Reading from NVM was causing zeros because NVM write happens later
+        uint8_t temp_key[16];
         
-        if (nvm) {
-            memcpy(ctx->app_s_key, nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, 16);
-            memcpy(ctx->nwk_s_key, nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, 16);
-            SEGGER_RTT_WriteString(0, "  Set session keys from secure element\r\n");
+        if (LmHandlerGetKey(APP_S_KEY, temp_key) == LORAMAC_HANDLER_SUCCESS) {
+            memcpy(ctx->app_s_key, temp_key, 16);
+            SEGGER_RTT_WriteString(0, "  Set AppSKey from active session (via LmHandler API)\r\n");
+        } else {
+            SEGGER_RTT_WriteString(0, "  ERROR: Failed to get AppSKey!\r\n");
+        }
+        
+        if (LmHandlerGetKey(NWK_S_KEY, temp_key) == LORAMAC_HANDLER_SUCCESS) {
+            memcpy(ctx->nwk_s_key, temp_key, 16);
+            SEGGER_RTT_WriteString(0, "  Set NwkSKey from active session (via LmHandler API)\r\n");
+        } else {
+            SEGGER_RTT_WriteString(0, "  ERROR: Failed to get NwkSKey!\r\n");
         }
     }
     

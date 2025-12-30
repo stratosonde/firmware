@@ -34,6 +34,8 @@
 #include "../../Utilities/lpm/tiny_lpm/stm32_lpm.h"
 #include "h3lite.h"
 #include "multiregion_h3.h"
+#include "w25q16jv.h"
+#include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,6 +88,93 @@ void leds_boot_seq(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * @brief ULTRA-MINIMAL STOP2 test - only configure critical custom PCB pins
+ * @note  This matches the ST example philosophy: don't reconfigure everything!
+ * @note  MCU will enter STOP2 and never wake up (for testing only)
+ * @note  Expected: < 2 µA in STOP2 mode
+ */
+void TEST_UltraMinimal_STOP2(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  
+  /* Enable GPIO clocks only */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  
+  /* === CUSTOM PCB CRITICAL PINS ONLY === */
+  /* Don't touch anything else - leave in reset state! */
+  
+  /* GPS Power OFF: PB5 (EN) + PB10 (Power) */
+  GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5 | GPIO_PIN_10, GPIO_PIN_RESET);
+  
+  /* GPS UART: PB6/PB7 to INPUT (no parasitic power to GPS) */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  
+  /* Flash CS: PB9 HIGH (deselect) */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+  
+  /* LED: PA0 LOW (OFF) */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+  
+  /* RF Switch: PA4/PA5 LOW (OFF) */
+  GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_5;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4 | GPIO_PIN_5, GPIO_PIN_RESET);
+  
+  /* NOTE: PB0 (TCXO) left alone - radio subsystem manages it */
+  /* NOTE: All other pins left in reset state (usually INPUT/ANALOG) */
+  
+  /* === CRITICAL: Turn OFF the TCXO (32MHz oscillator) === */
+  /* The TCXO draws ~1-2mA when powered on! */
+  /* On Wio-E5, PB0 controls TCXO power, managed by SUBGHZ peripheral */
+  __HAL_RCC_SUBGHZSPI_CLK_ENABLE();  // Enable SUBGHZ clock briefly
+  
+  /* Initialize SUBGHZ peripheral minimally */
+  MX_SUBGHZ_Init();
+  
+  /* Disable TCXO via SUBGHZ peripheral */
+  //SUBGRF_SetTcxoMode(TCXO_CTRL_NONE, 0);  // Turn off TCXO (sets PB0 LOW)
+  
+  /* Put radio in deep sleep mode (cold start) */
+  SleepParams_t sleepParams = {0};
+  sleepParams.Fields.WarmStart = 0;  // Cold start = deeper sleep
+  SUBGRF_SetSleep(sleepParams);
+  
+  __HAL_RCC_SUBGHZSPI_CLK_DISABLE();  // Disable SUBGHZ clock
+  
+  /* Disable debugger for true low power */
+  HAL_DBGMCU_DisableDBGStopMode();
+  HAL_DBGMCU_DisableDBGSleepMode();
+  
+  /* Enter STOP2 forever */
+  HAL_SuspendTick();
+  __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
+  
+  while(1) {
+    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
+  }
+}
+
 void system_sleep(void)
 {
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0); /* Turn off the actual LED on PA0 */
@@ -136,6 +225,13 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  
+  /* ***** TEMPORARY: ULTRA-MINIMAL STOP2 TEST - COMMENT OUT FOR NORMAL OPERATION ***** */
+  
+  //This will BRICK wio E5 as it doesn't wake
+  //TEST_UltraMinimal_STOP2();  // MCU enters STOP2 and never wakes - measure current
+  /* ***** END TEMPORARY TEST ***** */
+  
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
    * vcom_Init (inside SystemApp_Init) needs DMA for UART */
@@ -546,8 +642,8 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_RESET);
+  /* NOTE: PB10 and PB5 (GPS power/enable pins) are now managed by GNSS driver */
+  /* Removed conflicting GPIO initialization to prevent pin toggling during sleep */
 
   /*Configure GPIO pin : SOS_Button_Pin */
   GPIO_InitStruct.Pin = SOS_Button_Pin;
@@ -562,12 +658,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  /* PB10 (GPS power) initialization removed - now controlled by GNSS driver */
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);

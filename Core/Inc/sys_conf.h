@@ -74,8 +74,9 @@ extern "C" {
 /**
   * @brief Enable/Disable MCU Debugger pins (dbg serial wires)
   * @note  by HW serial wires are ON by default, need to put them OFF to save power
+  * @note  MUST BE 0 for proper STOP2 low power mode operation
   */
-#define DEBUGGER_ENABLED                     1
+#define DEBUGGER_ENABLED                     0
 
 /**
   * @brief Disable Low Power mode
@@ -84,7 +85,7 @@ extern "C" {
 #define LOW_POWER_DISABLE                    0
 
 /* USER CODE BEGIN EC */
-/* Enable low power mode - STOP2 mode between transmissions (~5 µA sleep current) */
+/* Enable low power mode for STOP2 operation */
 #undef LOW_POWER_DISABLE
 #define LOW_POWER_DISABLE                    0
 /* USER CODE END EC */

@@ -172,11 +172,12 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
     /* Peripheral clock enable */
     __HAL_RCC_I2C2_CLK_ENABLE();
     /* USER CODE BEGIN I2C2_MspInit 1 */
-    /* Re-configure I2C2 GPIO with internal pull-ups enabled 
-     * (CubeMX sets NOPULL but we need pull-ups for I2C if no external resistors) */
+    /* DO NOT enable internal pull-ups - we have external 10k pull-ups on the board
+     * Internal pullups (~40k) would parallel with external (10k) = 8k total
+     * This wastes ~0.4mA per line (~0.8mA total) continuously! */
     GPIO_InitStruct.Pin = GPIO_PIN_15;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;  // CHANGED: Use only external pullups
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);  /* PA15 = SDA */

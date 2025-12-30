@@ -371,13 +371,17 @@ void LoRaWAN_Init(void)
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
   
-  /* Auto-detect provision state: Check if we have valid saved ABP contexts */
-  if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) &&
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868)) {
+  /* TEMPORARY: Force rejoin by clearing all contexts - REMOVE AFTER TESTING */
+  //SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
+  //MultiRegion_ClearAllContexts();
+  //SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
+  
+  /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
+  if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
     
-    /* Already provisioned - use saved ABP contexts from flash */
-    SEGGER_RTT_WriteString(0, "Found valid ABP contexts - using saved sessions\r\n");
-    APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP contexts for US915 and EU868\r\n");
+    /* Already provisioned - use saved ABP context from flash */
+    SEGGER_RTT_WriteString(0, "Found valid ABP context - using saved session\r\n");
+    APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP context for US915\r\n");
     
     /* Switch to US915 as starting region */
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
@@ -456,26 +460,52 @@ static void SendTxData(void)
   
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
-  /* Non-blocking GNSS collection - power on briefly, capture what's available
-   * GPS module needs time to get a fix (cold start ~30s, warm ~5s, hot ~1s)
-   * We power on for longer on first attempts to allow cold/warm fix
-   * This keeps the GNSS operation bounded and doesn't block LoRaWAN timing
+  /* ========== GPS COMPLETELY DISABLED FOR SLEEP MODE TESTING ========== */
+  /* This allows testing MCU sleep without GPS power consumption */
+  /* To re-enable GPS: comment out the #define below */
+  #define GPS_DISABLED_FOR_TESTING  1
+  
+  #ifdef GPS_DISABLED_FOR_TESTING
+  
+  /* Use fake GPS data for testing MCU sleep mode */
+  SEGGER_RTT_WriteString(0, "GPS DISABLED FOR TESTING - using fake coordinates\r\n");
+  
+  /* Simulate GPS fix data */
+  hgnss.data.valid = true;
+  hgnss.data.fix_quality = GNSS_FIX_GPS;
+  hgnss.data.latitude = 39.8283;    // Geographic center of contiguous USA (Kansas)
+  hgnss.data.longitude = -98.5795;
+  hgnss.data.altitude = 500.0f;     // meters (approximate)
+  hgnss.data.satellites = 8;
+  hgnss.data.hdop = 1.2f;
+  
+  uint32_t ttf_ms = 0;  /* No actual fix acquired */
+  
+  SEGGER_RTT_WriteString(0, "Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
+  
+  #else
+  
+  /* ========== NORMAL GPS COLLECTION (CURRENTLY DISABLED) ========== */
+  /* Non-blocking GNSS collection - wake from standby, capture fix quickly
+   * GPS module in standby provides hot-start: <1s typical, 5s worst case
+   * With Vbat backup and PMTK161 standby, we get instant fixes
+   * 20s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  120000  /* 45 seconds - allows cold start fix */
+  #define GNSS_COLLECTION_TIME_MS  20000  /* 20 seconds - allows warm start */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Declare gps_start and ttf_ms at function scope */
   uint32_t gps_start = 0;
   uint32_t ttf_ms = 0;  /* Time to fix in milliseconds - captured when fix obtained */
   
-  SEGGER_RTT_WriteString(0, "Powering GPS ON for fix acquisition (45s max)...\r\n");
-  if (GNSS_PowerOn(&hgnss) == GNSS_OK)
+  SEGGER_RTT_WriteString(0, "Waking GPS from standby for fix acquisition (20s max)...\r\n");
+  if (GNSS_WakeFromStandby(&hgnss) == GNSS_OK)
   {
     /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
     /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
     hgnss.data.valid = false;
     hgnss.data.fix_quality = GNSS_FIX_INVALID;
-    SEGGER_RTT_WriteString(0, "GPS data invalidated - waiting for fresh fix...\r\n");
+    SEGGER_RTT_WriteString(0, "GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
     
     gps_start = HAL_GetTick();
     bool got_fix = false;
@@ -544,9 +574,9 @@ static void SendTxData(void)
       }
     }
     
-    /* Power off GPS before LoRaWAN TX to avoid timing conflicts */
-    GNSS_PowerOff(&hgnss);
-    SEGGER_RTT_WriteString(0, "GPS powered OFF\r\n");
+    /* Put GPS back to standby to save power and allow MCU to sleep */
+    GNSS_EnterStandby(&hgnss);
+    SEGGER_RTT_WriteString(0, "GPS entered standby mode (~15µA), MCU can now sleep\r\n");
     
     /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 
@@ -610,8 +640,10 @@ static void SendTxData(void)
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "GPS: Power on failed!\r\n");
+    SEGGER_RTT_WriteString(0, "GPS: Wake from standby failed!\r\n");
   }
+  
+  #endif  /* GPS_DISABLED_FOR_TESTING */
 
   /* Add separator before sensor read to prevent RTT buffer overwrite */
   SEGGER_RTT_WriteString(0, "\r\n");

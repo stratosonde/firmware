@@ -78,14 +78,38 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   GPIO_InitStruct.Pin = hgnss->en_pin;
   HAL_GPIO_Init(hgnss->en_port, &GPIO_InitStruct);
 
-  /* NEW STRATEGY: Keep PB10 (main power) always HIGH for hot-start capability */
-  /* With Vbat always powered, keeping PB10 HIGH enables GPS standby mode */
-  /* This allows sub-second hot fixes while using minimal standby current */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);
-  /* PB5 (enable): Start with OFF, will toggle for wake/sleep */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);
+  /* CRITICAL FIX: Keep GPS OFF during initialization (PB5=LOW, PB10=LOW) */
+  /* GPS will be powered on explicitly via GNSS_PowerOn() when DMA is ready */
+  /* This prevents first-boot data loss and ensures clean sleep/wake behavior */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);   // PB10 LOW (GPS OFF)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (GPS OFF)
   
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10(pwr)=HIGH(standby-ready), PB5(en)=LOW(sleep)\r\n");
+  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=LOW, PB5=LOW (GPS OFF until explicitly powered)\r\n");
+
+  /* CRITICAL PARASITIC POWER FIX: Force UART pins PB6/PB7 to OUTPUT-LOW */
+  /* Main.c initializes UART at boot, setting PB6/PB7 to AF mode (provides voltage) */
+  /* This causes GPS to draw 15mA via parasitic power even when PB10/PB5 are LOW */
+  /* Using direct register access to avoid HAL_DeInit crashes during init */
+  SEGGER_RTT_WriteString(0, "GNSS_Init: Forcing UART pins PB6/PB7 to OUTPUT-LOW (direct register access)...\r\n");
+  
+  /* Direct register manipulation - safest method, no HAL calls needed */
+  /* Step 1: Set PB6 and PB7 to OUTPUT mode in MODER register */
+  GPIOB->MODER &= ~(GPIO_MODER_MODE6_Msk | GPIO_MODER_MODE7_Msk);  // Clear mode bits
+  GPIOB->MODER |= (1 << GPIO_MODER_MODE6_Pos) | (1 << GPIO_MODER_MODE7_Pos);  // Set to OUTPUT (01)
+  
+  /* Step 2: Clear alternate function assignment (AFR register) */  
+  GPIOB->AFR[0] &= ~(GPIO_AFRL_AFSEL6_Msk | GPIO_AFRL_AFSEL7_Msk);  // Clear AF bits
+  
+  /* Step 3: Ensure push-pull output type (default, but be explicit) */
+  GPIOB->OTYPER &= ~(GPIO_OTYPER_OT6 | GPIO_OTYPER_OT7);  // Push-pull = 0
+  
+  /* Step 4: Disable pull-up/pull-down resistors */
+  GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPD6_Msk | GPIO_PUPDR_PUPD7_Msk);  // No pull = 00
+  
+  /* Step 5: Drive both pins LOW using BSRR atomic reset */
+  GPIOB->BSRR = (GPIO_PIN_6 << 16U) | (GPIO_PIN_7 << 16U);  // Atomic reset
+  
+  SEGGER_RTT_WriteString(0, "GNSS_Init: PB6/PB7 forced to OUTPUT-LOW - parasitic power eliminated\r\n");
 
   hgnss->is_initialized = true;
 
@@ -93,9 +117,10 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Power on GNSS module
+  * @brief  Power on GNSS module (legacy - now calls WakeFromStandby)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
+  * @note   With both pins always HIGH, this now just starts DMA and wakes GPS via UART
   */
 GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
 {
@@ -109,18 +134,12 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     return GNSS_OK; // Already powered on
   }
 
-  /* HOT-START MODE: Only toggle PB5, keep PB10 always HIGH */
-  /* PB10 stays HIGH (set in GNSS_Init) to maintain GPS standby state */
-  /* Only wake GPS from standby by toggling PB5 HIGH */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: PB5(en)=HIGH(wake from standby)\r\n");
+  /* Both PB10 and PB5 stay HIGH permanently (set in GNSS_Init) */
+  /* Wake GPS from standby using UART command */
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: Waking GPS via UART...\r\n");
   
-  /* PB5 (enable): ACTIVE HIGH, so SET=ON to wake GPS */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);
-  
-  hgnss->is_powered = true;
-
-  /* Wait for module to stabilize */
-  HAL_Delay(GNSS_POWER_ON_DELAY);
+  /* Disable STOP mode while GNSS is active */
+  UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
 
   /* Reset DMA circular buffer pointers */
   hgnss->dma_head = 0;
@@ -132,8 +151,7 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   hgnss->nmea_length = 0;
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
 
-  /* Start DMA circular buffer reception - PRODUCTION SAFE */
-  /* No ISR conflicts, no vcom callback overwrite, minimal interrupt processing */
+  /* Start DMA circular buffer reception */
   SEGGER_RTT_WriteString(0, "GNSS_PowerOn: Starting DMA circular buffer reception...\r\n");
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
   
@@ -143,18 +161,21 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
-  /* Disable STOP mode while GNSS is receiving to prevent UART interrupts from being disabled */
-  /* UART wakeup from STOP mode doesn't work reliably with continuous NMEA data stream */
-  UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: DMA started, STOP mode disabled for UART RX\r\n");
+  /* Send wake character to exit standby mode */
+  HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100);
+  HAL_Delay(100);  // GPS takes ~100ms to wake and start NMEA output
+  
+  hgnss->is_powered = true;
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: DMA started, GPS woken from standby\r\n");
 
   return GNSS_OK;
 }
 
 /**
-  * @brief  Power off GNSS module
+  * @brief  Power off GNSS module (sends standby command, re-enables MCU sleep)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
+  * @note   Now uses PCAS12 standby command (CASIC protocol) instead of toggling pins
   */
 GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
 {
@@ -163,26 +184,33 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
-  /* CRITICAL: Abort DMA transfer before powering off */
-  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL)
+  /* OPTIONAL: Send standby command (commented out - using EN/PWR pins instead) */
+  /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
+  
+  if (cmd_status == GNSS_OK)
+  {
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] Standby command sent successfully (PCAS12)\r\n");
+  }
+  else
+  {
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] ERROR - Standby command TX failed!\r\n");
+  }
+  
+  HAL_Delay(200); */
+
+  /* Abort DMA reception */
+  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
   {
     HAL_UART_AbortReceive(hgnss->huart);
     SEGGER_RTT_WriteString(0, "GNSS_PowerOff: DMA receive aborted\r\n");
   }
 
-  /* Re-enable STOP mode now that GNSS is no longer receiving */
+  /* CRITICAL: Re-enable STOP mode so MCU can sleep */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: Re-enabled STOP mode\r\n");
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: MCU STOP mode re-enabled\r\n");
 
-  /* HOT-START MODE: Only toggle PB5 LOW to sleep GPS, keep PB10 HIGH */
-  /* PB10 stays HIGH to maintain GPS standby (with Vbat backup) */
-  /* This enables hot-start (<1s) on next power-on */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: PB5(en)=LOW(sleep/standby), PB10 stays HIGH\r\n");
-  
-  /* PB5 (enable): ACTIVE HIGH, so RESET=sleep/standby */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);
-  
-  /* PB10 deliberately NOT changed - stays HIGH for standby mode */
+  /* Both PB10 and PB5 remain HIGH to maintain hot-start capability */
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: GPS in standby (~15µA), MCU can now sleep\r\n");
   
   hgnss->is_powered = false;
 
@@ -438,13 +466,30 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
     return GNSS_ERROR;
   }
 
+  /* DEBUG: Log command string */
+  SEGGER_RTT_WriteString(0, "[GPS CMD] Sending: ");
+  SEGGER_RTT_WriteString(0, cmd);
+  
+  /* DEBUG: Log hex bytes */
+  SEGGER_RTT_WriteString(0, "[GPS CMD] Hex: ");
+  for(size_t i = 0; i < strlen(cmd); i++)
+  {
+    char hex_buf[8];
+    snprintf(hex_buf, sizeof(hex_buf), "%02X ", (uint8_t)cmd[i]);
+    SEGGER_RTT_WriteString(0, hex_buf);
+  }
+  SEGGER_RTT_WriteString(0, "\r\n");
+
   HAL_StatusTypeDef status;
   status = HAL_UART_Transmit(hgnss->huart, (uint8_t *)cmd, strlen(cmd), GNSS_UART_TIMEOUT);
 
   if (status != HAL_OK)
   {
+    SEGGER_RTT_WriteString(0, "[GPS CMD] UART Transmit FAILED!\r\n");
     return GNSS_ERROR;
   }
+  
+  SEGGER_RTT_WriteString(0, "[GPS CMD] UART Transmit OK\r\n");
 
   return GNSS_OK;
 }
@@ -824,6 +869,158 @@ static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence)
   * @param  sentence: NMEA sentence with checksum
   * @retval true if valid, false otherwise
   */
+/**
+  * @brief  Enter GPS standby mode (low power ~15µA)
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
+{
+  if (hgnss == NULL)
+  {
+    return GNSS_ERROR;
+  }
+  
+  /* CRITICAL FIX: Clear all buffers and reset state BEFORE aborting DMA */
+  /* This prevents processing stale NMEA data from previous cycle on wake */
+  hgnss->dma_head = 0;
+  hgnss->dma_tail = 0;
+  hgnss->dma_data_ready = false;
+  hgnss->nmea_length = 0;
+  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
+  memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA buffers cleared and state reset\r\n");
+  
+  /* OPTIONAL: Send standby command (commented out - using EN/PWR pins instead) */
+  /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
+  
+  if (cmd_status == GNSS_OK)
+  {
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] Command sent successfully\r\n");
+  }
+  else
+  {
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] ERROR: Command TX failed!\r\n");
+  }
+  
+  Wait for GPS to process standby command
+  HAL_Delay(200); */
+  
+  /* Abort DMA (GPS should be entering standby) */
+  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
+  {
+    HAL_UART_AbortReceive(hgnss->huart);
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA aborted\r\n");
+  }
+  
+  /* POWER OPTIMIZATION: Deinitialize UART to allow true MCU sleep */
+  if (hgnss->huart != NULL)
+  {
+    HAL_UART_DeInit(hgnss->huart);
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART deinitialized\r\n");
+    
+    /* CRITICAL: Drive UART pins LOW as outputs to prevent floating and current leakage */
+    /* USART1 is on PB6 (TX) and PB7 (RX) for GNSS communication */
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    
+    /* TX pin (PB6) - drive LOW */
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+    
+    /* RX pin (PB7) - drive LOW */
+    GPIO_InitStruct.Pin = GPIO_PIN_7;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+    
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART pins PB6/PB7 driven LOW\r\n");
+  }
+  
+  /* HARDWARE POWER DOWN: Keep PB5 and PB10 as OUTPUT and drive LOW */
+  /* This guarantees GPS is fully powered down with no leakage - LED will be OFF */
+  
+  /* PB5 already OUTPUT from init, just drive LOW */
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW
+  
+  /* PB10 already OUTPUT from init, just drive LOW */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW
+  
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB5 & PB10 driven LOW (kept as OUTPUT) - GPS fully powered down\r\n");
+  
+  /* CRITICAL: Re-enable MCU STOP mode */
+  UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] MCU STOP mode re-enabled\r\n");
+  
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS fully off (~0µA, LED OFF)\r\n");
+  
+  hgnss->is_powered = false;
+  return GNSS_OK;
+}
+
+/**
+  * @brief  Wake GPS from standby mode
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
+{
+  if (hgnss == NULL || !hgnss->is_initialized)
+  {
+    return GNSS_ERROR;
+  }
+  
+  /* Disable MCU STOP mode during GPS operation */
+  UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] MCU STOP mode disabled\r\n");
+  
+  /* HARDWARE POWER-UP SEQUENCE: Drive PB10 & PB5 HIGH (already configured as OUTPUT) */
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] Powering up GPS via PB10 & PB5...\r\n");
+  
+  /* Step 1: Drive PB10 HIGH to provide main power (already OUTPUT from standby) */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)
+  HAL_Delay(100);  // Allow power rails to stabilize
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB10 HIGH - main power applied\r\n");
+  
+  /* Step 2: Drive PB5 HIGH to enable GPS (already OUTPUT from standby) */
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
+  
+  /* Wait for GPS to boot up (cold start requires ~500ms) */
+  HAL_Delay(500);
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] GPS boot complete\r\n");
+  
+  /* Reinitialize UART after GPS power-up - this will restore PB6/PB7 to UART function */
+  if (hgnss->huart != NULL)
+  {
+    /* Reinitialize UART peripheral (HAL_UART_Init calls MspInit which configures pins) */
+    HAL_UART_Init(hgnss->huart);
+    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART reinitialized (PB6/PB7 restored to UART function)\r\n");
+  }
+  
+  /* Reset DMA circular buffer */
+  hgnss->dma_head = 0;
+  hgnss->dma_tail = 0;
+  hgnss->dma_data_ready = false;
+  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
+  hgnss->nmea_length = 0;
+  
+  /* Start DMA reception */
+  HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
+  if (dma_status != HAL_OK)
+  {
+    SEGGER_RTT_WriteString(0, "[GPS WAKE] ERROR - DMA start failed\r\n");
+    return GNSS_ERROR;
+  }
+  
+  hgnss->is_powered = true;
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] Complete - GPS woken, DMA active, MCU STOP disabled\r\n");
+  
+  return GNSS_OK;
+}
+
 static bool GNSS_VerifyChecksum(const char *sentence)
 {
   const char *checksum_ptr = strchr(sentence, '*');

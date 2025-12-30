@@ -25,7 +25,9 @@
 #include "usart_if.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "SEGGER_RTT.h"
+#include "atgm336h.h"  // For GNSS_HandleTypeDef and power state check
+#include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For TCXO control
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -33,9 +35,11 @@
 extern I2C_HandleTypeDef hi2c2;
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart1;
+extern SUBGHZ_HandleTypeDef hsubghz;
 void SystemClock_Config(void);
 void MX_DMA_Init(void);
 void MX_USART1_UART_Init(void);
+void MX_SUBGHZ_Init(void);
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,7 +101,13 @@ void PWR_ExitOffMode(void)
 void PWR_EnterStopMode(void)
 {
   /* USER CODE BEGIN EnterStopMode_1 */
-
+  /* TCXO Control: PB0 is automatically managed by SUBGHZ peripheral */
+  /* Manual GPIO control removed - causes conflict with automatic TCXO management */
+  /* The SUBGHZ peripheral powers down TCXO when radio enters sleep mode */
+  
+  /* NOTE: I2C ANALOG mode optimization removed - was causing 3mA issue */
+  /* Sensors must be put to sleep BEFORE I2C is deinitialized */
+  /* For now, keeping I2C active but with external pullups only (internal disabled) */
   /* USER CODE END EnterStopMode_1 */
   HAL_SuspendTick();
   /* Clear Status Flag before entering STOP/STANDBY Mode */
@@ -115,6 +125,9 @@ void PWR_EnterStopMode(void)
 void PWR_ExitStopMode(void)
 {
   /* USER CODE BEGIN ExitStopMode_1 */
+  /* TCXO Control: PB0 is automatically managed by SUBGHZ peripheral */
+  /* Manual GPIO control removed - SUBGHZ peripheral automatically powers TCXO when needed */
+  
   /* Restore system clock which may have been reset in STOP mode */
   SystemClock_Config();
   
@@ -131,10 +144,18 @@ void PWR_ExitStopMode(void)
   /* DMA is used by USART1 for GNSS data reception */
   MX_DMA_Init();
   
-  /* Re-initialize USART1 since registers are lost in STOP2 mode */
-  /* USART1 is used for GNSS (ATGM336H) communication */
-  HAL_UART_DeInit(&huart1);
-  HAL_UART_Init(&huart1);
+  /* CRITICAL FIX: Only re-initialize USART1 if GPS is actually powered on */
+  /* Re-initializing UART when GPS is off causes PB6/PB7 to be reconfigured to UART mode */
+  /* This provides parasitic power to GPS via UART pins -> faint LED glow */
+  extern GNSS_HandleTypeDef hgnss;
+  
+  if (hgnss.is_powered) {
+    /* GPS is ON - safe to reinitialize UART */
+    HAL_UART_DeInit(&huart1);
+    HAL_UART_Init(&huart1);
+  } else {
+    /* GPS is OFF - DO NOT reinitialize UART to keep PB6/PB7 driven LOW */
+  }
   /* USER CODE END ExitStopMode_1 */
   /* Resume sysTick : work around for debugger problem in dual core */
   HAL_ResumeTick();

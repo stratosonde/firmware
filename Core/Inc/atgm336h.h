@@ -122,6 +122,10 @@ typedef struct
 #define GNSS_CMD_SATELLITE_SYS   "$PCAS06,1,0,1,0*67\r\n"          // GPS + BeiDou
 #define GNSS_CMD_FIX_MODE        "$PCAS11,2*1E\r\n"                // Auto 2D/3D fix
 
+/*  ATGM336H Power Management Commands - CASIC Protocol */
+#define GNSS_CMD_STANDBY         "$PCAS12,0*1C\r\n"               // Enter standby mode (~15µA), timeout=0 for permanent standby
+#define GNSS_WAKE_CHAR           "a"                               // Any char wakes from standby
+
 /* Exported macro ------------------------------------------------------------*/
 
 /* Exported functions --------------------------------------------------------*/
@@ -141,11 +145,25 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss);
 GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss);
 
 /**
-  * @brief  Power off GNSS module
+  * @brief  Power off GNSS module (sends standby command)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
   */
 GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss);
+
+/**
+  * @brief  Enter GPS standby mode (low power ~15µA)
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss);
+
+/**
+  * @brief  Wake GPS from standby mode
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss);
 
 /**
   * @brief  Configure GNSS module with initialization commands

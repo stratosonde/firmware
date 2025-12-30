@@ -98,7 +98,16 @@ void SEGGER_RTT_Init(void) {
   // Already initialized statically
 }
 
+/* RTT_DISABLED: Stub out for low power testing - change to 0 to re-enable */
+#define RTT_DISABLED 0
+
 unsigned SEGGER_RTT_Write(unsigned BufferIndex, const void* pBuffer, unsigned NumBytes) {
+#if RTT_DISABLED
+  /* Stub: Return immediately to save power */
+  (void)BufferIndex;
+  (void)pBuffer;
+  return NumBytes;  /* Pretend we wrote everything */
+#else
   unsigned NumBytesToWrite;
   unsigned NumBytesWritten;
   SEGGER_RTT_BUFFER_UP* pRing;
@@ -117,6 +126,7 @@ unsigned SEGGER_RTT_Write(unsigned BufferIndex, const void* pBuffer, unsigned Nu
   }
   SEGGER_RTT_UNLOCK();
   return NumBytesWritten;
+#endif
 }
 
 unsigned SEGGER_RTT_WriteString(unsigned BufferIndex, const char* s) {
