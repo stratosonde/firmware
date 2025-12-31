@@ -20,6 +20,10 @@
 #include "stm32_lpm.h"
 #include "utilities_conf.h"
 
+/* USER CODE BEGIN Includes */
+#include "SEGGER_RTT.h"
+/* USER CODE END Includes */
+
 /** @addtogroup TINY_LPM
   * @{
   */
@@ -215,6 +219,18 @@ UTIL_LPM_Mode_t UTIL_LPM_GetMode( void )
 void UTIL_LPM_EnterLowPower( void )
 {
   UTIL_LPM_ENTER_CRITICAL_SECTION_ELP( );
+
+  /* USER CODE BEGIN LPM_Diagnostic */
+  /* DIAGNOSTIC: Show which components are blocking STOP2 mode */
+  if( StopModeDisable != UTIL_LPM_NO_BIT_SET )
+  {
+    SEGGER_RTT_printf(0, "[LPM] STOP mode BLOCKED! Mask=0x%02X (", StopModeDisable);
+    if (StopModeDisable & (1 << CFG_LPM_APPLI_Id)) SEGGER_RTT_WriteString(0, "APPLI ");
+    if (StopModeDisable & (1 << CFG_LPM_UART_TX_Id)) SEGGER_RTT_WriteString(0, "UART_TX ");
+    if (StopModeDisable & (1 << CFG_LPM_GNSS_Id)) SEGGER_RTT_WriteString(0, "GNSS ");
+    SEGGER_RTT_WriteString(0, ") - Using SLEEP instead\r\n");
+  }
+  /* USER CODE END LPM_Diagnostic */
 
   if( StopModeDisable != UTIL_LPM_NO_BIT_SET )
   {

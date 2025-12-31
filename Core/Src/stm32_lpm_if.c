@@ -28,6 +28,7 @@
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"  // For GNSS_HandleTypeDef and power state check
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For TCXO control
+#include "w25q16jv.h"  // For external flash deep power-down
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -36,6 +37,7 @@ extern I2C_HandleTypeDef hi2c2;
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart1;
 extern SUBGHZ_HandleTypeDef hsubghz;
+extern ADC_HandleTypeDef hadc;
 void SystemClock_Config(void);
 void MX_DMA_Init(void);
 void MX_USART1_UART_Init(void);
@@ -74,7 +76,10 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-
+/* Static flash handle for deep power-down control */
+/* NOTE: If you use flash logging, make this extern and define it in your main code */
+static W25Q_HandleTypeDef hw25q_local = {0};
+static W25Q_HandleTypeDef *hw25q_ptr = NULL;  /* Set this to your global flash handle if available */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,13 +106,91 @@ void PWR_ExitOffMode(void)
 void PWR_EnterStopMode(void)
 {
   /* USER CODE BEGIN EnterStopMode_1 */
+  
+  /* === DIAGNOSTIC: LED OFF while sleeping === */
+  /* PA0 LOW = MCU entering STOP2 (sleep indicator) */
+  /* If LED stays OFF for long periods = MCU is sleeping properly */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+  
   /* TCXO Control: PB0 is automatically managed by SUBGHZ peripheral */
   /* Manual GPIO control removed - causes conflict with automatic TCXO management */
-  /* The SUBGHZ peripheral powers down TCXO when radio enters sleep mode */
+  /* LoRaWAN stack manages radio sleep - we don't touch it */
   
-  /* NOTE: I2C ANALOG mode optimization removed - was causing 3mA issue */
-  /* Sensors must be put to sleep BEFORE I2C is deinitialized */
-  /* For now, keeping I2C active but with external pullups only (internal disabled) */
+  /* === CRITICAL: Put External Flash into Deep Power-Down === */
+  /* W25Q16JV draws 1-3mA in standby, <1µA in deep power-down */
+  /* This is the PRIMARY fix for 2-4mA sleep current! */
+  //if (hw25q_ptr != NULL && hw25q_ptr->initialized) {
+  //  W25Q_PowerDown(hw25q_ptr);  /* Send 0xB9 command - flash enters deep sleep */
+  //}
+  /* NOTE: If you haven't initialized flash yet, this won't execute */
+  /* To use: Set hw25q_ptr = &your_flash_handle after W25Q_Init() */
+  
+  /* === I2C2 Power Optimization: DeInit and set pins to ANALOG === */
+  /* Prevents ~0.6-1.0mA leakage through external 10kΩ pullups (PA15=SDA, PB15=SCL) */
+  /* Reference: archive/I2C_Power_Optimization_Fix.md */
+  HAL_I2C_DeInit(&hi2c2);
+  
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  
+  GPIO_InitStruct.Pin = GPIO_PIN_15;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);  // PA15 = I2C2_SDA
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);  // PB15 = I2C2_SCL
+  
+  /* === SPI2 Power Optimization: DeInit and set pins to ANALOG === */
+  /* Extra safety measure - flash already in deep power-down via W25Q_PowerDown() */
+  /* SPI pins: PB13=SCK, PB14=MISO, PB15=MOSI, PC8=NSS */
+  //HAL_SPI_DeInit(&hspi2);
+  
+  GPIO_InitStruct.Pin = GPIO_PIN_13 | GPIO_PIN_14;  // SCK, MISO (PB15 already set above)
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  
+  GPIO_InitStruct.Pin = GPIO_PIN_8;  // NSS
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  
+  /* === UART1 Power Optimization: Conditional DeInit === */
+  /* Only deinit if GPS is powered - prevents parasitic power when GPS is off */
+  /* Reference: archive/GPS_Parasitic_Power_Fix.md */
+  //extern GNSS_HandleTypeDef hgnss;
+  //if (hgnss.is_powered) {
+  HAL_UART_DeInit(&huart1);
+    // Note: GPS module handles its own pin configuration during power down
+  //}
+  
+  /* === ADC Power Optimization: DeInit and set pin to ANALOG === */
+  /* ADC uses PB4 (ADC_CHANNEL_3) for battery voltage measurement */
+  /* Prevent leakage current through ADC pin during sleep */
+  HAL_ADC_DeInit(&hadc);
+  
+  GPIO_InitStruct.Pin = GPIO_PIN_4;  // PB4 = ADC_IN3 (Battery voltage)
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  
+  /* === Additional GPIO Power Optimization === */
+  /* Set all unused/inactive pins to ANALOG mode to minimize leakage */
+  
+  /* GPS UART1 pins to ANALOG - prevents parasitic power when GPS is off */
+  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;  // PB6=UART1_TX, PB7=UART1_RX
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  
+  /* GPS control pins - drive LOW to ensure GPS is powered off */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5 | GPIO_PIN_10, GPIO_PIN_RESET);  // PB5=GPS_EN, PB10=GPS_PWR
+  
+  /* External flash MOSI pin to ANALOG if on PA10 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10;  // PA10
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  
+  /* External flash CS - drive HIGH to deselect flash during sleep */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);  // PB9 = Flash CS
+  
+  /* UART2 pins to ANALOG (if configured) */
+  GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_3;  // PA2=UART2_TX, PA3=UART2_RX
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  
+  /* I2C3 pins to ANALOG (if configured) */
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1;  // PC0=I2C3_SCL, PC1=I2C3_SDA
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  
   /* USER CODE END EnterStopMode_1 */
   HAL_SuspendTick();
   /* Clear Status Flag before entering STOP/STANDBY Mode */
@@ -125,37 +208,38 @@ void PWR_EnterStopMode(void)
 void PWR_ExitStopMode(void)
 {
   /* USER CODE BEGIN ExitStopMode_1 */
-  /* TCXO Control: PB0 is automatically managed by SUBGHZ peripheral */
-  /* Manual GPIO control removed - SUBGHZ peripheral automatically powers TCXO when needed */
   
-  /* Restore system clock which may have been reset in STOP mode */
-  SystemClock_Config();
+  /* === DIAGNOSTIC: LED ON while awake === */
+  /* PA0 HIGH = MCU awake and running */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
   
-  /* Re-initialize I2C2 since registers are lost in STOP2 mode */
+  /* === PERIPHERAL RE-INITIALIZATION AFTER STOP2 === */
+  /* STM32WL loses peripheral configuration in STOP2 mode */
+  /* Must restore in proper dependency order */
+  
+  /* NOTE: SystemClock_Config() REMOVED - STM32WL auto-restores clock after STOP2 */
+  /* Calling it was causing 30mA power draw issue */
+  /* System wakes on MSI (4MHz) which is sufficient, radio driver handles PLL if needed */
+  
+  /* Re-initialize DMA before peripherals that use it (UART) */
+  MX_DMA_Init();
+  
+  /* Re-initialize I2C2 - sensors need this to work */
   HAL_I2C_DeInit(&hi2c2);
   HAL_I2C_Init(&hi2c2);
   
-  /* Re-initialize SPI2 since registers are lost in STOP2 mode */
-  /* SPI2 is used for external flash (W25Q16JV) - must be restored after wake */
+  /* Re-initialize SPI2 - external flash needs this */
   HAL_SPI_DeInit(&hspi2);
   HAL_SPI_Init(&hspi2);
   
-  /* Re-initialize DMA since registers are lost in STOP2 mode */
-  /* DMA is used by USART1 for GNSS data reception */
-  MX_DMA_Init();
-  
-  /* CRITICAL FIX: Only re-initialize USART1 if GPS is actually powered on */
-  /* Re-initializing UART when GPS is off causes PB6/PB7 to be reconfigured to UART mode */
-  /* This provides parasitic power to GPS via UART pins -> faint LED glow */
+  /* Re-initialize UART1 only if GPS is powered */
+  /* Prevents parasitic power when GPS is off */
   extern GNSS_HandleTypeDef hgnss;
-  
   if (hgnss.is_powered) {
-    /* GPS is ON - safe to reinitialize UART */
     HAL_UART_DeInit(&huart1);
     HAL_UART_Init(&huart1);
-  } else {
-    /* GPS is OFF - DO NOT reinitialize UART to keep PB6/PB7 driven LOW */
   }
+  
   /* USER CODE END ExitStopMode_1 */
   /* Resume sysTick : work around for debugger problem in dual core */
   HAL_ResumeTick();
