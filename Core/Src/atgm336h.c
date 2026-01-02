@@ -78,13 +78,13 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   GPIO_InitStruct.Pin = hgnss->en_pin;
   HAL_GPIO_Init(hgnss->en_port, &GPIO_InitStruct);
 
-  /* CRITICAL FIX: Keep GPS OFF during initialization (PB5=LOW, PB10=LOW) */
-  /* GPS will be powered on explicitly via GNSS_PowerOn() when DMA is ready */
-  /* This prevents first-boot data loss and ensures clean sleep/wake behavior */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);   // PB10 LOW (GPS OFF)
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (GPS OFF)
+  /* HOT-START MODE: PB10=HIGH (backup power ~15µA), PB5=LOW (standby) */
+  /* GPS module retains ephemeris data for fast fixes (~1-5 seconds) */
+  /* This enables instant satellite acquisition while maintaining low power between TXs */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);     // PB10 HIGH (hot-start power)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (standby mode)
   
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=LOW, PB5=LOW (GPS OFF until explicitly powered)\r\n");
+  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=HIGH (hot-start enabled ~15µA), PB5=LOW (standby)\r\n");
 
   /* CRITICAL PARASITIC POWER FIX: Force UART pins PB6/PB7 to OUTPUT-LOW */
   /* Main.c initializes UART at boot, setting PB6/PB7 to AF mode (provides voltage) */
@@ -913,42 +913,45 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA aborted\r\n");
   }
   
-  /* POWER OPTIMIZATION: Deinitialize UART to allow true MCU sleep */
+  /* HOT-START STANDBY: Configure pins for minimal power while retaining ephemeris */
   if (hgnss->huart != NULL)
   {
     HAL_UART_DeInit(hgnss->huart);
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART deinitialized\r\n");
     
-    /* CRITICAL: Drive UART pins LOW as outputs to prevent floating and current leakage */
-    /* USART1 is on PB6 (TX) and PB7 (RX) for GNSS communication */
+    /* CRITICAL PIN CONFIGURATION FOR HOT-START MODE */
+    /* PB6 (MCU TX -> GPS RX): OUTPUT-LOW to prevent parasitic power to GPS */
+    /* PB7 (GPS TX -> MCU RX): ANALOG/Hi-Z - NEVER drive this low (it's GPS output!) */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
+    
+    /* PB6 - MCU transmit to GPS (OUTPUT-LOW prevents parasitic power) */
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    
-    /* TX pin (PB6) - drive LOW */
-    GPIO_InitStruct.Pin = GPIO_PIN_6;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
     
-    /* RX pin (PB7) - drive LOW */
+    /* PB7 - GPS transmit to MCU (ANALOG for minimal leakage, high impedance) */
+    /* CRITICAL: Do NOT drive this low - it's the GPS module's TX pin! */
     GPIO_InitStruct.Pin = GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
     
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART pins PB6/PB7 driven LOW\r\n");
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB6=OUTPUT-LOW, PB7=ANALOG (hi-Z)\r\n");
   }
   
-  /* HARDWARE POWER DOWN: Keep PB5 and PB10 as OUTPUT and drive LOW */
-  /* This guarantees GPS is fully powered down with no leakage - LED will be OFF */
+  /* HOT-START MODE: PB10=HIGH (backup power), PB5=LOW (standby) */
+  /* Keeps ephemeris data for ~1-5 second fixes, only ~15µA standby current */
   
-  /* PB5 already OUTPUT from init, just drive LOW */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW
+  /* PB5 to LOW - GPS enters standby mode */
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW (standby)
   
-  /* PB10 already OUTPUT from init, just drive LOW */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW
+  /* PB10 stays HIGH - maintains backup power for hot-start */
+  /* Note: Already set HIGH in GNSS_Init(), no need to change */
   
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB5 & PB10 driven LOW (kept as OUTPUT) - GPS fully powered down\r\n");
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB10=HIGH (hot-start), PB5=LOW (standby) - ~15µA\r\n");
   
   /* CRITICAL: Re-enable MCU STOP mode */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
@@ -998,6 +1001,13 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     /* Reinitialize UART peripheral (HAL_UART_Init calls MspInit which configures pins) */
     HAL_UART_Init(hgnss->huart);
     SEGGER_RTT_WriteString(0, "[GPS WAKE] UART reinitialized (PB6/PB7 restored to UART function)\r\n");
+    
+    /* CRITICAL: UART settle delay for first-boot synchronization */
+    /* On first boot, GPS has been running since GNSS_Init() (~60+ seconds) */
+    /* UART peripheral was just initialized for the first time */
+    /* Need brief delay for UART framing sync and GPS to start fresh sentences */
+    HAL_Delay(200);
+    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART settle delay complete (200ms)\r\n");
   }
   
   /* Reset DMA circular buffer */

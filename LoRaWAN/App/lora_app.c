@@ -460,10 +460,11 @@ static void SendTxData(void)
   
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
-  /* ========== GPS COMPLETELY DISABLED FOR SLEEP MODE TESTING ========== */
-  /* This allows testing MCU sleep without GPS power consumption */
-  /* To re-enable GPS: comment out the #define below */
-  #define GPS_DISABLED_FOR_TESTING  1
+  /* ========== GPS HOT-START MODE ENABLED ========== */
+  /* GPS uses hot-start standby mode: PB10=HIGH (backup power ~15µA) */
+  /* Between TX cycles: PB5=LOW (standby), UART1 deinitialized, MCU can sleep */
+  /* During TX: PB5=HIGH (active), UART1 active, achieves fix in ~1-5 seconds */
+  // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
   
   #ifdef GPS_DISABLED_FOR_TESTING
   
@@ -491,7 +492,7 @@ static void SendTxData(void)
    * With Vbat backup and PMTK161 standby, we get instant fixes
    * 20s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  20000  /* 20 seconds - allows warm start */
+  #define GNSS_COLLECTION_TIME_MS  40000  /* 20 seconds - allows warm start */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Declare gps_start and ttf_ms at function scope */
