@@ -418,6 +418,10 @@ void LoRaWAN_Init(void)
     /* send every time timer elapses */
     UTIL_TIMER_Create(&TxTimer, TxPeriodicity, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
     UTIL_TIMER_Start(&TxTimer);
+    
+    /* Trigger first transmission immediately (don't wait for timer) */
+    SEGGER_RTT_WriteString(0, "Triggering first transmission immediately...\r\n");
+    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
   }
   else
   {
@@ -492,7 +496,7 @@ static void SendTxData(void)
    * With Vbat backup and PMTK161 standby, we get instant fixes
    * 20s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  40000  /* 40 seconds - allows warm start */
+  #define GNSS_COLLECTION_TIME_MS  40000  /* 40 seconds - hot-start sufficient */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Declare gps_start and ttf_ms at function scope */
@@ -558,8 +562,10 @@ static void SendTxData(void)
         last_status_print = elapsed;
       }
       
-      /* Small delay to prevent tight loop, allow other processing */
-      HAL_Delay(100);
+      /* Enter SLEEP mode - CPU halts but peripherals (UART/DMA) continue operating */
+      /* CPU wakes automatically on any interrupt (DMA, SysTick, etc.) */
+      /* This saves ~3-8mA during GPS acquisition compared to busy-wait polling */
+      HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
     }
     
     if (!got_fix)

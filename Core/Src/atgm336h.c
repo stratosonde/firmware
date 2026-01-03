@@ -78,38 +78,18 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   GPIO_InitStruct.Pin = hgnss->en_pin;
   HAL_GPIO_Init(hgnss->en_port, &GPIO_InitStruct);
 
-  /* HOT-START MODE: PB10=HIGH (backup power ~15µA), PB5=LOW (standby) */
-  /* GPS module retains ephemeris data for fast fixes (~1-5 seconds) */
-  /* This enables instant satellite acquisition while maintaining low power between TXs */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);     // PB10 HIGH (hot-start power)
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (standby mode)
+  /* FULL POWER-OFF MODE: PB10=LOW, PB5=LOW (0µA at startup) */
+  /* GPS module is completely off - no ephemeris retention */
+  /* First fix will be cold-start (~30-60 seconds), but ensures clean UART/DMA startup */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);   // PB10 LOW (no power)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (disabled)
 
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=HIGH (hot-start enabled ~15µA), PB5=LOW (standby)\r\n");
-
-  /* CRITICAL PARASITIC POWER FIX: Force UART pins PB6/PB7 to OUTPUT-LOW */
-  /* Main.c initializes UART at boot, setting PB6/PB7 to AF mode (provides voltage) */
-  /* This causes GPS to draw 15mA via parasitic power even when PB10/PB5 are LOW */
-  /* Using direct register access to avoid HAL_DeInit crashes during init */
-  SEGGER_RTT_WriteString(0, "GNSS_Init: Forcing UART pins PB6/PB7 to OUTPUT-LOW (direct register access)...\r\n");
-
-  /* Direct register manipulation - safest method, no HAL calls needed */
-  /* Step 1: Set PB6 and PB7 to OUTPUT mode in MODER register */
-  GPIOB->MODER &= ~(GPIO_MODER_MODE6_Msk | GPIO_MODER_MODE7_Msk);  // Clear mode bits
-  GPIOB->MODER |= (1 << GPIO_MODER_MODE6_Pos) | (1 << GPIO_MODER_MODE7_Pos);  // Set to OUTPUT (01)
-
-  /* Step 2: Clear alternate function assignment (AFR register) */
-  GPIOB->AFR[0] &= ~(GPIO_AFRL_AFSEL6_Msk | GPIO_AFRL_AFSEL7_Msk);  // Clear AF bits
-
-  /* Step 3: Ensure push-pull output type (default, but be explicit) */
-  GPIOB->OTYPER &= ~(GPIO_OTYPER_OT6 | GPIO_OTYPER_OT7);  // Push-pull = 0
-
-  /* Step 4: Disable pull-up/pull-down resistors */
-  GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPD6_Msk | GPIO_PUPDR_PUPD7_Msk);  // No pull = 00
-
-  /* Step 5: Drive both pins LOW using BSRR atomic reset */
-  GPIOB->BSRR = (GPIO_PIN_6 << 16U) | (GPIO_PIN_7 << 16U);  // Atomic reset
-
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB6/PB7 forced to OUTPUT-LOW - parasitic power eliminated\r\n");
+  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=LOW, PB5=LOW (fully powered off, 0µA at startup)\r\n");
+  
+  /* NOTE: UART pins (PB6/PB7) left in UART mode (configured by main.c) */
+  /* No parasitic power issue since GPS is fully off (PB10=LOW, PB5=LOW) */
+  /* UART pins will only be forced to OUTPUT-LOW in GNSS_EnterStandby() */
+  SEGGER_RTT_WriteString(0, "GNSS_Init: UART pins left in AF mode - ready for first wake\r\n");
 
   hgnss->is_initialized = true;
 

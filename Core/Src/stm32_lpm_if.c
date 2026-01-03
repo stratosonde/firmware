@@ -150,25 +150,13 @@ void PWR_EnterStopMode(void)
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   
   /* === UART1 Power Optimization === */
-  /* Deinitialize UART peripheral (required for STOP2), then restore GPS pin config */
-  /* GNSS_EnterStandby() set: PB6=OUTPUT-LOW, PB7=ANALOG */
-  /* HAL_UART_DeInit() will override to ANALOG, so we must restore after */
+  /* Deinitialize UART peripheral (required for STOP2) */
+  /* GPS is fully powered off (PB5=LOW, PB10=LOW), no parasitic power path */
   HAL_UART_DeInit(&huart1);
   
-  /* CRITICAL: Restore GPS driver's pin configuration immediately */
-  /* PB6=OUTPUT-LOW prevents 12mA parasitic power through GPS RX pin */
+  /* CRITICAL: Both UART pins to ANALOG - GPS fully powered off, no leakage */
   GPIO_InitTypeDef GPIO_UART = {0};
-  
-  /* PB6 - MCU TX to GPS RX: OUTPUT-LOW prevents parasitic power */
-  GPIO_UART.Pin = GPIO_PIN_6;
-  GPIO_UART.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_UART.Pull = GPIO_NOPULL;
-  GPIO_UART.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_UART);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-  
-  /* PB7 - GPS TX to MCU RX: ANALOG for high-impedance */
-  GPIO_UART.Pin = GPIO_PIN_7;
+  GPIO_UART.Pin = GPIO_PIN_6 | GPIO_PIN_7;  // PB6=TX, PB7=RX
   GPIO_UART.Mode = GPIO_MODE_ANALOG;
   GPIO_UART.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_UART);
@@ -180,6 +168,15 @@ void PWR_EnterStopMode(void)
   
   GPIO_InitStruct.Pin = GPIO_PIN_4;  // PB4 = ADC_IN3 (Battery voltage)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  
+  /* === STOP2 Power Optimization: Disable Peripheral Clocks === */
+  /* Reduces ~30-60µA by gating unused peripheral clocks */
+  __HAL_RCC_DMA1_CLK_DISABLE();
+  __HAL_RCC_DMAMUX1_CLK_DISABLE();
+  
+  /* === STOP2 Power Optimization: Disable VREFINT === */
+  /* Internal voltage reference consumes ~10-20µA when enabled */
+  HAL_SYSCFG_DisableVREFBUF();
   
   /* === Additional GPIO Power Optimization === */
   /* Set all unused/inactive pins to ANALOG mode to minimize leakage */
@@ -232,6 +229,10 @@ void PWR_ExitStopMode(void)
   /* NOTE: SystemClock_Config() REMOVED - STM32WL auto-restores clock after STOP2 */
   /* Calling it was causing 30mA power draw issue */
   /* System wakes on MSI (4MHz) which is sufficient, radio driver handles PLL if needed */
+  
+  /* Re-enable peripheral clocks that were disabled for STOP2 */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
   
   /* Re-initialize DMA before peripherals that use it (UART) */
   MX_DMA_Init();

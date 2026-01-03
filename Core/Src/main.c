@@ -648,7 +648,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : SOS_Button_Pin */
   GPIO_InitStruct.Pin = SOS_Button_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;  /* STOP2 Power Fix: No internal pull-up (~50-100µA savings) */
   HAL_GPIO_Init(SOS_Button_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PA0 RF_CTRL1_Pin RF_CTRL2_Pin */
