@@ -492,7 +492,7 @@ static void SendTxData(void)
    * With Vbat backup and PMTK161 standby, we get instant fixes
    * 20s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  40000  /* 20 seconds - allows warm start */
+  #define GNSS_COLLECTION_TIME_MS  40000  /* 40 seconds - allows warm start */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Declare gps_start and ttf_ms at function scope */

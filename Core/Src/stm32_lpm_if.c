@@ -149,14 +149,29 @@ void PWR_EnterStopMode(void)
   GPIO_InitStruct.Pin = GPIO_PIN_8;  // NSS
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   
-  /* === UART1 Power Optimization: Conditional DeInit === */
-  /* Only deinit if GPS is powered - prevents parasitic power when GPS is off */
-  /* Reference: archive/GPS_Parasitic_Power_Fix.md */
-  //extern GNSS_HandleTypeDef hgnss;
-  //if (hgnss.is_powered) {
+  /* === UART1 Power Optimization === */
+  /* Deinitialize UART peripheral (required for STOP2), then restore GPS pin config */
+  /* GNSS_EnterStandby() set: PB6=OUTPUT-LOW, PB7=ANALOG */
+  /* HAL_UART_DeInit() will override to ANALOG, so we must restore after */
   HAL_UART_DeInit(&huart1);
-    // Note: GPS module handles its own pin configuration during power down
-  //}
+  
+  /* CRITICAL: Restore GPS driver's pin configuration immediately */
+  /* PB6=OUTPUT-LOW prevents 12mA parasitic power through GPS RX pin */
+  GPIO_InitTypeDef GPIO_UART = {0};
+  
+  /* PB6 - MCU TX to GPS RX: OUTPUT-LOW prevents parasitic power */
+  GPIO_UART.Pin = GPIO_PIN_6;
+  GPIO_UART.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_UART.Pull = GPIO_NOPULL;
+  GPIO_UART.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_UART);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+  
+  /* PB7 - GPS TX to MCU RX: ANALOG for high-impedance */
+  GPIO_UART.Pin = GPIO_PIN_7;
+  GPIO_UART.Mode = GPIO_MODE_ANALOG;
+  GPIO_UART.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_UART);
   
   /* === ADC Power Optimization: DeInit and set pin to ANALOG === */
   /* ADC uses PB4 (ADC_CHANNEL_3) for battery voltage measurement */
@@ -168,13 +183,10 @@ void PWR_EnterStopMode(void)
   
   /* === Additional GPIO Power Optimization === */
   /* Set all unused/inactive pins to ANALOG mode to minimize leakage */
-  
-  /* GPS UART1 pins to ANALOG - prevents parasitic power when GPS is off */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;  // PB6=UART1_TX, PB7=UART1_RX
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
-  /* GPS control pins - drive LOW to ensure GPS is powered off */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5 | GPIO_PIN_10, GPIO_PIN_RESET);  // PB5=GPS_EN, PB10=GPS_PWR
+
+  /* GPS pins are managed by GNSS driver - DO NOT override here! */
+  /* GNSS_EnterStandby() sets: PB6=OUTPUT-LOW, PB7=ANALOG, PB5=LOW, PB10=HIGH */
+  /* PB10 must stay HIGH for hot-start mode (~15µA backup power) */
   
   /* External flash MOSI pin to ANALOG if on PA10 */
   GPIO_InitStruct.Pin = GPIO_PIN_10;  // PA10

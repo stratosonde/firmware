@@ -106,9 +106,14 @@ UTIL_ADV_TRACE_Status_t vcom_Init(void (*cb)(void *))
 
   /* USER CODE END vcom_Init_1 */
   TxCpltCallback = cb;
-  MX_DMA_Init();
-  MX_USART1_UART_Init();
-  LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_26);
+  
+  /* CRITICAL: UART1 is used for GPS, NOT vcom trace! */
+  /* Using SEGGER RTT for all logging - no need for UART trace */
+  /* Commented out to prevent interference with GPS on UART1 */
+  // MX_DMA_Init();
+  // MX_USART1_UART_Init();
+  // LL_EXTI_EnableIT_0_31(LL_EXTI_LINE_26);
+  
   return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_Init_2 */
 

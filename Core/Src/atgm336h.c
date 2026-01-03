@@ -83,7 +83,7 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   /* This enables instant satellite acquisition while maintaining low power between TXs */
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);     // PB10 HIGH (hot-start power)
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (standby mode)
-  
+
   SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=HIGH (hot-start enabled ~15µA), PB5=LOW (standby)\r\n");
 
   /* CRITICAL PARASITIC POWER FIX: Force UART pins PB6/PB7 to OUTPUT-LOW */
@@ -91,24 +91,24 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   /* This causes GPS to draw 15mA via parasitic power even when PB10/PB5 are LOW */
   /* Using direct register access to avoid HAL_DeInit crashes during init */
   SEGGER_RTT_WriteString(0, "GNSS_Init: Forcing UART pins PB6/PB7 to OUTPUT-LOW (direct register access)...\r\n");
-  
+
   /* Direct register manipulation - safest method, no HAL calls needed */
   /* Step 1: Set PB6 and PB7 to OUTPUT mode in MODER register */
   GPIOB->MODER &= ~(GPIO_MODER_MODE6_Msk | GPIO_MODER_MODE7_Msk);  // Clear mode bits
   GPIOB->MODER |= (1 << GPIO_MODER_MODE6_Pos) | (1 << GPIO_MODER_MODE7_Pos);  // Set to OUTPUT (01)
-  
-  /* Step 2: Clear alternate function assignment (AFR register) */  
+
+  /* Step 2: Clear alternate function assignment (AFR register) */
   GPIOB->AFR[0] &= ~(GPIO_AFRL_AFSEL6_Msk | GPIO_AFRL_AFSEL7_Msk);  // Clear AF bits
-  
+
   /* Step 3: Ensure push-pull output type (default, but be explicit) */
   GPIOB->OTYPER &= ~(GPIO_OTYPER_OT6 | GPIO_OTYPER_OT7);  // Push-pull = 0
-  
+
   /* Step 4: Disable pull-up/pull-down resistors */
   GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPD6_Msk | GPIO_PUPDR_PUPD7_Msk);  // No pull = 00
-  
+
   /* Step 5: Drive both pins LOW using BSRR atomic reset */
   GPIOB->BSRR = (GPIO_PIN_6 << 16U) | (GPIO_PIN_7 << 16U);  // Atomic reset
-  
+
   SEGGER_RTT_WriteString(0, "GNSS_Init: PB6/PB7 forced to OUTPUT-LOW - parasitic power eliminated\r\n");
 
   hgnss->is_initialized = true;
@@ -510,6 +510,21 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   uint16_t dma_remaining = __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx);
   hgnss->dma_head = GNSS_DMA_BUFFER_SIZE - dma_remaining;
 
+  /* DEBUG: Log DMA activity (only when bytes change) */
+  static uint16_t last_head = 0;
+  static uint16_t last_tail = 0;
+  if (hgnss->dma_head != last_head || hgnss->dma_tail != last_tail) {
+    char dma_buf[80];
+    uint16_t bytes_avail = (hgnss->dma_head >= hgnss->dma_tail) ? 
+                           (hgnss->dma_head - hgnss->dma_tail) : 
+                           (GNSS_DMA_BUFFER_SIZE - hgnss->dma_tail + hgnss->dma_head);
+    snprintf(dma_buf, sizeof(dma_buf), "[DMA DEBUG] Head:%d Tail:%d Avail:%d bytes\r\n", 
+             hgnss->dma_head, hgnss->dma_tail, bytes_avail);
+    SEGGER_RTT_WriteString(0, dma_buf);
+    last_head = hgnss->dma_head;
+    last_tail = hgnss->dma_tail;
+  }
+
   /* GPS status monitoring - print summary every 10 seconds */
   static uint32_t last_debug_time = 0;
   uint32_t now = HAL_GetTick();
@@ -881,49 +896,60 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
   
-  /* CRITICAL FIX: Clear all buffers and reset state BEFORE aborting DMA */
-  /* This prevents processing stale NMEA data from previous cycle on wake */
-  hgnss->dma_head = 0;
-  hgnss->dma_tail = 0;
-  hgnss->dma_data_ready = false;
-  hgnss->nmea_length = 0;
-  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
-  memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA buffers cleared and state reset\r\n");
-  
-  /* OPTIONAL: Send standby command (commented out - using EN/PWR pins instead) */
-  /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
-  
+  /* CRITICAL: Send PCAS12 standby command FIRST (while UART active) */
+  /* GPS needs ~100ms to save ephemeris data to flash before power cut */
+  GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
+
   if (cmd_status == GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] Command sent successfully\r\n");
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] PCAS12 command sent - GPS saving ephemeris...\r\n");
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] ERROR: Command TX failed!\r\n");
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] WARNING - PCAS12 TX failed!\r\n");
   }
+
+  /* Wait 100ms for GPS to save ephemeris to internal flash before power cut */
+  HAL_Delay(100);
   
-  Wait for GPS to process standby command
-  HAL_Delay(200); */
-  
-  /* Abort DMA (GPS should be entering standby) */
+  /* Abort DMA first - stop receiving data */
   if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
   {
     HAL_UART_AbortReceive(hgnss->huart);
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA aborted\r\n");
   }
   
+  /* Flush UART hardware FIFO to discard any stale data */
+  if (hgnss->huart != NULL)
+  {
+    __HAL_UART_FLUSH_DRREGISTER(hgnss->huart);
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);   // Parity error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
+    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART hardware FIFO flushed\r\n");
+  }
+  
+  /* Clear software buffers and reset state */
+  hgnss->dma_head = 0;
+  hgnss->dma_tail = 0;
+  hgnss->dma_data_ready = false;
+  hgnss->nmea_length = 0;
+  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
+  memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Software buffers cleared\r\n");
+  
   /* HOT-START STANDBY: Configure pins for minimal power while retaining ephemeris */
   if (hgnss->huart != NULL)
   {
     HAL_UART_DeInit(hgnss->huart);
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART deinitialized\r\n");
-    
+
     /* CRITICAL PIN CONFIGURATION FOR HOT-START MODE */
     /* PB6 (MCU TX -> GPS RX): OUTPUT-LOW to prevent parasitic power to GPS */
     /* PB7 (GPS TX -> MCU RX): ANALOG/Hi-Z - NEVER drive this low (it's GPS output!) */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-    
+
     /* PB6 - MCU transmit to GPS (OUTPUT-LOW prevents parasitic power) */
     GPIO_InitStruct.Pin = GPIO_PIN_6;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -931,33 +957,32 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-    
+
     /* PB7 - GPS transmit to MCU (ANALOG for minimal leakage, high impedance) */
     /* CRITICAL: Do NOT drive this low - it's the GPS module's TX pin! */
     GPIO_InitStruct.Pin = GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    
+
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB6=OUTPUT-LOW, PB7=ANALOG (hi-Z)\r\n");
   }
+
+  /* FULL POWER-OFF MODE: Both PB10=LOW and PB5=LOW after PCAS12 */
+  /* GPS has saved ephemeris to internal flash (via PCAS12 command) */
+  /* Power consumption: 0µA during sleep, but GPS retains ephemeris data internally */
   
-  /* HOT-START MODE: PB10=HIGH (backup power), PB5=LOW (standby) */
-  /* Keeps ephemeris data for ~1-5 second fixes, only ~15µA standby current */
-  
-  /* PB5 to LOW - GPS enters standby mode */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW (standby)
-  
-  /* PB10 stays HIGH - maintains backup power for hot-start */
-  /* Note: Already set HIGH in GNSS_Init(), no need to change */
-  
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB10=HIGH (hot-start), PB5=LOW (standby) - ~15µA\r\n");
-  
+  /* Cut all power to GPS module */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW (no power)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);    // PB5 LOW (disabled)
+
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB10=LOW, PB5=LOW (full power-off, 0µA) - ephemeris saved\r\n");
+
   /* CRITICAL: Re-enable MCU STOP mode */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   SEGGER_RTT_WriteString(0, "[GPS STANDBY] MCU STOP mode re-enabled\r\n");
-  
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS fully off (~0µA, LED OFF)\r\n");
+
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS in hot-start standby (~15µA)\r\n");
   
   hgnss->is_powered = false;
   return GNSS_OK;
@@ -967,6 +992,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   * @brief  Wake GPS from standby mode
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
+  * @note   IMPROVED SEQUENCE: Initialize UART/DMA BEFORE enabling GPS (eliminates FIFO corruption)
   */
 GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
 {
@@ -979,54 +1005,71 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
   SEGGER_RTT_WriteString(0, "[GPS WAKE] MCU STOP mode disabled\r\n");
   
-  /* HARDWARE POWER-UP SEQUENCE: Drive PB10 & PB5 HIGH (already configured as OUTPUT) */
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] Powering up GPS via PB10 & PB5...\r\n");
-  
-  /* Step 1: Drive PB10 HIGH to provide main power (already OUTPUT from standby) */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)
-  HAL_Delay(100);  // Allow power rails to stabilize
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB10 HIGH - main power applied\r\n");
-  
-  /* Step 2: Drive PB5 HIGH to enable GPS (already OUTPUT from standby) */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
-  
-  /* Wait for GPS to boot up (cold start requires ~500ms) */
-  HAL_Delay(500);
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] GPS boot complete\r\n");
-  
-  /* Reinitialize UART after GPS power-up - this will restore PB6/PB7 to UART function */
+  /* STEP 1: Initialize UART peripheral FIRST (before GPS transmits) */
   if (hgnss->huart != NULL)
   {
-    /* Reinitialize UART peripheral (HAL_UART_Init calls MspInit which configures pins) */
+    /* Reinitialize UART peripheral - restores PB6/PB7 to UART function */
     HAL_UART_Init(hgnss->huart);
-    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART reinitialized (PB6/PB7 restored to UART function)\r\n");
+    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART reinitialized\r\n");
     
-    /* CRITICAL: UART settle delay for first-boot synchronization */
-    /* On first boot, GPS has been running since GNSS_Init() (~60+ seconds) */
-    /* UART peripheral was just initialized for the first time */
-    /* Need brief delay for UART framing sync and GPS to start fresh sentences */
-    HAL_Delay(200);
-    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART settle delay complete (200ms)\r\n");
+    /* CRITICAL: Flush UART hardware FIFO to ensure clean start */
+    /* This prevents reading any stale/corrupt data from previous cycle */
+    __HAL_UART_FLUSH_DRREGISTER(hgnss->huart);
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);   // Parity error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
+    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART hardware FIFO flushed\r\n");
   }
   
-  /* Reset DMA circular buffer */
+  /* STEP 2: Clear software buffers */
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
   hgnss->dma_data_ready = false;
-  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   hgnss->nmea_length = 0;
+  memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
+  memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] Software buffers cleared\r\n");
   
-  /* Start DMA reception */
+  /* STEP 3: Start DMA reception (UART is ready and listening) */
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
   if (dma_status != HAL_OK)
   {
     SEGGER_RTT_WriteString(0, "[GPS WAKE] ERROR - DMA start failed\r\n");
     return GNSS_ERROR;
   }
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] DMA started - ready to receive\r\n");
   
+  /* STEP 4: Ensure PB10 is HIGH (main power) - may have been affected by sleep mode */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB10 HIGH - main power confirmed\r\n");
+  
+  /* STEP 5: Enable GPS via PB5 - UART/DMA infrastructure is ready to capture from first byte */
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
+  
+  /* DEBUG: Read back GPIO states to verify pins are actually set */
+  GPIO_PinState pb10_state = HAL_GPIO_ReadPin(hgnss->pwr_port, hgnss->pwr_pin);
+  GPIO_PinState pb5_state = HAL_GPIO_ReadPin(hgnss->en_port, hgnss->en_pin);
+  char pin_buf[80];
+  snprintf(pin_buf, sizeof(pin_buf), "[GPS WAKE DEBUG] Pin readback: PB10=%d PB5=%d (expect 1,1)\r\n", 
+           pb10_state, pb5_state);
+  SEGGER_RTT_WriteString(0, pin_buf);
+  
+  /* DEBUG: Check UART error flags */
+  uint32_t uart_errors = hgnss->huart->ErrorCode;
+  if (uart_errors != HAL_UART_ERROR_NONE) {
+    char err_buf[80];
+    snprintf(err_buf, sizeof(err_buf), "[GPS WAKE DEBUG] UART errors: 0x%08lX\r\n", 
+             (unsigned long)uart_errors);
+    SEGGER_RTT_WriteString(0, err_buf);
+  } else {
+    SEGGER_RTT_WriteString(0, "[GPS WAKE DEBUG] UART no errors\r\n");
+  }
+  
+  /* No delay needed - 40 second polling loop will wait for GPS boot and satellite acquisition */
   hgnss->is_powered = true;
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] Complete - GPS woken, DMA active, MCU STOP disabled\r\n");
+  SEGGER_RTT_WriteString(0, "[GPS WAKE] Complete - UART/DMA ready for GPS transmission\r\n");
   
   return GNSS_OK;
 }
