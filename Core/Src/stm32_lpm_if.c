@@ -78,8 +78,8 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 /* USER CODE BEGIN PV */
 /* Static flash handle for deep power-down control */
 /* NOTE: If you use flash logging, make this extern and define it in your main code */
-static W25Q_HandleTypeDef hw25q_local = {0};
-static W25Q_HandleTypeDef *hw25q_ptr = NULL;  /* Set this to your global flash handle if available */
+// static W25Q_HandleTypeDef hw25q_local = {0};  // Reserved for future flash power management
+// static W25Q_HandleTypeDef *hw25q_ptr = NULL;  // Reserved for future flash power management
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/

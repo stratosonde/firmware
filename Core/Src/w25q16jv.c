@@ -76,7 +76,7 @@ static W25Q_StatusTypeDef W25Q_SPI_Receive(W25Q_HandleTypeDef *hw25q, uint8_t *d
 /**
   * @brief  SPI transmit and receive wrapper
   */
-static W25Q_StatusTypeDef W25Q_SPI_TransmitReceive(W25Q_HandleTypeDef *hw25q, uint8_t *tx, uint8_t *rx, uint16_t len)
+static W25Q_StatusTypeDef __attribute__((unused)) W25Q_SPI_TransmitReceive(W25Q_HandleTypeDef *hw25q, uint8_t *tx, uint8_t *rx, uint16_t len)
 {
     if (HAL_SPI_TransmitReceive(hw25q->hspi, tx, rx, len, W25Q_SPI_TIMEOUT) != HAL_OK) {
         return W25Q_ERROR_SPI;

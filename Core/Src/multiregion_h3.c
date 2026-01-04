@@ -19,6 +19,7 @@
 #include "stm32wlxx_hal.h"  // For HAL_GetTick()
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* Private defines -----------------------------------------------------------*/
 #define H3_MAX_DISTANCE_KM  500.0f  // Maximum distance to consider for nearest neighbor

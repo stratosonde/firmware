@@ -1365,7 +1365,7 @@ static bool CaptureCurrentContext(MinimalRegionContext_t *ctx)
 /**
  * @brief Restore context to MAC layer
  */
-static bool RestoreContextToMAC(MinimalRegionContext_t *ctx)
+static bool __attribute__((unused)) RestoreContextToMAC(MinimalRegionContext_t *ctx)
 {
     if (!ctx) {
         return false;

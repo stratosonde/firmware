@@ -111,8 +111,8 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   
   /* Try different CRC extraction methods */
   uint8_t stored_crc_low4 = hms5607->CalData.crc & 0x000F;           /* Lower 4 bits of PROM[7] */
-  uint8_t stored_crc_high4 = (hms5607->CalData.crc >> 12) & 0x000F;  /* Upper 4 bits of PROM[7] */
-  uint8_t stored_crc_prom0 = (hms5607->CalData.reserved >> 12) & 0x000F; /* Upper 4 bits of PROM[0] */
+  // uint8_t stored_crc_high4 = (hms5607->CalData.crc >> 12) & 0x000F;  /* Reserved for future CRC validation */
+  // uint8_t stored_crc_prom0 = (hms5607->CalData.reserved >> 12) & 0x000F; /* Reserved for future CRC validation */
   
   SEGGER_RTT_WriteString(0, "MS5607: CRC check in progress\r\n");
   

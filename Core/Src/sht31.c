@@ -195,8 +195,8 @@ SHT31_StatusTypeDef SHT31_ReadTempAndHumidity(SHT31_HandleTypeDef *hsht31,
   /* Read measurement data */
   hal_status = HAL_I2C_Master_Receive(hsht31->hi2c, (hsht31->Address << 1), data, 6, SHT31_I2C_TIMEOUT);
   if (hal_status != HAL_OK) {
-    uint32_t i2c_error = HAL_I2C_GetError(hsht31->hi2c);
-    HAL_I2C_StateTypeDef i2c_state = HAL_I2C_GetState(hsht31->hi2c);
+    // uint32_t i2c_error = HAL_I2C_GetError(hsht31->hi2c);  // Reserved for future error handling
+    // HAL_I2C_StateTypeDef i2c_state = HAL_I2C_GetState(hsht31->hi2c);  // Reserved for future error handling
     SEGGER_RTT_WriteString(0, "SHT31: Read failed\r\n");
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
     return SHT31_ERROR;

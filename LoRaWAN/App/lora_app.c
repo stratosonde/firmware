@@ -238,7 +238,8 @@ static ActivationType_t ActivationType = LORAWAN_DEFAULT_ACTIVATION_TYPE;
 /**
   * @brief LoRaWAN force rejoin even if the NVM context is restored
   */
-static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
+// ForceRejoin: Uncomment to force rejoin on boot (useful for testing or network changes)
+// static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
 
 /**
   * @brief LoRaWAN handler Callbacks
@@ -372,9 +373,9 @@ void LoRaWAN_Init(void)
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
   
   /* TEMPORARY: Force rejoin by clearing all contexts - REMOVE AFTER TESTING */
-  //SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
-  //MultiRegion_ClearAllContexts();
-  //SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
+  SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
+  MultiRegion_ClearAllContexts();
+  SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
   
   /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
   if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
@@ -494,10 +495,16 @@ static void SendTxData(void)
   /* Non-blocking GNSS collection - wake from standby, capture fix quickly
    * GPS module in standby provides hot-start: <1s typical, 5s worst case
    * With Vbat backup and PMTK161 standby, we get instant fixes
-   * 20s timeout allows for occasional warm/cold starts if needed
+   * 60s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  40000  /* 40 seconds - hot-start sufficient */
+  #define GNSS_COLLECTION_TIME_MS  60000  /* 60 seconds - reduced for testing */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
+  
+  /* Last known GPS position storage (persistent across transmission cycles) */
+  static float last_valid_lat = 39.8283f;     /* Default: Central US (Kansas) */
+  static float last_valid_lon = -98.5795f;
+  static float last_valid_alt = 500.0f;
+  static bool have_previous_fix = false;
   
   /* Declare gps_start and ttf_ms at function scope */
   uint32_t gps_start = 0;
@@ -536,12 +543,12 @@ static void SendTxData(void)
         
         char fix_msg[150];
         snprintf(fix_msg, sizeof(fix_msg), 
-                 "GPS FIX! Lat=%d.%06d Lon=%d.%06d Alt=%d.%dm Sats:%d HDOP=%d.%d (took %lums)\r\n",
-                 lat_int / 1000000, abs(lat_int % 1000000),
-                 lon_int / 1000000, abs(lon_int % 1000000),
-                 alt_int / 10, abs(alt_int % 10),
+                 "GPS FIX! Lat=%ld.%06ld Lon=%ld.%06ld Alt=%ld.%ldm Sats:%d HDOP=%ld.%ld (took %lums)\r\n",
+                 (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
+                 (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
+                 (long)(alt_int / 10), (long)labs(alt_int % 10),
                  hgnss.data.satellites,
-                 hdop_int / 10, abs(hdop_int % 10),
+                 (long)(hdop_int / 10), (long)labs(hdop_int % 10),
                  (unsigned long)ttf_ms);
         SEGGER_RTT_WriteString(0, fix_msg);
         break;  /* Exit early - we have what we need */
@@ -574,11 +581,39 @@ static void SendTxData(void)
       if (GNSS_IsFixValid(&hgnss))
       {
         SEGGER_RTT_WriteString(0, "GPS: Basic fix (not high quality)\r\n");
+        /* Update last known position even for basic fix */
+        last_valid_lat = hgnss.data.latitude;
+        last_valid_lon = hgnss.data.longitude;
+        last_valid_alt = hgnss.data.altitude;
+        have_previous_fix = true;
       }
       else
       {
-        SEGGER_RTT_WriteString(0, "GPS: No fix - using defaults\r\n");
+        /* GPS timeout - use last known position if available */
+        if (have_previous_fix)
+        {
+          SEGGER_RTT_WriteString(0, "GPS: Timeout - using last known position\r\n");
+          hgnss.data.latitude = last_valid_lat;
+          hgnss.data.longitude = last_valid_lon;
+          hgnss.data.altitude = last_valid_alt;
+          hgnss.data.valid = true;  /* Mark as valid to proceed with transmission */
+          hgnss.data.fix_quality = GNSS_FIX_GPS;  /* Indicate GPS fix type */
+        }
+        else
+        {
+          SEGGER_RTT_WriteString(0, "GPS: No fix and no previous position - sending zeros\r\n");
+          /* hgnss.data.valid remains false, will send zeros as fallback */
+        }
       }
+    }
+    else
+    {
+      /* Successful fix - update last known position */
+      last_valid_lat = hgnss.data.latitude;
+      last_valid_lon = hgnss.data.longitude;
+      last_valid_alt = hgnss.data.altitude;
+      have_previous_fix = true;
+      SEGGER_RTT_WriteString(0, "GPS: Fix acquired and stored as last known position\r\n");
     }
     
     /* Put GPS back to standby to save power and allow MCU to sleep */
@@ -622,9 +657,9 @@ static void SendTxData(void)
       /* Output region lookup result to RTT with timing - use snprintf to avoid buffer issues */
       char h3_msg[200];
       snprintf(h3_msg, sizeof(h3_msg), 
-               "H3 Region Lookup: Lat=%d.%06d Lon=%d.%06d -> %s (took %lums)\r\n",
-               lat_int / 1000000, abs(lat_int % 1000000),
-               lon_int / 1000000, abs(lon_int % 1000000),
+               "H3 Region Lookup: Lat=%ld.%06ld Lon=%ld.%06ld -> %s (took %lums)\r\n",
+               (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
+               (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
       SEGGER_RTT_WriteString(0, h3_msg);
       

@@ -139,6 +139,7 @@ UTIL_ADV_TRACE_Status_t vcom_DeInit(void)
   /* USER CODE BEGIN vcom_DeInit_2 */
 
   /* USER CODE END vcom_DeInit_2 */
+  return UTIL_ADV_TRACE_OK;
 }
 
 void vcom_Trace(uint8_t *p_data, uint16_t size)

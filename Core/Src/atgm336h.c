@@ -132,12 +132,10 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
 
   /* Start DMA circular buffer reception */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: Starting DMA circular buffer reception...\r\n");
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
   
   if (dma_status != HAL_OK)
   {
-    SEGGER_RTT_WriteString(0, "GNSS_PowerOn: ERROR - DMA start failed\r\n");
     return GNSS_ERROR;
   }
 
@@ -489,21 +487,6 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   /* Get current DMA head position (hardware write position) */
   uint16_t dma_remaining = __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx);
   hgnss->dma_head = GNSS_DMA_BUFFER_SIZE - dma_remaining;
-
-  /* DEBUG: Log DMA activity (only when bytes change) */
-  static uint16_t last_head = 0;
-  static uint16_t last_tail = 0;
-  if (hgnss->dma_head != last_head || hgnss->dma_tail != last_tail) {
-    char dma_buf[80];
-    uint16_t bytes_avail = (hgnss->dma_head >= hgnss->dma_tail) ? 
-                           (hgnss->dma_head - hgnss->dma_tail) : 
-                           (GNSS_DMA_BUFFER_SIZE - hgnss->dma_tail + hgnss->dma_head);
-    snprintf(dma_buf, sizeof(dma_buf), "[DMA DEBUG] Head:%d Tail:%d Avail:%d bytes\r\n", 
-             hgnss->dma_head, hgnss->dma_tail, bytes_avail);
-    SEGGER_RTT_WriteString(0, dma_buf);
-    last_head = hgnss->dma_head;
-    last_tail = hgnss->dma_tail;
-  }
 
   /* GPS status monitoring - print summary every 10 seconds */
   static uint32_t last_debug_time = 0;

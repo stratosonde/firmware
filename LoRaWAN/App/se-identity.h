@@ -99,7 +99,7 @@ extern "C" {
 #define LORAWAN_DEVICE_EUI                                 60,81,F9,53,25,0E,09,15
 
 // Region-specific DevEUIs (used by multiregion_context.c - need 0x prefix for direct array init)
-#define LORAWAN_DEVICE_EUI_US915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x15  // 915 MHz, Americas
+#define LORAWAN_DEVICE_EUI_US915                           0x60,0x81,0xF9,0x53,0x25,0x10,0x09,0x15  // 915 MHz, Americas
 #define LORAWAN_DEVICE_EUI_EU868                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x68  // 868 MHz, Europe
 #define LORAWAN_DEVICE_EUI_AS923                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x23  // 923 MHz, Asia
 #define LORAWAN_DEVICE_EUI_AU915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x19,0x15  // 915 MHz, Australia (counter=1)
