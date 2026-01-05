@@ -62,10 +62,16 @@ extern "C" {
 #define LORAWAN_USER_APP_PORT                       2
 
 /*!
+ * LoRaWAN GNSS Detail port (custom binary format)
+ * @note Detailed satellite tracking and 3D speed telemetry
+ */
+#define LORAWAN_GNSS_DETAIL_PORT                    3
+
+/*!
  * LoRaWAN Switch class application port
  * @note do not use 224. It is reserved for certification
  */
-#define LORAWAN_SWITCH_CLASS_PORT                   3
+#define LORAWAN_SWITCH_CLASS_PORT                   4
 
 /*!
  * LoRaWAN default class

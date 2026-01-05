@@ -70,6 +70,29 @@ typedef enum TxEventType_e
 
 /* USER CODE BEGIN PTD */
 
+/**
+  * @brief Packet queue entry for deferred LoRaWAN transmission
+  */
+typedef struct
+{
+  uint8_t buffer[150];           // Packet data buffer
+  uint16_t size;                 // Actual packet size
+  uint8_t port;                  // LoRaWAN port number
+  bool valid;                    // Entry is occupied
+} PacketQueueEntry_t;
+
+/**
+  * @brief Simple circular packet queue
+  */
+#define PACKET_QUEUE_SIZE 8      // Max packets in queue
+typedef struct
+{
+  PacketQueueEntry_t entries[PACKET_QUEUE_SIZE];
+  uint8_t head;                  // Write position
+  uint8_t tail;                  // Read position
+  uint8_t count;                 // Current number of packets
+} PacketQueue_t;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -220,7 +243,12 @@ static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity);
 static void OnSystemReset(void);
 
 /* USER CODE BEGIN PFP */
-
+static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size);
+static void PacketQueue_Init(PacketQueue_t *queue);
+static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port);
+static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry);
+static bool PacketQueue_IsEmpty(PacketQueue_t *queue);
+static uint8_t PacketQueue_Count(PacketQueue_t *queue);
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
@@ -303,6 +331,8 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 static UTIL_TIMER_Object_t StopJoinTimer;
 
 /* USER CODE BEGIN PV */
+/* Packet queue for deferred transmission after RX windows */
+static PacketQueue_t g_packet_queue = {0};
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -372,10 +402,10 @@ void LoRaWAN_Init(void)
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
   
-  /* TEMPORARY: Force rejoin by clearing all contexts - REMOVE AFTER TESTING */
-  SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
-  MultiRegion_ClearAllContexts();
-  SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
+  /* DISABLED: Force rejoin - contexts will be preserved across reboots */
+  // SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
+  // MultiRegion_ClearAllContexts();
+  // SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
   
   /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
   if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
@@ -432,7 +462,9 @@ void LoRaWAN_Init(void)
   }
 
   /* USER CODE BEGIN LoRaWAN_Init_Last */
-
+  /* Initialize packet queue for deferred transmission */
+  PacketQueue_Init(&g_packet_queue);
+  SEGGER_RTT_WriteString(0, "Packet queue initialized\r\n");
   /* USER CODE END LoRaWAN_Init_Last */
 }
 
@@ -442,6 +474,84 @@ void LoRaWAN_Init(void)
 
 /* Private functions ---------------------------------------------------------*/
 /* USER CODE BEGIN PrFD */
+
+/**
+  * @brief  Encode detailed GNSS telemetry packet (satellite tracking + 3D speed)
+  * @param  buffer: Destination buffer  
+  * @param  max_size: Maximum buffer size
+  * @retval Actual packet size in bytes
+  * @note   Custom binary format on Port 3 for detailed analysis
+  */
+static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
+{
+  uint16_t idx = 0;
+  
+  if (buffer == NULL || max_size < 20)
+    return 0;
+  
+  /* Header (3 bytes) */
+  buffer[idx++] = 0x01;  // Packet version
+  buffer[idx++] = hgnss.extended.gps_count;
+  buffer[idx++] = hgnss.extended.glonass_count + hgnss.extended.beidou_count;  // Combined other constellations
+  
+  /* GPS satellites (PRN + SNR for each) */
+  for (int i = 0; i < hgnss.extended.gps_count && idx < (max_size - 2); i++)
+  {
+    buffer[idx++] = hgnss.extended.gps_sats[i].prn;
+    buffer[idx++] = hgnss.extended.gps_sats[i].snr;
+  }
+  
+  /* GLONASS satellites */
+  for (int i = 0; i < hgnss.extended.glonass_count && idx < (max_size - 2); i++)
+  {
+    buffer[idx++] = hgnss.extended.glonass_sats[i].prn;
+    buffer[idx++] = hgnss.extended.glonass_sats[i].snr;
+  }
+  
+  /* BeiDou satellites */
+  for (int i = 0; i < hgnss.extended.beidou_count && idx < (max_size - 2); i++)
+  {
+    buffer[idx++] = hgnss.extended.beidou_sats[i].prn;
+    buffer[idx++] = hgnss.extended.beidou_sats[i].snr;
+  }
+  
+  /* Speed data (12 bytes) - check we have room */
+  if (idx + 12 > max_size)
+    return idx;  // Return what we have so far
+  
+  /* Ground speed (2 bytes, 0.1 km/h resolution, 0-6553.5 km/h) */
+  uint16_t ground_speed = (uint16_t)(hgnss.extended.ground_speed_kmh * 10.0f);
+  buffer[idx++] = (ground_speed >> 8) & 0xFF;
+  buffer[idx++] = ground_speed & 0xFF;
+  
+  /* Vertical speed (2 bytes signed, 0.01 m/s resolution, -327.68 to +327.67 m/s) */
+  int16_t vertical_speed = (int16_t)(hgnss.extended.vertical_speed_ms * 100.0f);
+  buffer[idx++] = (vertical_speed >> 8) & 0xFF;
+  buffer[idx++] = vertical_speed & 0xFF;
+  
+  /* 3D speed (2 bytes, 0.1 km/h resolution) */
+  uint16_t speed_3d = (uint16_t)(hgnss.extended.speed_3d_kmh * 10.0f);
+  buffer[idx++] = (speed_3d >> 8) & 0xFF;
+  buffer[idx++] = speed_3d & 0xFF;
+  
+  /* Track/course (2 bytes, 0.1° resolution, 0-359.9°) */
+  uint16_t track = (uint16_t)(hgnss.extended.track_true * 10.0f);
+  buffer[idx++] = (track >> 8) & 0xFF;
+  buffer[idx++] = track & 0xFF;
+  
+  /* HDOP (2 bytes, 0.01 resolution) */
+  uint16_t hdop = (uint16_t)(hgnss.data.hdop * 100.0f);
+  buffer[idx++] = (hdop >> 8) & 0xFF;
+  buffer[idx++] = hdop & 0xFF;
+  
+  /* Fix quality (1 byte) */
+  buffer[idx++] = (uint8_t)hgnss.data.fix_quality;
+  
+  /* Satellites used in fix (1 byte) */
+  buffer[idx++] = hgnss.data.satellites;
+  
+  return idx;
+}
 
 /* USER CODE END PrFD */
 
@@ -497,7 +607,7 @@ static void SendTxData(void)
    * With Vbat backup and PMTK161 standby, we get instant fixes
    * 60s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  60000  /* 60 seconds - reduced for testing */
+  #define GNSS_COLLECTION_TIME_MS  300000  /* 60 seconds - reduced for testing */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Last known GPS position storage (persistent across transmission cycles) */
@@ -785,6 +895,44 @@ static void SendTxData(void)
   snprintf(status_msg, sizeof(status_msg), "LmHandlerSend status: %s (%d)\r\n", status_str, status);
   SEGGER_RTT_WriteString(0, status_msg);
   
+  /* Queue detailed GNSS packet on Port 3 for transmission after RX windows */
+  if (sensor_data.gnss_valid && (hgnss.extended.gps_count > 0 || hgnss.extended.beidou_count > 0))
+  {
+    static uint8_t gnss_detail_buffer[150];  // Buffer for detailed GNSS packet
+    uint16_t gnss_packet_size = EncodeGNSSDetailPacket(gnss_detail_buffer, sizeof(gnss_detail_buffer));
+    
+    if (gnss_packet_size > 0)
+    {
+      char gnss_msg[100];
+      snprintf(gnss_msg, sizeof(gnss_msg), 
+               "Queuing GNSS detail packet: %d bytes (GPS:%d BeiDou:%d GLONASS:%d)\r\n",
+               gnss_packet_size, hgnss.extended.gps_count, 
+               hgnss.extended.beidou_count, hgnss.extended.glonass_count);
+      SEGGER_RTT_WriteString(0, gnss_msg);
+      
+      /* Push to queue - will be sent after RX windows complete */
+      if (PacketQueue_Push(&g_packet_queue, gnss_detail_buffer, gnss_packet_size, LORAWAN_GNSS_DETAIL_PORT))
+      {
+        char queue_msg[60];
+        snprintf(queue_msg, sizeof(queue_msg), "GNSS packet queued (queue size: %d)\r\n", 
+                 PacketQueue_Count(&g_packet_queue));
+        SEGGER_RTT_WriteString(0, queue_msg);
+      }
+      else
+      {
+        SEGGER_RTT_WriteString(0, "WARNING: Queue full - GNSS packet dropped!\r\n");
+      }
+    }
+    else
+    {
+      SEGGER_RTT_WriteString(0, "GNSS detail packet encoding failed (0 bytes)\r\n");
+    }
+  }
+  else
+  {
+    SEGGER_RTT_WriteString(0, "Skipping GNSS detail packet (no valid data or no satellites)\r\n");
+  }
+  
   SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }
@@ -838,6 +986,47 @@ static void OnTxData(LmHandlerTxParams_t *params)
     SEGGER_RTT_WriteString(0, "  TX successful - capturing context\r\n");
     MultiRegion_SaveCurrentContext();
   }
+  
+  /* Drain packet queue after RX windows complete */
+  /* This callback fires AFTER RX2 window closes, so MAC is ready for next TX */
+  if (!PacketQueue_IsEmpty(&g_packet_queue))
+  {
+    PacketQueueEntry_t entry;
+    if (PacketQueue_Pop(&g_packet_queue, &entry))
+    {
+      char queue_msg[80];
+      snprintf(queue_msg, sizeof(queue_msg), 
+               "  Sending queued packet: Port %d, %d bytes (queue remaining: %d)\r\n",
+               entry.port, entry.size, PacketQueue_Count(&g_packet_queue));
+      SEGGER_RTT_WriteString(0, queue_msg);
+      
+      /* Prepare packet data */
+      LmHandlerAppData_t queuedData;
+      queuedData.Port = entry.port;
+      queuedData.BufferSize = entry.size;
+      queuedData.Buffer = entry.buffer;
+      
+      /* Send queued packet */
+      LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+      
+      const char* queue_status_str;
+      switch(queue_status) {
+        case LORAMAC_HANDLER_SUCCESS: queue_status_str = "SUCCESS"; break;
+        case LORAMAC_HANDLER_BUSY_ERROR: queue_status_str = "BUSY_ERROR"; break;
+        case LORAMAC_HANDLER_ERROR: queue_status_str = "ERROR"; break;
+        case LORAMAC_HANDLER_NO_NETWORK_JOINED: queue_status_str = "NO_NETWORK_JOINED"; break;
+        case LORAMAC_HANDLER_DUTYCYCLE_RESTRICTED: queue_status_str = "DUTYCYCLE_RESTRICTED"; break;
+        default: queue_status_str = "UNKNOWN"; break;
+      }
+      
+      char result_msg[80];
+      snprintf(result_msg, sizeof(result_msg), "  Queued packet send status: %s (%d)\r\n", 
+               queue_status_str, queue_status);
+      SEGGER_RTT_WriteString(0, result_msg);
+    }
+  }
+  
+  SEGGER_RTT_WriteString(0, "=== OnTxData Callback END ===\r\n");
   /* USER CODE END OnTxData_1 */
 }
 
@@ -1089,4 +1278,79 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   /* USER CODE BEGIN OnRestoreContextRequest_Last */
 
   /* USER CODE END OnRestoreContextRequest_Last */
+}
+
+/**
+  * @brief  Initialize packet queue
+  * @param  queue: Pointer to queue structure
+  * @retval None
+  */
+static void PacketQueue_Init(PacketQueue_t *queue)
+{
+  memset(queue, 0, sizeof(PacketQueue_t));
+}
+
+/**
+  * @brief  Push packet to queue
+  * @param  queue: Pointer to queue structure
+  * @param  data: Packet data
+  * @param  size: Packet size
+  * @param  port: LoRaWAN port
+  * @retval true if successful, false if queue full
+  */
+static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port)
+{
+  if (queue->count >= PACKET_QUEUE_SIZE || size > sizeof(queue->entries[0].buffer))
+    return false;
+  
+  PacketQueueEntry_t *entry = &queue->entries[queue->head];
+  memcpy(entry->buffer, data, size);
+  entry->size = size;
+  entry->port = port;
+  entry->valid = true;
+  
+  queue->head = (queue->head + 1) % PACKET_QUEUE_SIZE;
+  queue->count++;
+  
+  return true;
+}
+
+/**
+  * @brief  Pop packet from queue
+  * @param  queue: Pointer to queue structure
+  * @param  entry: Destination for popped entry
+  * @retval true if successful, false if queue empty
+  */
+static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry)
+{
+  if (queue->count == 0)
+    return false;
+  
+  *entry = queue->entries[queue->tail];
+  queue->entries[queue->tail].valid = false;
+  
+  queue->tail = (queue->tail + 1) % PACKET_QUEUE_SIZE;
+  queue->count--;
+  
+  return true;
+}
+
+/**
+  * @brief  Check if queue is empty
+  * @param  queue: Pointer to queue structure
+  * @retval true if empty
+  */
+static bool PacketQueue_IsEmpty(PacketQueue_t *queue)
+{
+  return (queue->count == 0);
+}
+
+/**
+  * @brief  Get number of packets in queue
+  * @param  queue: Pointer to queue structure
+  * @retval Number of packets
+  */
+static uint8_t PacketQueue_Count(PacketQueue_t *queue)
+{
+  return queue->count;
 }

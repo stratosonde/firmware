@@ -63,6 +63,51 @@ typedef enum
 } GNSS_FixQuality_t;
 
 /**
+  * @brief Maximum satellites per constellation
+  */
+#define GNSS_MAX_SATS_PER_CONSTELLATION 20
+
+/**
+  * @brief Individual satellite information
+  */
+typedef struct
+{
+  uint8_t prn;           // Satellite PRN/ID number
+  uint8_t elevation;     // Elevation angle (degrees, 0-90)
+  uint16_t azimuth;      // Azimuth angle (degrees, 0-359)
+  uint8_t snr;           // Signal-to-noise ratio (dBHz)
+} GNSS_SatelliteInfo_t;
+
+/**
+  * @brief Extended GNSS data for detailed satellite tracking and 3D speed
+  */
+typedef struct
+{
+  // Per-constellation satellite lists
+  GNSS_SatelliteInfo_t gps_sats[GNSS_MAX_SATS_PER_CONSTELLATION];
+  uint8_t gps_count;
+  
+  GNSS_SatelliteInfo_t glonass_sats[GNSS_MAX_SATS_PER_CONSTELLATION];
+  uint8_t glonass_count;
+  
+  GNSS_SatelliteInfo_t beidou_sats[GNSS_MAX_SATS_PER_CONSTELLATION];
+  uint8_t beidou_count;
+  
+  // Speed data
+  float ground_speed_kmh;    // From VTG sentence (more accurate than RMC)
+  float vertical_speed_ms;   // Calculated from altitude changes (m/s)
+  float speed_3d_kmh;        // Computed 3D speed
+  float track_true;          // Course over ground (true north, degrees)
+  float track_magnetic;      // Course over ground (magnetic, degrees)
+  
+  // For vertical speed calculation
+  float prev_altitude;       // Previous altitude reading (meters)
+  uint32_t prev_timestamp;   // Previous timestamp (HAL_GetTick())
+  bool has_prev_altitude;    // Flag to indicate if we have previous data
+  
+} GNSS_ExtendedData_t;
+
+/**
   * @brief GNSS Data Structure
   */
 typedef struct
@@ -105,6 +150,7 @@ typedef struct
   uint16_t nmea_length;                // Current sentence length
   
   GNSS_Data_t data;                    // Latest GNSS data
+  GNSS_ExtendedData_t extended;        // Extended satellite tracking and 3D speed data
 } GNSS_HandleTypeDef;
 
 /* NMEA Sentence identifiers */
@@ -116,7 +162,7 @@ typedef struct
 #define NMEA_GLL                    "$GPGLL"
 
 /* ATGM336H PCAS Configuration Commands */
-#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,0,0,0*03\r\n"  // GGA + RMC + GSV
+#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // GGA + RMC + GSV + VTG
 #define GNSS_CMD_HIGH_ALT_MODE   "$PCAS04,5*1C\r\n"                // High altitude mode (CRITICAL!)
 #define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2B\r\n"             // 1 Hz update rate
 #define GNSS_CMD_SATELLITE_SYS   "$PCAS06,1,0,1,0*67\r\n"          // GPS + BeiDou

@@ -32,6 +32,8 @@ static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max
 static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence);
+static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence);
+static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss);
 static bool GNSS_VerifyChecksum(const char *sentence);
 
 /* Exported functions --------------------------------------------------------*/
@@ -53,6 +55,7 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
 
   /* Initialize data structure */
   memset(&hgnss->data, 0, sizeof(GNSS_Data_t));
+  memset(&hgnss->extended, 0, sizeof(GNSS_ExtendedData_t));
   hgnss->is_initialized = false;
   hgnss->is_powered = false;
   
@@ -362,6 +365,8 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
       strncmp(sentence, "$GNGGA", 6) == 0)
   {
     GNSS_ParseGGA(hgnss, sentence);
+    /* Update vertical speed after new altitude reading */
+    GNSS_UpdateVerticalSpeed(hgnss);
   }
   /* Parse RMC sentence (speed and course) */
   /* Support both GPS-only ($GPRMC) and multi-GNSS ($GNRMC) formats */
@@ -378,6 +383,13 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
            strncmp(sentence, "$BDGSV", 6) == 0)
   {
     GNSS_ParseGSV(hgnss, sentence);
+  }
+  /* Parse VTG sentence (track and ground speed) */
+  /* Support GPS ($GPVTG) and multi-GNSS ($GNVTG) formats */
+  else if (strncmp(sentence, NMEA_VTG, strlen(NMEA_VTG)) == 0 ||
+           strncmp(sentence, "$GNVTG", 6) == 0)
+  {
+    GNSS_ParseVTG(hgnss, sentence);
   }
 
   return GNSS_OK;
@@ -563,6 +575,193 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   }
 
   return GNSS_OK;
+}
+
+/**
+  * @brief  Parse GSV NMEA sentence (satellites in view with detailed PRN tracking)
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @param  sentence: GSV sentence
+  * @retval 0 on success, -1 on error
+  * @note   GSV format: $GPGSV,<num_msg>,<msg_num>,<sats_in_view>,<prn>,<elev>,<azim>,<snr>,...
+  * @note   Supports GPS ($GPGSV), GLONASS ($GLGSV), BeiDou ($BDGSV)
+  */
+static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence)
+{
+  char token[16];
+  int msg_num = 0;
+  
+  /* Determine constellation type from sentence ID */
+  GNSS_SatelliteInfo_t *sat_array = NULL;
+  uint8_t *sat_count = NULL;
+  uint8_t max_sats = GNSS_MAX_SATS_PER_CONSTELLATION;
+  
+  if (strncmp(sentence, "$GPGSV", 6) == 0)
+  {
+    sat_array = hgnss->extended.gps_sats;
+    sat_count = &hgnss->extended.gps_count;
+  }
+  else if (strncmp(sentence, "$GLGSV", 6) == 0)
+  {
+    sat_array = hgnss->extended.glonass_sats;
+    sat_count = &hgnss->extended.glonass_count;
+  }
+  else if (strncmp(sentence, "$BDGSV", 6) == 0)
+  {
+    sat_array = hgnss->extended.beidou_sats;
+    sat_count = &hgnss->extended.beidou_count;
+  }
+  else
+  {
+    /* GNGSV or unknown - update total count only */
+    if (GNSS_GetToken(sentence, 3, token, sizeof(token)))
+    {
+      if (strlen(token) > 0)
+        hgnss->data.satellites_in_view = atoi(token);
+    }
+    return 0;
+  }
+  
+  /* Get message number (field 2) - if it's message 1, reset the count */
+  if (GNSS_GetToken(sentence, 2, token, sizeof(token)))
+  {
+    if (strlen(token) > 0)
+      msg_num = atoi(token);
+  }
+  
+  if (msg_num == 1)
+  {
+    *sat_count = 0;  /* Reset count for new GSV sequence */
+  }
+  
+  /* Field 3 is total satellites in view */
+  if (GNSS_GetToken(sentence, 3, token, sizeof(token)))
+  {
+    if (strlen(token) > 0)
+      hgnss->data.satellites_in_view = atoi(token);
+  }
+  
+  /* Parse up to 4 satellites per GSV message (fields 4-19) */
+  for (int sat_idx = 0; sat_idx < 4; sat_idx++)
+  {
+    int base_field = 4 + (sat_idx * 4);  /* Each satellite has 4 fields */
+    
+    /* Check if we have room in the array */
+    if (*sat_count >= max_sats)
+      break;
+    
+    /* Field: PRN */
+    if (!GNSS_GetToken(sentence, base_field, token, sizeof(token)))
+      break;
+    if (strlen(token) == 0)
+      break;  /* No more satellites in this message */
+      
+    uint8_t prn = atoi(token);
+    if (prn == 0)
+      break;
+    
+    /* Store satellite info */
+    sat_array[*sat_count].prn = prn;
+    
+    /* Field: Elevation */
+    if (GNSS_GetToken(sentence, base_field + 1, token, sizeof(token)) && strlen(token) > 0)
+      sat_array[*sat_count].elevation = atoi(token);
+    else
+      sat_array[*sat_count].elevation = 0;
+    
+    /* Field: Azimuth */
+    if (GNSS_GetToken(sentence, base_field + 2, token, sizeof(token)) && strlen(token) > 0)
+      sat_array[*sat_count].azimuth = atoi(token);
+    else
+      sat_array[*sat_count].azimuth = 0;
+    
+    /* Field: SNR */
+    if (GNSS_GetToken(sentence, base_field + 3, token, sizeof(token)) && strlen(token) > 0)
+      sat_array[*sat_count].snr = atoi(token);
+    else
+      sat_array[*sat_count].snr = 0;
+    
+    (*sat_count)++;
+  }
+  
+  return 0;
+}
+
+/**
+  * @brief  Parse VTG NMEA sentence (track and ground speed)
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @param  sentence: VTG sentence
+  * @retval 0 on success, -1 on error
+  * @note   VTG format: $GPVTG,<track_true>,T,<track_mag>,M,<speed_knots>,N,<speed_kmh>,K,<mode>
+  */
+static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence)
+{
+  char token[16];
+  
+  /* Field 1: Track made good (true north) */
+  if (GNSS_GetToken(sentence, 1, token, sizeof(token)) && strlen(token) > 0)
+  {
+    hgnss->extended.track_true = atof(token);
+  }
+  
+  /* Field 3: Track made good (magnetic north) */
+  if (GNSS_GetToken(sentence, 3, token, sizeof(token)) && strlen(token) > 0)
+  {
+    hgnss->extended.track_magnetic = atof(token);
+  }
+  
+  /* Field 7: Ground speed (km/h) - more accurate than RMC */
+  if (GNSS_GetToken(sentence, 7, token, sizeof(token)) && strlen(token) > 0)
+  {
+    hgnss->extended.ground_speed_kmh = atof(token);
+  }
+  
+  return 0;
+}
+
+/**
+  * @brief  Calculate vertical speed from altitude changes
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @retval None
+  * @note   Must be called after altitude update (from GGA)
+  */
+static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss)
+{
+  if (hgnss == NULL)
+    return;
+  
+  uint32_t current_time = HAL_GetTick();
+  float current_altitude = hgnss->data.altitude;
+  
+  /* Need at least one previous reading to calculate speed */
+  if (hgnss->extended.has_prev_altitude)
+  {
+    /* Calculate time delta in seconds */
+    float time_delta_s = (current_time - hgnss->extended.prev_timestamp) / 1000.0f;
+    
+    /* Minimum time delta to avoid division by zero */
+    if (time_delta_s > 0.1f)  /* At least 100ms between readings */
+    {
+      /* Calculate vertical speed in m/s */
+      float altitude_change = current_altitude - hgnss->extended.prev_altitude;
+      hgnss->extended.vertical_speed_ms = altitude_change / time_delta_s;
+      
+      /* Calculate 3D speed (pythagorean theorem) */
+      /* Convert ground speed from km/h to m/s for calculation */
+      float ground_speed_ms = hgnss->extended.ground_speed_kmh / 3.6f;
+      
+      /* 3D speed = sqrt(horizontal^2 + vertical^2) */
+      float speed_3d_ms = sqrtf((ground_speed_ms * ground_speed_ms) + 
+                                (hgnss->extended.vertical_speed_ms * hgnss->extended.vertical_speed_ms));
+      
+      /* Convert back to km/h */
+      hgnss->extended.speed_3d_kmh = speed_3d_ms * 3.6f;
+    }
+  }
+  
+  /* Store current values for next calculation */
+  hgnss->extended.prev_altitude = current_altitude;
+  hgnss->extended.prev_timestamp = current_time;
+  hgnss->extended.has_prev_altitude = true;
 }
 
 /**
@@ -820,33 +1019,57 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
 }
 
 /**
-  * @brief  Parse GSV NMEA sentence (satellites in view)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: GSV sentence
-  * @retval 0 on success, -1 on error
-  * @note   GSV format: $GPGSV,<num_msg>,<msg_num>,<sats_in_view>,...
-  */
-static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
-  char token[16];
-  /* Field 3 is Sats in View in GSV */
-  if (GNSS_GetToken(sentence, 3, token, sizeof(token)))
-  {
-     if (strlen(token) > 0)
-     {
-        hgnss->data.satellites_in_view = atoi(token);
-        // Disabled to prevent RTT buffer overflow
-        // SEGGER_RTT_printf(0, "[GSV] Satellites in view: %d\r\n", hgnss->data.satellites_in_view);
-     }
-  }
-  return 0;
-}
-
-/**
   * @brief  Verify NMEA checksum
   * @param  sentence: NMEA sentence with checksum
   * @retval true if valid, false otherwise
   */
+static bool GNSS_VerifyChecksum(const char *sentence)
+{
+  const char *checksum_ptr = strchr(sentence, '*');
+
+  /* No checksum present - assume valid */
+  if (checksum_ptr == NULL)
+  {
+    return true;
+  }
+
+  /* Calculate checksum */
+  uint8_t calculated = GNSS_CalculateChecksum(sentence);
+
+  /* Extract checksum from sentence - manual hex parsing for reliability */
+  const char *hex_str = checksum_ptr + 1;
+  
+  /* Need at least 2 hex digits */
+  if (hex_str[0] == '\0' || hex_str[1] == '\0')
+  {
+    return false;
+  }
+  
+  /* Parse first hex digit */
+  uint8_t provided = 0;
+  char c1 = hex_str[0];
+  if (c1 >= '0' && c1 <= '9')
+    provided = (c1 - '0') << 4;
+  else if (c1 >= 'A' && c1 <= 'F')
+    provided = (c1 - 'A' + 10) << 4;
+  else if (c1 >= 'a' && c1 <= 'f')
+    provided = (c1 - 'a' + 10) << 4;
+  else
+    return false; /* Invalid hex character */
+  
+  /* Parse second hex digit */
+  char c2 = hex_str[1];
+  if (c2 >= '0' && c2 <= '9')
+    provided |= (c2 - '0');
+  else if (c2 >= 'A' && c2 <= 'F')
+    provided |= (c2 - 'A' + 10);
+  else if (c2 >= 'a' && c2 <= 'f')
+    provided |= (c2 - 'a' + 10);
+  else
+    return false; /* Invalid hex character */
+
+  return (calculated == provided);
+}
 /**
   * @brief  Enter GPS standby mode (low power ~15µA)
   * @param  hgnss: Pointer to GNSS handle structure
@@ -1035,52 +1258,4 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   SEGGER_RTT_WriteString(0, "[GPS WAKE] Complete - UART/DMA ready for GPS transmission\r\n");
   
   return GNSS_OK;
-}
-
-static bool GNSS_VerifyChecksum(const char *sentence)
-{
-  const char *checksum_ptr = strchr(sentence, '*');
-
-  /* No checksum present - assume valid */
-  if (checksum_ptr == NULL)
-  {
-    return true;
-  }
-
-  /* Calculate checksum */
-  uint8_t calculated = GNSS_CalculateChecksum(sentence);
-
-  /* Extract checksum from sentence - manual hex parsing for reliability */
-  const char *hex_str = checksum_ptr + 1;
-  
-  /* Need at least 2 hex digits */
-  if (hex_str[0] == '\0' || hex_str[1] == '\0')
-  {
-    return false;
-  }
-  
-  /* Parse first hex digit */
-  uint8_t provided = 0;
-  char c1 = hex_str[0];
-  if (c1 >= '0' && c1 <= '9')
-    provided = (c1 - '0') << 4;
-  else if (c1 >= 'A' && c1 <= 'F')
-    provided = (c1 - 'A' + 10) << 4;
-  else if (c1 >= 'a' && c1 <= 'f')
-    provided = (c1 - 'a' + 10) << 4;
-  else
-    return false; /* Invalid hex character */
-  
-  /* Parse second hex digit */
-  char c2 = hex_str[1];
-  if (c2 >= '0' && c2 <= '9')
-    provided |= (c2 - '0');
-  else if (c2 >= 'A' && c2 <= 'F')
-    provided |= (c2 - 'A' + 10);
-  else if (c2 >= 'a' && c2 <= 'f')
-    provided |= (c2 - 'a' + 10);
-  else
-    return false; /* Invalid hex character */
-
-  return (calculated == provided);
 }
