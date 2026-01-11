@@ -199,11 +199,17 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   /* Read regulator voltage (VDDA/3.3V rail) from internal reference */
   sensor_data->regulator_voltage = SYS_GetBatteryLevel() / 1000.0f;  /* Convert mV to V */
   
+  /* Read solar panel voltage from ADC (PB3, no voltage divider) */
+  sensor_data->solar_voltage = SYS_GetSolarVoltage() / 1000.0f;  /* Convert mV to V */
+  
   int batt_mv = SYS_GetBatteryVoltage();
   int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
+  int solar_mv = SYS_GetSolarVoltage();
   SEGGER_RTT_printf(0, "Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
                     vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
+  SEGGER_RTT_printf(0, "Solar: %d.%02d V (%d mV)\r\n", 
+                    solar_mv / 1000, (solar_mv % 1000) / 10, solar_mv);
   
  
   /* Use real GNSS data if available from hgnss (populated by SendTxData's GPS collection)

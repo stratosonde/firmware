@@ -97,6 +97,13 @@ uint16_t SYS_GetBatteryLevel(void);
   * @return value battery voltage in mV
   */
 uint16_t SYS_GetBatteryVoltage(void);
+
+/**
+  * @brief Get the solar panel voltage from PB3 (ADC_CHANNEL_2)
+  * @note  PB3 has no voltage divider, no scaling applied
+  * @return value solar panel voltage in mV
+  */
+uint16_t SYS_GetSolarVoltage(void);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

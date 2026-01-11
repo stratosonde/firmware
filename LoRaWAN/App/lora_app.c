@@ -573,6 +573,19 @@ static void SendTxData(void)
     return; /* Exit - will send data after join succeeds */
   }
   
+  /* Low battery protection - check voltage before any power-intensive operations */
+  uint16_t battery_mv = SYS_GetBatteryVoltage();
+  
+  if (battery_mv < 3500)  /* 3.5V threshold - gives safety margin above 3.3V minimum */
+  {
+    char low_batt_msg[80];
+    snprintf(low_batt_msg, sizeof(low_batt_msg), 
+             "LOW BATTERY: %d mV (< 3500 mV) - skipping cycle to allow charging\r\n", 
+             battery_mv);
+    SEGGER_RTT_WriteString(0, low_batt_msg);
+    return;  /* Skip this cycle - timer will restart normally, auto-recovers when voltage rises */
+  }
+  
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
   /* ========== GPS HOT-START MODE ENABLED ========== */
@@ -607,7 +620,7 @@ static void SendTxData(void)
    * With Vbat backup and PMTK161 standby, we get instant fixes
    * 60s timeout allows for occasional warm/cold starts if needed
    */
-  #define GNSS_COLLECTION_TIME_MS  300000  /* 60 seconds - reduced for testing */
+  #define GNSS_COLLECTION_TIME_MS  60000  /* 60 seconds timeout for GPS fix */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Last known GPS position storage (persistent across transmission cycles) */
@@ -845,9 +858,12 @@ static void SendTxData(void)
   
   // Add battery voltage on channel 6 (in volts)
   CayenneLppAddAnalogInput(6, sensor_data.battery_voltage);
-  
+
   // Add regulator voltage (3.3V rail) on channel 7 (in volts)
   CayenneLppAddAnalogInput(7, sensor_data.regulator_voltage);
+
+  // Add solar panel voltage on channel 10 (in volts)
+  CayenneLppAddAnalogInput(10, sensor_data.solar_voltage);
   
   // Add GNSS HDOP on channel 8 (Horizontal Dilution of Precision)
   CayenneLppAddAnalogInput(8, sensor_data.gnss_hdop);

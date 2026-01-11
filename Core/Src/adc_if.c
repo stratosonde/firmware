@@ -202,6 +202,34 @@ uint16_t SYS_GetBatteryVoltage(void)
 
   return batteryVoltagemV;
 }
+
+/**
+  * @brief Get the solar panel voltage from PB3 (ADC_CHANNEL_2)
+  * @note  PB3 has no voltage divider, no scaling applied
+  * @return value solar panel voltage in mV
+  */
+uint16_t SYS_GetSolarVoltage(void)
+{
+  uint16_t solarVoltagemV = 0;
+  uint32_t measuredLevel = 0;
+
+  /* Read ADC channel 2 (PB3) with no voltage divider */
+  measuredLevel = ADC_ReadChannels(ADC_CHANNEL_2);
+
+  if (measuredLevel == 0)
+  {
+    solarVoltagemV = 0;
+  }
+  else
+  {
+    /* Convert ADC value to voltage in mV
+       ADC is 12-bit (0-4095), VDDA = 3300 mV
+       No voltage divider, so no scaling needed */
+    solarVoltagemV = (measuredLevel * 3300 / 4096);
+  }
+
+  return solarVoltagemV;
+}
 /* USER CODE END PrFD */
 
 static uint32_t ADC_ReadChannels(uint32_t channel)
