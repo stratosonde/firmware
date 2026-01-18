@@ -165,8 +165,9 @@ typedef struct
 #define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // GGA + RMC + GSV + VTG
 #define GNSS_CMD_HIGH_ALT_MODE   "$PCAS04,5*1C\r\n"                // High altitude mode (CRITICAL!)
 #define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2B\r\n"             // 1 Hz update rate
-#define GNSS_CMD_SATELLITE_SYS   "$PCAS06,1,0,1,0*67\r\n"          // GPS + BeiDou
+#define GNSS_CMD_SATELLITE_SYS   "$PCAS04,7*1A\r\n"                // GPS + BeiDou + GLONASS (all constellations)
 #define GNSS_CMD_FIX_MODE        "$PCAS11,2*1E\r\n"                // Auto 2D/3D fix
+#define GNSS_CMD_SAVE_CONFIG     "$PCAS00*01\r\n"                  // Save configuration to flash
 
 /*  ATGM336H Power Management Commands - CASIC Protocol */
 #define GNSS_CMD_STANDBY         "$PCAS12,0*1C\r\n"               // Enter standby mode (~15µA), timeout=0 for permanent standby

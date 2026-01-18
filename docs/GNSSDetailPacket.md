@@ -5,12 +5,17 @@ The GNSS Detail packet provides comprehensive satellite tracking and 3D speed te
 
 ## Packet Structure
 
-### Header (3 bytes)
+### Version History
+- **v1**: 3-byte header with combined GLONASS + BeiDou count (deprecated)
+- **v2**: 4-byte header with separate constellation counts (current)
+
+### Header (4 bytes) - Version 2
 | Byte | Field | Type | Description |
 |------|-------|------|-------------|
-| 0 | Version | uint8 | Packet format version (currently 0x01) |
+| 0 | Version | uint8 | Packet format version (0x02 for v2) |
 | 1 | GPS Count | uint8 | Number of GPS satellites |
-| 2 | Other Count | uint8 | Combined GLONASS + BeiDou satellite count |
+| 2 | GLONASS Count | uint8 | Number of GLONASS satellites |
+| 3 | BeiDou Count | uint8 | Number of BeiDou satellites |
 
 ### GPS Satellites (variable length)
 For each GPS satellite (count from byte 1):
@@ -54,6 +59,7 @@ For each BeiDou satellite:
 def decode_gnss_detail(payload):
     """
     Decode GNSS detail packet from LoRaWAN Port 3
+    Supports both v1 (3-byte header) and v2 (4-byte header) formats
     
     Args:
         payload: bytes object containing the packet
@@ -67,13 +73,28 @@ def decode_gnss_detail(payload):
     idx = 0
     result = {}
     
-    # Header
+    # Header - check version to determine format
     result['version'] = payload[idx]
     idx += 1
-    result['gps_count'] = payload[idx]
-    idx += 1
-    result['other_count'] = payload[idx]
-    idx += 1
+    
+    if result['version'] == 0x02:
+        # V2 format: separate constellation counts
+        if len(payload) < 4:
+            return None
+        result['gps_count'] = payload[idx]
+        idx += 1
+        result['glonass_count'] = payload[idx]
+        idx += 1
+        result['beidou_count'] = payload[idx]
+        idx += 1
+    else:
+        # V1 format (legacy): combined GLONASS+BeiDou count
+        result['gps_count'] = payload[idx]
+        idx += 1
+        result['other_count'] = payload[idx]
+        idx += 1
+        result['glonass_count'] = 0  # Will be counted during parsing
+        result['beidou_count'] = 0
     
     # GPS satellites
     result['gps_satellites'] = []
@@ -89,36 +110,62 @@ def decode_gnss_detail(payload):
     
     # GLONASS satellites
     result['glonass_satellites'] = []
-    glonass_count = 0
-    while idx + 2 <= len(payload):
-        prn = payload[idx]
-        if prn < 65 or prn > 96:
-            break  # Not GLONASS PRN
-        sat = {
-            'prn': prn,
-            'snr': payload[idx + 1]
-        }
-        result['glonass_satellites'].append(sat)
-        glonass_count += 1
-        idx += 2
-        if glonass_count >= result['other_count']:
-            break
+    if result['version'] == 0x02:
+        # V2: use explicit count
+        for i in range(result['glonass_count']):
+            if idx + 2 > len(payload):
+                break
+            sat = {
+                'prn': payload[idx],
+                'snr': payload[idx + 1]
+            }
+            result['glonass_satellites'].append(sat)
+            idx += 2
+    else:
+        # V1: detect by PRN range
+        glonass_parsed = 0
+        while idx + 2 <= len(payload) and glonass_parsed < result.get('other_count', 0):
+            prn = payload[idx]
+            if prn < 65 or prn > 96:
+                break  # Not GLONASS PRN
+            sat = {
+                'prn': prn,
+                'snr': payload[idx + 1]
+            }
+            result['glonass_satellites'].append(sat)
+            glonass_parsed += 1
+            idx += 2
+        result['glonass_count'] = glonass_parsed
     
     # BeiDou satellites
     result['beidou_satellites'] = []
-    beidou_count = 0
-    remaining = result['other_count'] - glonass_count
-    while idx + 2 <= len(payload) and beidou_count < remaining:
-        prn = payload[idx]
-        if prn < 201:
-            break  # Not BeiDou PRN
-        sat = {
-            'prn': prn,
-            'snr': payload[idx + 1]
-        }
-        result['beido u_satellites'].append(sat)
-        beidou_count += 1
-        idx += 2
+    if result['version'] == 0x02:
+        # V2: use explicit count
+        for i in range(result['beidou_count']):
+            if idx + 2 > len(payload):
+                break
+            sat = {
+                'prn': payload[idx],
+                'snr': payload[idx + 1]
+            }
+            result['beidou_satellites'].append(sat)
+            idx += 2
+    else:
+        # V1: detect by PRN range
+        beidou_parsed = 0
+        remaining = result.get('other_count', 0) - result['glonass_count']
+        while idx + 2 <= len(payload) and beidou_parsed < remaining:
+            prn = payload[idx]
+            if prn < 201:
+                break  # Not BeiDou PRN
+            sat = {
+                'prn': prn,
+                'snr': payload[idx + 1]
+            }
+            result['beidou_satellites'].append(sat)
+            beidou_parsed += 1
+            idx += 2
+        result['beidou_count'] = beidou_parsed
     
     # Speed data
     if idx + 12 <= len(payload):
@@ -147,15 +194,18 @@ def decode_gnss_detail(payload):
 
 # Example usage
 if __name__ == "__main__":
-    # Example packet: 3 GPS sats, 2 BeiDou sats, with speed data
-    example = bytes([
-        0x01,           # Version
+    # Example packet V2: 3 GPS sats, 1 GLONASS, 2 BeiDou sats, with speed data
+    example_v2 = bytes([
+        0x02,           # Version 2
         0x03,           # 3 GPS satellites
-        0x02,           # 2 other (BeiDou)
+        0x01,           # 1 GLONASS satellite
+        0x02,           # 2 BeiDou satellites
         # GPS sats
         0x0F, 0x28,     # PRN 15, SNR 40 dBHz
         0x0A, 0x2D,     # PRN 10, SNR 45 dBHz
         0x17, 0x25,     # PRN 23, SNR 37 dBHz
+        # GLONASS sat
+        0x41, 0x26,     # PRN 65, SNR 38 dBHz
         # BeiDou sats
         0xC9, 0x22,     # PRN 201, SNR 34 dBHz
         0xCA, 0x20,     # PRN 202, SNR 32 dBHz
@@ -167,13 +217,17 @@ if __name__ == "__main__":
         0x00, 0x78,     # HDOP: 1.20
         # Fix metadata
         0x01,           # GPS fix
-        0x05            # 5 satellites used
+        0x06            # 6 satellites used
     ])
     
-    decoded = decode_gnss_detail(example)
-    print("Decoded GNSS Detail:")
+    decoded = decode_gnss_detail(example_v2)
+    print("Decoded GNSS Detail (V2):")
+    print(f"  Version: {decoded['version']}")
     print(f"  GPS satellites: {len(decoded['gps_satellites'])}")
     for sat in decoded['gps_satellites']:
+        print(f"    PRN {sat['prn']}: SNR {sat['snr']} dBHz")
+    print(f"  GLONASS satellites: {len(decoded['glonass_satellites'])}")
+    for sat in decoded['glonass_satellites']:
         print(f"    PRN {sat['prn']}: SNR {sat['snr']} dBHz")
     print(f"  BeiDou satellites: {len(decoded['beidou_satellites'])}")
     for sat in decoded['beidou_satellites']:

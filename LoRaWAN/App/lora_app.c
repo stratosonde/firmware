@@ -42,6 +42,7 @@
 #include "atgm336h.h"
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
+#include "timer_if.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -267,7 +268,7 @@ static ActivationType_t ActivationType = LORAWAN_DEFAULT_ACTIVATION_TYPE;
   * @brief LoRaWAN force rejoin even if the NVM context is restored
   */
 // ForceRejoin: Uncomment to force rejoin on boot (useful for testing or network changes)
-// static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
+static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
 
 /**
   * @brief LoRaWAN handler Callbacks
@@ -402,12 +403,24 @@ void LoRaWAN_Init(void)
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
   
-  /* DISABLED: Force rejoin - contexts will be preserved across reboots */
-  // SEGGER_RTT_WriteString(0, "\r\n*** FORCING REJOIN - Clearing all saved contexts ***\r\n");
-  // MultiRegion_ClearAllContexts();
-  // SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform OTAA join ***\r\n\r\n");
+  /* Check ForceRejoin flag - if true, clear all saved contexts */
+  if (ForceRejoin) {
+    SEGGER_RTT_WriteString(0, "\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
+    MultiRegion_ClearAllContexts();
+    SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
+  }
+  
+  /* DISABLED: GPS Reconfiguration - runs during recommissioning only */
+  SEGGER_RTT_WriteString(0, "*** Reconfiguring GPS module (all constellations) ***\r\n");
+  GNSS_PowerOn(&hgnss);
+  HAL_Delay(1000);  // Let GPS boot
+  GNSS_Configure(&hgnss);  // Sends PCAS04,7 (GPS+BeiDou+GLONASS) + PCAS00 (save)
+  HAL_Delay(500);   // Let GPS save to flash
+  GNSS_PowerOff(&hgnss);
+  SEGGER_RTT_WriteString(0, "*** GPS reconfigured and saved to flash ***\r\n\r\n");
   
   /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
+  /* Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path */
   if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
     
     /* Already provisioned - use saved ABP context from flash */
@@ -489,10 +502,11 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
   if (buffer == NULL || max_size < 20)
     return 0;
   
-  /* Header (3 bytes) */
-  buffer[idx++] = 0x01;  // Packet version
+  /* Header (4 bytes) - Version 2 format separates constellation counts */
+  buffer[idx++] = 0x02;  // Packet version (v2 - separate constellation counts)
   buffer[idx++] = hgnss.extended.gps_count;
-  buffer[idx++] = hgnss.extended.glonass_count + hgnss.extended.beidou_count;  // Combined other constellations
+  buffer[idx++] = hgnss.extended.glonass_count;
+  buffer[idx++] = hgnss.extended.beidou_count;
   
   /* GPS satellites (PRN + SNR for each) */
   for (int i = 0; i < hgnss.extended.gps_count && idx < (max_size - 2); i++)
@@ -553,6 +567,271 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
   return idx;
 }
 
+/* ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ========== */
+
+/**
+ * @brief Normalize battery voltage to 25°C equivalent using empirical data
+ * @param measured_mv Raw battery voltage measurement in millivolts
+ * @param temp_c Battery temperature in Celsius
+ * @return Normalized voltage in mV (what battery would read at 25°C)
+ * @note Based on empirical Vmax data from -65°C to +25°C testing
+ */
+static uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c) {
+    // No compensation needed at or above room temperature
+    if (temp_c >= 25.0f) {
+        return measured_mv;
+    }
+    
+    // Lookup table from empirical data (Vmax column - no load voltage)
+    // Compensation values bring voltage back to 5500mV (fully charged at 25°C)
+    typedef struct {
+        int8_t temp;
+        int16_t compensation_mv;  // mV to add to measured voltage
+    } TempCompPoint_t;
+    
+    static const TempCompPoint_t comp_table[] = {
+        {25,  0},      // 5500 + 0 = 5500mV (reference)
+        {0,   200},    // Approximate for 0°C to 25°C range
+        {-10, 350},    // Approximate
+        {-20, 500},    // Approximate
+        {-30, 600},    // Approximate
+        {-40, 700},    // Approximate  
+        {-50, 400},    // Approximate
+        {-55, 430},    // 5070 + 430 = 5500
+        {-56, 660},    // 4840 + 660 = 5500
+        {-57, 690},    // 4810 + 690 = 5500
+        {-58, 700},    // 4800 + 700 = 5500
+        {-59, 730},    // 4770 + 730 = 5500
+        {-60, 800},    // 4700 + 800 = 5500
+        {-61, 950},    // 4550 + 950 = 5500
+        {-62, 1100},   // 4400 + 1100 = 5500
+        {-63, 1400},   // 4100 + 1400 = 5500
+        {-64, 1690},   // 3810 + 1690 = 5500
+        {-65, 2170},   // 3330 + 2170 = 5500 (massive drop!)
+        {-66, 2700},   // 2800 + 2700 = 5500 (non-operational)
+    };
+    
+    const int table_size = sizeof(comp_table) / sizeof(comp_table[0]);
+    
+    // Find bracketing points for linear interpolation
+    for (int i = 0; i < table_size - 1; i++) {
+        if (temp_c >= comp_table[i+1].temp && temp_c <= comp_table[i].temp) {
+            // Linear interpolation between two points
+            float temp_range = (float)(comp_table[i].temp - comp_table[i+1].temp);
+            float temp_fraction = (temp_c - comp_table[i+1].temp) / temp_range;
+            int16_t comp_range = comp_table[i].compensation_mv - comp_table[i+1].compensation_mv;
+            int16_t compensation = comp_table[i+1].compensation_mv + 
+                                 (int16_t)(temp_fraction * comp_range);
+            
+            return measured_mv + compensation;
+        }
+    }
+    
+    // Below -66°C: use maximum compensation (battery non-functional anyway)
+    return measured_mv + 2700;
+}
+
+/**
+ * @brief Calculate voltage slope using 2-hour baseline tracking
+ * @param slope Pointer to voltage slope tracking structure
+ * @param battery_mv Current battery voltage in millivolts (MUST be temperature-normalized)
+ * @param now_timestamp Current timestamp in seconds
+ * @return Voltage slope in mV/hour (positive=charging, negative=discharging)
+ */
+static int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32_t now_timestamp) {
+    // First sample? Initialize baseline and current
+    if (slope->baseline_timestamp == 0) {
+        slope->baseline_voltage_mv = battery_mv;
+        slope->baseline_timestamp = now_timestamp;
+        slope->current_voltage_mv = battery_mv;
+        slope->current_timestamp = now_timestamp;
+        return 0;  // No slope yet (same value)
+    }
+    
+    // Update current values
+    slope->current_voltage_mv = battery_mv;
+    slope->current_timestamp = now_timestamp;
+    
+    // Calculate time difference
+    uint32_t time_change_sec = slope->current_timestamp - slope->baseline_timestamp;
+    
+    if (time_change_sec == 0) return 0;
+    
+    // Calculate voltage change
+    int32_t voltage_change = slope->current_voltage_mv - slope->baseline_voltage_mv;
+    
+    // Convert to mV/hour
+    int16_t slope_mv_per_hour = (int16_t)((voltage_change * 3600) / time_change_sec);
+    
+    // Every 2 hours (7200 seconds), shift baseline forward
+    if (time_change_sec >= 7200) {
+        slope->baseline_voltage_mv = slope->current_voltage_mv;
+        slope->baseline_timestamp = slope->current_timestamp;
+    }
+    
+    return slope_mv_per_hour;
+}
+
+/**
+ * @brief Predict time to reach target voltage based on current slope
+ * @param current_voltage_mv Current battery voltage
+ * @param slope_mv_per_hour Voltage change rate (+charging, -discharging)
+ * @param target_voltage_mv Target voltage to reach
+ * @return Hours to target, or 0xFFFF if moving away from target or stable
+ */
+static uint16_t PredictTimeToVoltage(uint16_t current_voltage_mv,
+                                      int16_t slope_mv_per_hour,
+                                      uint16_t target_voltage_mv) {
+    
+    int32_t voltage_delta = target_voltage_mv - current_voltage_mv;
+    
+    // Stable voltage - never reaches target
+    if (slope_mv_per_hour == 0) {
+        return 0xFFFF;
+    }
+    
+    // Check if moving toward or away from target
+    if ((voltage_delta > 0 && slope_mv_per_hour < 0) ||  // Target higher but discharging
+        (voltage_delta < 0 && slope_mv_per_hour > 0)) {  // Target lower but charging
+        return 0xFFFF;  // Moving away from target
+    }
+    
+    // Already at or past target
+    if (voltage_delta == 0 || 
+        (voltage_delta > 0 && current_voltage_mv >= target_voltage_mv) ||
+        (voltage_delta < 0 && current_voltage_mv <= target_voltage_mv)) {
+        return 0;
+    }
+    
+    // Calculate time: |voltage_delta| / |slope|
+    int32_t hours_to_target = abs(voltage_delta) / abs(slope_mv_per_hour);
+    
+    // Clamp to reasonable range
+    if (hours_to_target > 9999) {
+        hours_to_target = 9999;
+    }
+    
+    return (uint16_t)hours_to_target;
+}
+
+/**
+ * @brief Select operating mode using real-time voltage analysis
+ * @param current_slope Current voltage slope in mV/hour
+ * @param current_voltage Current battery voltage in mV
+ * @param time_to_critical Hours until critical voltage (0xFFFF if charging)
+ * @return Recommended operating mode
+ */
+static OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
+                                                   uint16_t current_voltage,
+                                                   uint16_t time_to_critical) {
+    
+    // EMERGENCY: Depleting fast and will hit critical soon
+    if (current_slope < -30 && time_to_critical != 0xFFFF && time_to_critical < 6) {
+        SEGGER_RTT_WriteString(0, "PREDICT: Critical in <6h -> SURVIVAL\r\n");
+        return MODE_SURVIVAL;
+    }
+    
+    // WARNING: Moderate depletion with limited time
+    if (current_slope < -15 && time_to_critical != 0xFFFF && time_to_critical < 12) {
+        SEGGER_RTT_WriteString(0, "PREDICT: Critical in <12h -> RECOVERY\r\n");
+        return MODE_RECOVERY;
+    }
+    
+    // CAUTION: Slow depletion
+    if (current_slope < -5) {
+        SEGGER_RTT_WriteString(0, "PREDICT: Slow depletion -> REDUCED\r\n");
+        return MODE_REDUCED;
+    }
+    
+    // CHARGING: Good charging rate
+    if (current_slope > 20) {
+        SEGGER_RTT_WriteString(0, "PREDICT: Fast charging -> NORMAL\r\n");
+        return MODE_NORMAL;
+    }
+    
+    // STABLE/SLIGHT CHARGE: Gentle charging or stable
+    if (current_slope > 0) {
+        SEGGER_RTT_WriteString(0, "PREDICT: Stable/charging -> CONSERVATIVE\r\n");
+        return MODE_CONSERVATIVE;
+    }
+    
+    // VOLTAGE-BASED OVERRIDE: Emergency low voltage (LTO threshold)
+    if (current_voltage < 4300) {
+        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V (LTO critical) -> SURVIVAL\r\n");
+        return MODE_SURVIVAL;
+    }
+    
+    // DEFAULT: Conservative
+    return MODE_CONSERVATIVE;
+}
+
+/**
+ * @brief Get mode name string for logging
+ * @param mode Operating mode enum
+ * @return String name of mode
+ */
+static const char* GetModeName(OperatingMode_t mode) {
+    switch(mode) {
+        case MODE_NORMAL: return "NORMAL";
+        case MODE_CONSERVATIVE: return "CONSERVATIVE";
+        case MODE_REDUCED: return "REDUCED";
+        case MODE_RECOVERY: return "RECOVERY";
+        case MODE_SURVIVAL: return "SURVIVAL";
+        default: return "UNKNOWN";
+    }
+}
+
+/**
+ * @brief Apply operating mode configuration
+ * @param mode Operating mode to apply
+ * @param gps_enabled Output parameter for GPS enable state
+ * @param gps_timeout_ms Output parameter for GPS timeout
+ * @return New transmission interval in milliseconds
+ */
+static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint32_t *gps_timeout_ms) {
+    uint32_t interval_ms;
+    
+    switch(mode) {
+        case MODE_NORMAL:
+            interval_ms = 300000;      // 5 minutes
+            *gps_enabled = true;
+            *gps_timeout_ms = 60000;   // 60 seconds
+            break;
+            
+        case MODE_CONSERVATIVE:
+            interval_ms = 600000;      // 10 minutes
+            *gps_enabled = true;
+            *gps_timeout_ms = 60000;   // 60 seconds - allows for occasional cold starts
+            break;
+            
+        case MODE_REDUCED:
+            interval_ms = 900000;      // 15 minutes
+            *gps_enabled = false;
+            *gps_timeout_ms = 0;
+            break;
+            
+        case MODE_RECOVERY:
+            interval_ms = 1800000;     // 30 minutes
+            *gps_enabled = false;
+            *gps_timeout_ms = 0;
+            break;
+            
+        case MODE_SURVIVAL:
+            interval_ms = 3600000;     // 60 minutes
+            *gps_enabled = false;
+            *gps_timeout_ms = 0;
+            break;
+            
+        default:
+            interval_ms = 600000;      // 10 minutes (safe default)
+            *gps_enabled = true;
+            *gps_timeout_ms = 30000;
+            break;
+    }
+    
+    return interval_ms;
+}
+
 /* USER CODE END PrFD */
 
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
@@ -565,25 +844,94 @@ static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
   
+  /* ========== SIMPLIFIED POWER MANAGEMENT WITH TEMPERATURE COMPENSATION ========== */
+  static VoltageSlope_t voltage_slope = {0};
+  static OperatingMode_t current_mode = MODE_CONSERVATIVE;
+  static bool gps_enabled_by_power_mgmt = true;
+  static uint32_t gps_timeout_ms = 60000;
+  
+  // Read current sensor data for temperature
+  sensor_t sensor_data;
+  EnvSensors_Read(&sensor_data);
+  float temperature_c = sensor_data.temperature;
+  
+  // Read raw voltages
+  uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
+  uint16_t solar_mv = SYS_GetSolarVoltage();
+  
+  // Temperature compensation: normalize battery voltage to 25°C equivalent
+  uint16_t battery_mv_normalized = NormalizeBatteryVoltage(battery_mv_raw, temperature_c);
+  
+  // Use RTC-based time that continues during STOP2 sleep
+  uint16_t ms_unused;
+  uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
+  
+  // Calculate real-time slope using NORMALIZED voltage (temperature-compensated)
+  int16_t slope_mv_per_hour = CalculateVoltageSlope(&voltage_slope, battery_mv_normalized, now_timestamp);
+  
+  // Predict time to targets using NORMALIZED voltage (LTO thresholds: 4.5V critical, 5.5V full)
+  uint16_t time_to_critical = PredictTimeToVoltage(battery_mv_normalized, slope_mv_per_hour, 4500);
+  uint16_t time_to_full = PredictTimeToVoltage(battery_mv_normalized, slope_mv_per_hour, 5500);
+  
+  // Determine signed time to target for telemetry
+  int16_t time_to_target_signed;
+  if (time_to_critical != 0xFFFF) {
+    time_to_target_signed = -(int16_t)time_to_critical;  // Negative = hours to depletion
+  } else if (time_to_full != 0xFFFF) {
+    time_to_target_signed = (int16_t)time_to_full;        // Positive = hours to full charge
+  } else {
+    time_to_target_signed = 0;  // Stable voltage
+  }
+  
+  // GPS temperature lockout check (supercap fails below -55°C)
+  if (temperature_c < GPS_TEMPERATURE_LOCKOUT) {
+    gps_enabled_by_power_mgmt = false;
+    char temp_msg[80];
+    snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %.1f°C < %d°C (supercap inoperative)\r\n",
+             temperature_c, GPS_TEMPERATURE_LOCKOUT);
+    SEGGER_RTT_WriteString(0, temp_msg);
+  }
+  
+  // Real-time mode selection based on voltage slope and battery state
+  OperatingMode_t predicted_mode = SelectModeFromPredictions(slope_mv_per_hour, battery_mv_normalized, time_to_critical);
+  current_mode = predicted_mode;  // Use predicted mode directly (no historical override)
+  
+  // Apply operating mode configuration
+  uint32_t new_interval = ApplyOperatingMode(current_mode, &gps_enabled_by_power_mgmt, &gps_timeout_ms);
+  
+  // Update timer interval if changed
+  UTIL_TIMER_Stop(&TxTimer);
+  UTIL_TIMER_SetPeriod(&TxTimer, new_interval);
+  UTIL_TIMER_Start(&TxTimer);
+  
+  // Log power management status
+  char pm_msg[256];
+  snprintf(pm_msg, sizeof(pm_msg), 
+           "\r\n=== POWER MGMT: Temp=%.1fC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
+           temperature_c, battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
+  SEGGER_RTT_WriteString(0, pm_msg);
+  
+  if (time_to_target_signed < 0) {
+    snprintf(pm_msg, sizeof(pm_msg), "Critical_in=%dh ", abs(time_to_target_signed));
+  } else if (time_to_target_signed > 0) {
+    snprintf(pm_msg, sizeof(pm_msg), "Full_in=%dh ", time_to_target_signed);
+  } else {
+    snprintf(pm_msg, sizeof(pm_msg), "Stable ");
+  }
+  SEGGER_RTT_WriteString(0, pm_msg);
+  
+  snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
+           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
+  SEGGER_RTT_WriteString(0, pm_msg);
+  
+  /* ========== END POWER MANAGEMENT ========== */
+  
   /* Check join status - if not joined, trigger a new join attempt */
   if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
   {
     SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
     LmHandlerJoin(ActivationType, true);
     return; /* Exit - will send data after join succeeds */
-  }
-  
-  /* Low battery protection - check voltage before any power-intensive operations */
-  uint16_t battery_mv = SYS_GetBatteryVoltage();
-  
-  if (battery_mv < 3500)  /* 3.5V threshold - gives safety margin above 3.3V minimum */
-  {
-    char low_batt_msg[80];
-    snprintf(low_batt_msg, sizeof(low_batt_msg), 
-             "LOW BATTERY: %d mV (< 3500 mV) - skipping cycle to allow charging\r\n", 
-             battery_mv);
-    SEGGER_RTT_WriteString(0, low_batt_msg);
-    return;  /* Skip this cycle - timer will restart normally, auto-recovers when voltage rises */
   }
   
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
@@ -593,6 +941,18 @@ static void SendTxData(void)
   /* Between TX cycles: PB5=LOW (standby), UART1 deinitialized, MCU can sleep */
   /* During TX: PB5=HIGH (active), UART1 active, achieves fix in ~1-5 seconds */
   // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
+  
+  /* Declare ttf_ms at function scope so it's available for telemetry */
+  uint32_t ttf_ms = 0;
+  
+  // Check if GPS is disabled by power management
+  if (!gps_enabled_by_power_mgmt) {
+    /* GPS disabled by power management - skip acquisition */
+    SEGGER_RTT_WriteString(0, "GPS disabled by power management - skipping acquisition\r\n");
+    hgnss.data.valid = false;
+    hgnss.data.fix_quality = GNSS_FIX_INVALID;
+    ttf_ms = 0;  // No GPS acquisition performed
+  } else {
   
   #ifdef GPS_DISABLED_FOR_TESTING
   
@@ -608,19 +968,18 @@ static void SendTxData(void)
   hgnss.data.satellites = 8;
   hgnss.data.hdop = 1.2f;
   
-  uint32_t ttf_ms = 0;  /* No actual fix acquired */
+  ttf_ms = 0;  /* No actual fix acquired */
   
   SEGGER_RTT_WriteString(0, "Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
   
   #else
   
-  /* ========== NORMAL GPS COLLECTION (CURRENTLY DISABLED) ========== */
+  /* ========== NORMAL GPS COLLECTION ========== */
   /* Non-blocking GNSS collection - wake from standby, capture fix quickly
    * GPS module in standby provides hot-start: <1s typical, 5s worst case
    * With Vbat backup and PMTK161 standby, we get instant fixes
-   * 60s timeout allows for occasional warm/cold starts if needed
+   * gps_timeout_ms is dynamic (30s or 60s) based on power mode
    */
-  #define GNSS_COLLECTION_TIME_MS  60000  /* 60 seconds timeout for GPS fix */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Last known GPS position storage (persistent across transmission cycles) */
@@ -629,9 +988,9 @@ static void SendTxData(void)
   static float last_valid_alt = 500.0f;
   static bool have_previous_fix = false;
   
-  /* Declare gps_start and ttf_ms at function scope */
+  /* Declare gps_start - ttf_ms already declared above */
   uint32_t gps_start = 0;
-  uint32_t ttf_ms = 0;  /* Time to fix in milliseconds - captured when fix obtained */
+  ttf_ms = 0;  /* Will be updated when fix is obtained */
   
   SEGGER_RTT_WriteString(0, "Waking GPS from standby for fix acquisition (20s max)...\r\n");
   if (GNSS_WakeFromStandby(&hgnss) == GNSS_OK)
@@ -646,8 +1005,8 @@ static void SendTxData(void)
     bool got_fix = false;
     uint32_t last_status_print = 0;
     
-    /* Process GPS data for up to GNSS_COLLECTION_TIME_MS */
-    while ((HAL_GetTick() - gps_start) < GNSS_COLLECTION_TIME_MS)
+    /* Process GPS data for up to gps_timeout_ms (dynamic based on power mode) */
+    while ((HAL_GetTick() - gps_start) < gps_timeout_ms)
     {
       /* Process DMA buffer - parses NMEA and updates hgnss.data */
       GNSS_ProcessDMABuffer(&hgnss);
@@ -809,16 +1168,13 @@ static void SendTxData(void)
   }
   
   #endif  /* GPS_DISABLED_FOR_TESTING */
+  }  /* End of else block for gps_enabled_by_power_mgmt */
 
-  /* Add separator before sensor read to prevent RTT buffer overwrite */
+  /* Add separator before continuing to telemetry */
   SEGGER_RTT_WriteString(0, "\r\n");
   
-  // Get sensor data
-  sensor_t sensor_data;
-  SEGGER_RTT_WriteString(0, "Calling EnvSensors_Read...\r\n");
-  EnvSensors_Read(&sensor_data);
-  
-  SEGGER_RTT_WriteString(0, "Sensor data read\r\n");
+  // Sensor data already read at top of function for temperature
+  SEGGER_RTT_WriteString(0, "Using previously read sensor data for telemetry\r\n");
   
   // Initialize Cayenne LPP payload
   CayenneLppReset();
@@ -873,11 +1229,22 @@ static void SendTxData(void)
   // CayenneLpp analog uses int16_t with 0.01 resolution, max value = 327.67
   CayenneLppAddAnalogInput(9, (float)ttf_ms / 1000.0f);
 
+  // Add power management telemetry
+  // Channel 11: Voltage slope (mV/hour, scaled by 10 for better resolution)
+  CayenneLppAddAnalogInput(11, (float)slope_mv_per_hour / 10.0f);
+  
+  // Channel 12: Time to target (signed: +charging hours, -depletion hours, 0=stable)
+  CayenneLppAddAnalogInput(12, (float)time_to_target_signed);
+  
+  // Channel 14: Operating mode (0=NORMAL, 1=CONSERVATIVE, 2=REDUCED, 3=RECOVERY, 4=SURVIVAL)
+  CayenneLppAddAnalogInput(14, (float)current_mode);
+
   /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
   int hdop_int = (int)(sensor_data.gnss_hdop * 10);
-  char lpp_msg[100];
-  snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP data prepared (HDOP=%d.%d, TTF=%lums)\r\n", 
-           hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms);
+  char lpp_msg[120];
+  snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n", 
+           hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms, 
+           slope_mv_per_hour, time_to_target_signed, current_mode);
   SEGGER_RTT_WriteString(0, lpp_msg);
   
   // Prepare and send the LoRaWAN packet
@@ -1079,8 +1446,9 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
       /* Start the Tx timer now that we're joined */
       if (EventType == TX_ON_TIMER)
       {
-        SEGGER_RTT_WriteString(0, "Starting Tx timer...\r\n");
-        UTIL_TIMER_Start(&TxTimer);
+        SEGGER_RTT_WriteString(0, "Restarting Tx timer after rejoin...\r\n");
+        UTIL_TIMER_Stop(&TxTimer);   // Stop existing timer first to prevent corruption
+        UTIL_TIMER_Start(&TxTimer);  // Now safe to restart
       }
     }
   }

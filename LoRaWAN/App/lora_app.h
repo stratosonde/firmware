@@ -36,6 +36,14 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 
+/* Simplified voltage tracking for slope calculation (2-hour window) */
+typedef struct {
+    uint16_t baseline_voltage_mv;   // Voltage at baseline (updated every 2 hours)
+    uint32_t baseline_timestamp;     // Timestamp at baseline
+    uint16_t current_voltage_mv;     // Most recent voltage reading
+    uint32_t current_timestamp;      // Most recent timestamp
+} VoltageSlope_t;
+
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -111,7 +119,7 @@ extern "C" {
  * LoRaWAN force rejoin even if the NVM context is restored
  * @note useful only when context management is enabled by CONTEXT_MANAGEMENT_ENABLED
  */
-#define LORAWAN_FORCE_REJOIN_AT_BOOT                true
+#define LORAWAN_FORCE_REJOIN_AT_BOOT                false
 
 /*!
  * User application data buffer size
@@ -148,6 +156,19 @@ extern "C" {
 
 #undef LORAWAN_DEFAULT_DATA_RATE
 #define LORAWAN_DEFAULT_DATA_RATE                   DR_2  /* For larger payloads on US915 */
+
+/* Power Management - Operating Modes */
+typedef enum {
+    MODE_NORMAL = 0,       // 5min interval, GPS enabled
+    MODE_CONSERVATIVE = 1, // 10min interval, GPS enabled
+    MODE_REDUCED = 2,      // 15min interval, GPS disabled
+    MODE_RECOVERY = 3,     // 30min interval, GPS disabled
+    MODE_SURVIVAL = 4      // 60min interval, minimal activity
+} OperatingMode_t;
+
+/* Power Management - Temperature Constraints */
+#define GPS_TEMPERATURE_LOCKOUT  -55  // °C - Supercap fails below this temperature
+
 /* USER CODE END EC */
 
 /* Exported macros -----------------------------------------------------------*/

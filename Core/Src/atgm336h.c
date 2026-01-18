@@ -236,8 +236,8 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
-  /* Send satellite system configuration (GPS + BeiDou) */
-  SEGGER_RTT_WriteString(0, "Sending: Satellite systems (GPS+BeiDou)...\r\n");
+  /* Send satellite system configuration (GPS + BeiDou + GLONASS) */
+  SEGGER_RTT_WriteString(0, "Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
   if (GNSS_SendCommand(hgnss, GNSS_CMD_SATELLITE_SYS) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send satellite config\r\n");
@@ -252,7 +252,15 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
-  SEGGER_RTT_WriteString(0, "=== GNSS Configuration Complete ===\r\n\r\n");
+  /* Save all configuration to GPS internal flash (PCAS00) */
+  SEGGER_RTT_WriteString(0, "Sending: Save configuration to flash...\r\n");
+  if (GNSS_SendCommand(hgnss, GNSS_CMD_SAVE_CONFIG) != GNSS_OK)
+  {
+    SEGGER_RTT_WriteString(0, "WARNING: Failed to save configuration\r\n");
+  }
+  HAL_Delay(100);  /* Give GPS time to save to flash */
+  
+  SEGGER_RTT_WriteString(0, "=== GNSS Configuration Complete (saved to flash) ===\r\n\r\n");
   
   return GNSS_OK;
 }
