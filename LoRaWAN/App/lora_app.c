@@ -1517,9 +1517,16 @@ static void SendTxData(void)
   
   /* ========== END ADAPTIVE TRANSMISSION STRATEGY ========== */
   
-  /* Queue detailed GNSS packet on Port 3 for transmission after RX windows */
-  if (sensor_data.gnss_valid && (hgnss.extended.gps_count > 0 || hgnss.extended.beidou_count > 0))
-  {
+  /* ========== DEBUG: Queue detailed GNSS packet (compile-time controlled) ========== */
+  #if ENABLE_GNSS_DETAIL_PACKET
+  static uint32_t gnss_tx_count = 0;
+  gnss_tx_count++;
+  
+  if (sensor_data.gnss_valid && (hgnss.extended.gps_count > 0 || hgnss.extended.beidou_count > 0) &&
+      ((gnss_tx_count % DEBUG_LPP_TX_INTERVAL) == 0)) {  // Same interval as LPP debug
+    
+    SEGGER_RTT_printf(0, "Debug: Sending GNSS detail packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
+    
     static uint8_t gnss_detail_buffer[150];  // Buffer for detailed GNSS packet
     uint16_t gnss_packet_size = EncodeGNSSDetailPacket(gnss_detail_buffer, sizeof(gnss_detail_buffer));
     
@@ -1552,8 +1559,11 @@ static void SendTxData(void)
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "Skipping GNSS detail packet (no valid data or no satellites)\r\n");
+    SEGGER_RTT_printf(0, "Debug: Skipping GNSS detail packet (TX count: %lu)\r\n", gnss_tx_count);
   }
+  #else
+  SEGGER_RTT_WriteString(0, "GNSS detail packets disabled (ENABLE_GNSS_DETAIL_PACKET = 0)\r\n");
+  #endif
   
   SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
