@@ -119,6 +119,90 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
 }
 
 /**
+ * @brief Encode high-resolution telemetry record for flash storage
+ */
+bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
+                                  const void *sensor_data,
+                                  uint32_t timestamp,
+                                  int16_t voltage_slope,
+                                  OperatingMode_t power_mode)
+{
+    if (!record || !sensor_data) {
+        return false;
+    }
+    
+    const sensor_t *sensors = (const sensor_t*)sensor_data;
+    
+    SEGGER_RTT_WriteString(0, "Encoding 32-byte high-resolution record...\r\n");
+    
+    // Clear record structure
+    memset(record, 0, sizeof(HighResTelemetryRecord_t));
+    
+    // If timestamp not provided, get current timestamp
+    if (timestamp == 0) {
+        uint16_t ms_unused;
+        timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
+    }
+    record->timestamp = timestamp;
+    
+    // Store GPS coordinates at full precision
+    if (sensors->gnss_valid) {
+        record->latitude = sensors->latitude;    // Keep original binary format
+        record->longitude = sensors->longitude;  // Keep original binary format
+        record->altitude = (uint16_t)sensors->altitudeGps;  // Convert to uint16_t
+    } else {
+        // Use zeros for invalid GPS data
+        record->latitude = 0;
+        record->longitude = 0;
+        record->altitude = 0;
+    }
+    
+    // Store environmental sensors at high precision
+    record->temperature = (int16_t)(sensors->temperature * 10.0f);  // 0.1°C resolution
+    record->humidity = (uint16_t)(sensors->humidity * 10.0f);       // 0.1% resolution
+    record->pressure = (uint16_t)(sensors->pressure * 10.0f);       // 0.1hPa resolution
+    
+    // Store voltage data
+    record->battery_voltage = (uint16_t)(sensors->battery_voltage * 1000.0f);  // mV
+    record->solar_voltage = (uint16_t)(sensors->solar_voltage * 1000.0f);      // mV
+    record->voltage_slope = voltage_slope;  // Already in mV/hour
+    
+    // Store GPS metadata
+    record->satellites = sensors->satellites;
+    record->hdop = (uint8_t)(sensors->gnss_hdop * 10.0f);  // HDOP * 10
+    
+    // Store power mode
+    record->power_mode = (uint8_t)power_mode;
+    
+    // Pack status flags
+    record->flags = PackStatusFlags(sensors->gnss_valid, 
+                                    sensors->satellites, 
+                                    power_mode);
+    
+    // Calculate CRC16 for data integrity
+    record->crc16 = CalculateCRC16((const uint8_t*)record, sizeof(HighResTelemetryRecord_t) - 2);
+    
+    // Debug logging with safe integer conversions
+    int32_t lat_micro = sensors->gnss_valid ? (int32_t)(sensors->latitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
+    int32_t lon_micro = sensors->gnss_valid ? (int32_t)(sensors->longitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
+    
+    char debug_msg[200];
+    snprintf(debug_msg, sizeof(debug_msg),
+             "HighRes: T=%lus Lat=%ld.%06ld Lon=%ld.%06ld Alt=%dm Temp=%d.%dC P=%d.%d Bat=%dmV Solar=%dmV Slope=%+dmV/h\r\n",
+             (unsigned long)timestamp,
+             (long)(lat_micro / 1000000), (long)labs(lat_micro % 1000000),
+             (long)(lon_micro / 1000000), (long)labs(lon_micro % 1000000),
+             record->altitude,
+             record->temperature / 10, abs(record->temperature % 10),
+             record->pressure / 10, record->pressure % 10,
+             record->battery_voltage, record->solar_voltage, 
+             voltage_slope);
+    SEGGER_RTT_WriteString(0, debug_msg);
+    
+    return true;
+}
+
+/**
  * @brief Validate packet structure sizes at compile time
  */
 bool PayloadFormat_ValidateSizes(void)
