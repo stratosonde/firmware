@@ -992,12 +992,15 @@ static void SendTxData(void)
     time_to_target_signed = 0;  // Stable voltage
   }
   
-  // GPS temperature lockout check (supercap fails below -55°C)
-  if (temperature_c < GPS_TEMPERATURE_LOCKOUT) {
+  // GPS temperature lockout check (supercap fails below configured temperature)
+  const SystemConfig_t *config = Config_Get();
+  int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
+  
+  if (temperature_c < gps_lockout_temp) {
     gps_enabled_by_power_mgmt = false;
     char temp_msg[80];
     snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %.1f°C < %d°C (supercap inoperative)\r\n",
-             temperature_c, GPS_TEMPERATURE_LOCKOUT);
+             temperature_c, gps_lockout_temp);
     SEGGER_RTT_WriteString(0, temp_msg);
   }
   
