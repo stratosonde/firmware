@@ -337,6 +337,10 @@ static UTIL_TIMER_Object_t StopJoinTimer;
 /* USER CODE BEGIN PV */
 /* Packet queue for deferred transmission after RX windows */
 static PacketQueue_t g_packet_queue = {0};
+
+/* Adaptive transmission strategy state */
+static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
+static uint8_t g_bulk_packets_sent = 0;
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -1301,41 +1305,101 @@ static void SendTxData(void)
            slope_mv_per_hour, time_to_target_signed, current_mode);
   SEGGER_RTT_WriteString(0, lpp_msg);
   
-  // Prepare and send the LoRaWAN packet
-  LmHandlerAppData_t appData;
-  appData.Port = LORAWAN_USER_APP_PORT;
-  appData.BufferSize = CayenneLppGetSize();
-  appData.Buffer = CayenneLppGetBuffer();
+  /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
+  // Step 1: Always send 11-byte compact packet at SF10 with LinkCheckReq
+  // This provides maximum range and evaluates link quality for bulk transfer
   
-  // DEBUG: Log payload size
-  char size_msg[64];
-  snprintf(size_msg, sizeof(size_msg), "Payload size: %d bytes\r\n", appData.BufferSize);
-  SEGGER_RTT_WriteString(0, size_msg);
+  SEGGER_RTT_printf(0, "Adaptive TX: State=%d, sending SF10 probe...\r\n", g_tx_state);
   
-  // Force data rate before each send (DR2 = 125 bytes max for US915)
-  LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
-  
-  // Request link quality check (margin + gateway count)
-  LmHandlerLinkCheckReq();
-  SEGGER_RTT_WriteString(0, "LinkCheckReq sent with packet\r\n");
-  
-  SEGGER_RTT_WriteString(0, "Sending LoRaWAN packet...\r\n");
-  
-  LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-  
-  // DEBUG: Log LmHandlerSend status
-  char status_msg[128];
-  const char* status_str;
-  switch(status) {
-    case LORAMAC_HANDLER_SUCCESS: status_str = "SUCCESS"; break;
-    case LORAMAC_HANDLER_BUSY_ERROR: status_str = "BUSY_ERROR"; break;
-    case LORAMAC_HANDLER_ERROR: status_str = "ERROR"; break;
-    case LORAMAC_HANDLER_NO_NETWORK_JOINED: status_str = "NO_NETWORK_JOINED"; break;
-    case LORAMAC_HANDLER_DUTYCYCLE_RESTRICTED: status_str = "DUTYCYCLE_RESTRICTED"; break;
-    default: status_str = "UNKNOWN"; break;
+  switch (g_tx_state) {
+    case TX_STATE_PROBE_SF10:
+    {
+      // Encode 11-byte compact telemetry packet
+      CompactTelemetryPacket_t compact_packet;
+      uint16_t timestamp_min = (uint16_t)(now_timestamp / 60);  // Convert to minutes
+      
+      if (EncodeCompactBinaryPacket(&compact_packet, &sensor_data, timestamp_min, 
+                                   slope_mv_per_hour, current_mode)) {
+        
+        // Send at SF10 (DR0) for maximum range
+        LmHandlerSetTxDatarate(DR_0);  // SF10
+        LmHandlerLinkCheckReq();       // Request link quality
+        
+        LmHandlerAppData_t compactData;
+        compactData.Port = LORAWAN_COMPACT_PORT;  // Port 10
+        compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
+        compactData.Buffer = (uint8_t*)&compact_packet;
+        
+        SEGGER_RTT_printf(0, "Sending 11-byte compact packet at SF10 (DR0) on port %d with LinkCheckReq\r\n", 
+                          LORAWAN_COMPACT_PORT);
+        
+        LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+        
+        if (status == LORAMAC_HANDLER_SUCCESS) {
+          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  // Wait for LinkCheckAns
+          SEGGER_RTT_WriteString(0, "Compact packet sent successfully, waiting for LinkCheckAns...\r\n");
+        } else {
+          SEGGER_RTT_printf(0, "Compact packet send failed (status: %d)\r\n", status);
+          g_tx_state = TX_STATE_COMPLETE;  // Complete cycle on error
+        }
+      } else {
+        SEGGER_RTT_WriteString(0, "ERROR: Failed to encode compact packet!\r\n");
+        g_tx_state = TX_STATE_COMPLETE;
+      }
+      break;
+    }
+    
+    case TX_STATE_WAIT_PROBE_ACK:
+      // This state is handled in OnRxData callback when LinkCheckAns is received
+      SEGGER_RTT_WriteString(0, "Waiting for LinkCheckAns response...\r\n");
+      g_tx_state = TX_STATE_COMPLETE;  // Fallback to complete if no response
+      break;
+      
+    case TX_STATE_BULK_TRANSFER:
+      // This will be implemented in a future commit
+      SEGGER_RTT_WriteString(0, "Bulk transfer mode (not yet implemented)\r\n");
+      g_tx_state = TX_STATE_COMPLETE;
+      break;
+      
+    case TX_STATE_COMPLETE:
+    default:
+      // Reset for next cycle
+      g_tx_state = TX_STATE_PROBE_SF10;
+      g_bulk_packets_sent = 0;
+      SEGGER_RTT_WriteString(0, "Transmission cycle complete, reset to PROBE_SF10\r\n");
+      break;
   }
-  snprintf(status_msg, sizeof(status_msg), "LmHandlerSend status: %s (%d)\r\n", status_str, status);
-  SEGGER_RTT_WriteString(0, status_msg);
+
+  /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */
+  #if ENABLE_DEBUG_LPP
+  static uint32_t tx_count = 0;
+  tx_count++;
+  
+  if ((tx_count % DEBUG_LPP_TX_INTERVAL) == 0) {  // Every 5th transmission
+    SEGGER_RTT_printf(0, "Debug: Sending CayenneLPP packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
+    
+    // Prepare and send the CayenneLPP packet
+    LmHandlerAppData_t lppData;
+    lppData.Port = LORAWAN_USER_APP_PORT;  // Port 2
+    lppData.BufferSize = CayenneLppGetSize();
+    lppData.Buffer = CayenneLppGetBuffer();
+    
+    // DEBUG: Log payload size
+    char size_msg[64];
+    snprintf(size_msg, sizeof(size_msg), "CayenneLPP payload size: %d bytes\r\n", lppData.BufferSize);
+    SEGGER_RTT_WriteString(0, size_msg);
+    
+    // Send with default datarate  
+    LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
+    LmHandlerErrorStatus_t lpp_status = LmHandlerSend(&lppData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+    
+    SEGGER_RTT_printf(0, "CayenneLPP send status: %d\r\n", lpp_status);
+  } else {
+    SEGGER_RTT_printf(0, "Debug: Skipping CayenneLPP (TX count: %lu)\r\n", tx_count);
+  }
+  #endif
+  
+  /* ========== END ADAPTIVE TRANSMISSION STRATEGY ========== */
   
   /* Queue detailed GNSS packet on Port 3 for transmission after RX windows */
   if (sensor_data.gnss_valid && (hgnss.extended.gps_count > 0 || hgnss.extended.beidou_count > 0))

@@ -181,6 +181,20 @@ typedef enum {
 /* Power Management - Temperature Constraints */
 #define GPS_TEMPERATURE_LOCKOUT  -55  // °C - Supercap fails below this temperature
 
+/* Adaptive Transmission Strategy */
+typedef enum {
+    TX_STATE_PROBE_SF10 = 0,      // Send 11-byte at SF10
+    TX_STATE_WAIT_PROBE_ACK,      // Waiting for LinkCheckAns
+    TX_STATE_BULK_TRANSFER,       // Sending cached packets at SF7
+    TX_STATE_COMPLETE             // Done with cycle
+} TxState_t;
+
+/* Link quality thresholds for adaptive transmission */
+#define LINK_MARGIN_THRESHOLD       15   // dB - minimum demod margin for SF7 bulk
+#define GATEWAY_COUNT_THRESHOLD     2    // Minimum gateway count for SF7 bulk
+#define BULK_BATTERY_MIN_MV         5000 // mV - minimum battery for bulk transfer
+#define MAX_BULK_PACKETS_PER_CYCLE  20   // Maximum bulk packets per transmission cycle
+
 /* USER CODE END EC */
 
 /* Exported macros -----------------------------------------------------------*/
