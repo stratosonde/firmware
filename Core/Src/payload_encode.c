@@ -18,6 +18,9 @@
 #include "SEGGER_RTT.h"
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "flash_log.h"
 
 /* Private defines -----------------------------------------------------------*/
 
@@ -43,6 +46,7 @@ static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts);
 static uint8_t ConvertHumidityToCompact(float humidity_percent);
 static uint8_t PackStatusFlags(bool gps_valid, uint8_t satellites, OperatingMode_t power_mode);
 static uint16_t CalculateCRC16(const uint8_t *data, uint32_t length);
+static uint32_t CalculateCRC32(const uint8_t *data, uint32_t length);
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -258,7 +262,7 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
 /**
  * @brief Convert FlashLog_Record_t to HighResTelemetryRecord_t
  */
-bool ConvertFlashLogToHighRes(const FlashLog_Record_t *flash_record,
+bool ConvertFlashLogToHighRes(const void *flash_record,
                               HighResTelemetryRecord_t *highres_record,
                               int16_t voltage_slope,
                               OperatingMode_t power_mode)
@@ -267,33 +271,35 @@ bool ConvertFlashLogToHighRes(const FlashLog_Record_t *flash_record,
         return false;
     }
     
+    const FlashLog_Record_t *flash_rec = (const FlashLog_Record_t*)flash_record;
+    
     // Clear destination structure
     memset(highres_record, 0, sizeof(HighResTelemetryRecord_t));
     
     // Copy basic fields
-    highres_record->timestamp = flash_record->timestamp;
-    highres_record->latitude = flash_record->latitude;
-    highres_record->longitude = flash_record->longitude;
-    highres_record->altitude = (uint16_t)flash_record->altitude_gps;
+    highres_record->timestamp = flash_rec->timestamp;
+    highres_record->latitude = flash_rec->latitude;
+    highres_record->longitude = flash_rec->longitude;
+    highres_record->altitude = (uint16_t)flash_rec->altitude_gps;
     
     // Convert floating point to scaled integers
-    highres_record->temperature = (int16_t)(flash_record->temperature * 10.0f);  // 0.1°C
-    highres_record->humidity = (uint16_t)(flash_record->humidity * 10.0f);       // 0.1%
-    highres_record->pressure = (uint16_t)(flash_record->pressure * 10.0f);       // 0.1hPa
+    highres_record->temperature = (int16_t)(flash_rec->temperature * 10.0f);  // 0.1°C
+    highres_record->humidity = (uint16_t)(flash_rec->humidity * 10.0f);       // 0.1%
+    highres_record->pressure = (uint16_t)(flash_rec->pressure * 10.0f);       // 0.1hPa
     
     // Battery voltage
-    highres_record->battery_voltage = flash_record->battery_mv;
+    highres_record->battery_voltage = flash_rec->battery_mv;
     highres_record->solar_voltage = 0;  // Not stored in FlashLog_Record_t yet
     highres_record->voltage_slope = voltage_slope;
     
     // GPS metadata
-    highres_record->satellites = flash_record->satellites;
-    highres_record->hdop = flash_record->gnss_hdop_x10;  // Already scaled by 10
+    highres_record->satellites = flash_rec->satellites;
+    highres_record->hdop = flash_rec->gnss_hdop_x10;  // Already scaled by 10
     
     // Power mode and flags
     highres_record->power_mode = (uint8_t)power_mode;
-    highres_record->flags = PackStatusFlags((bool)flash_record->gnss_valid, 
-                                            flash_record->satellites, 
+    highres_record->flags = PackStatusFlags((bool)flash_rec->gnss_valid, 
+                                            flash_rec->satellites, 
                                             power_mode);
     
     // Calculate CRC16 for integrity

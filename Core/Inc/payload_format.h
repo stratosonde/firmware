@@ -23,6 +23,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stdbool.h>
+#include "lora_app.h"
 
 /* Exported defines ----------------------------------------------------------*/
 
@@ -133,26 +134,7 @@ typedef struct __attribute__((packed)) {
     
 } BulkTelemetryPacket_t;  // Total: 222 bytes (SF7/US915 maximum)
 
-/**
- * @brief Operating mode enumeration for power management
- */
-typedef enum {
-    MODE_NORMAL = 0,        // 5-minute intervals, GPS enabled
-    MODE_CONSERVATIVE = 1,  // 10-minute intervals, GPS enabled
-    MODE_REDUCED = 2,       // 15-minute intervals, GPS disabled
-    MODE_RECOVERY = 3,      // 30-minute intervals, GPS disabled
-    MODE_SURVIVAL = 4       // 60-minute intervals, GPS disabled
-} OperatingMode_t;
-
-/**
- * @brief Voltage slope tracking structure
- */
-typedef struct {
-    uint16_t baseline_voltage_mv;   // Baseline voltage for slope calculation
-    uint32_t baseline_timestamp;    // Baseline timestamp (RTC seconds)
-    uint16_t current_voltage_mv;    // Current voltage measurement
-    uint32_t current_timestamp;     // Current timestamp (RTC seconds)
-} VoltageSlope_t;
+/* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
 /* Exported functions --------------------------------------------------------*/
 

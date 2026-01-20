@@ -27,7 +27,7 @@ static bool g_config_initialized = false;
 static uint32_t g_flash_read_count = 0;
 static uint32_t g_flash_write_count = 0;
 static uint32_t g_crc_failure_count = 0;
-static uint8_t g_config_buffer[CONFIG_FLASH_SIZE] __attribute__((aligned(8)));
+static uint8_t g_config_buffer[CONFIG_FLASH_SIZE] __attribute__((aligned(8), unused));
 
 /* Private function prototypes -----------------------------------------------*/
 static uint32_t Config_CRC32(const uint8_t *data, uint32_t length);
