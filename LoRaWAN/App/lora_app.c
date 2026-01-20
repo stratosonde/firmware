@@ -1387,10 +1387,95 @@ static void SendTxData(void)
       break;
       
     case TX_STATE_BULK_TRANSFER:
-      // This will be implemented in a future commit
-      SEGGER_RTT_WriteString(0, "Bulk transfer mode (not yet implemented)\r\n");
-      g_tx_state = TX_STATE_COMPLETE;
+    {
+      SEGGER_RTT_printf(0, "Bulk transfer mode: packet %d/%d\r\n", 
+                        g_bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
+      
+      // Check if we have unsent data and haven't exceeded packet limit
+      if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+        
+        // Read up to 6 unsent records from flash (LIFO order - newest first)
+        FlashLog_Record_t flash_records[6];
+        uint32_t record_count;
+        
+        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsLIFO(&hflashlog, 
+                                                                            flash_records, 
+                                                                            6, 
+                                                                            &record_count);
+        
+        if (flash_status == FLASH_LOG_OK && record_count > 0) {
+          SEGGER_RTT_printf(0, "Retrieved %lu unsent records from flash\r\n", record_count);
+          
+          // Convert flash records to high-res format for bulk packet
+          HighResTelemetryRecord_t highres_records[6];
+          for (uint32_t i = 0; i < record_count && i < 6; i++) {
+            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[i], 
+                                         slope_mv_per_hour, current_mode)) {
+              SEGGER_RTT_printf(0, "Warning: Failed to convert flash record %lu\r\n", i);
+            }
+          }
+          
+          // Encode bulk packet
+          BulkTelemetryPacket_t bulk_packet;
+          uint8_t dummy_voltage_trend[10] = {0};  // TODO: Implement voltage trend tracking
+          uint8_t dummy_mode_changes[10] = {0};   // TODO: Implement mode change tracking
+          
+          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, (uint8_t)record_count,
+                                         0, // TODO: Add flash page tracking
+                                         dummy_voltage_trend, dummy_mode_changes)) {
+            
+            // Send at SF7 (DR3) for high-speed transmission
+            LmHandlerSetTxDatarate(DR_3);  // SF7
+            
+            LmHandlerAppData_t bulkData;
+            bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
+            bulkData.BufferSize = sizeof(BulkTelemetryPacket_t);
+            bulkData.Buffer = (uint8_t*)&bulk_packet;
+            
+            SEGGER_RTT_printf(0, "Sending 222-byte bulk packet at SF7 (DR3) on port %d with %d records\r\n",
+                              LORAWAN_BULK_PORT, record_count);
+            
+            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+            
+            if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
+              g_bulk_packets_sent++;
+              
+              // Mark these records as transmitted
+              FlashLog_MarkRecordsTransmitted(&hflashlog, record_count);
+              
+              SEGGER_RTT_printf(0, "Bulk packet sent successfully! (%d/%d packets sent)\r\n",
+                                g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
+              
+              // Continue bulk transfer if more data available and under packet limit
+              if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+                SEGGER_RTT_WriteString(0, "More unsent data available, continuing bulk transfer...\r\n");
+                // Stay in TX_STATE_BULK_TRANSFER for next packet
+              } else {
+                SEGGER_RTT_WriteString(0, "Bulk transfer complete (no more data or packet limit reached)\r\n");
+                g_tx_state = TX_STATE_COMPLETE;
+              }
+              
+            } else {
+              SEGGER_RTT_printf(0, "Bulk packet send failed (status: %d)\r\n", bulk_status);
+              g_tx_state = TX_STATE_COMPLETE;  // Complete on error
+            }
+            
+          } else {
+            SEGGER_RTT_WriteString(0, "ERROR: Failed to encode bulk packet!\r\n");
+            g_tx_state = TX_STATE_COMPLETE;
+          }
+          
+        } else {
+          SEGGER_RTT_printf(0, "No unsent records available (status: %d)\r\n", flash_status);
+          g_tx_state = TX_STATE_COMPLETE;
+        }
+        
+      } else {
+        SEGGER_RTT_WriteString(0, "Bulk transfer complete: no data or packet limit reached\r\n");
+        g_tx_state = TX_STATE_COMPLETE;
+      }
       break;
+    }
       
     case TX_STATE_COMPLETE:
     default:
