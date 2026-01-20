@@ -213,6 +213,20 @@ bool DecodeCompactBinaryPacket(const CompactTelemetryPacket_t *packet,
                                void *decoded_data);
 
 /**
+ * @brief Convert FlashLog_Record_t to HighResTelemetryRecord_t format
+ * @param flash_record: Source flash log record
+ * @param highres_record: Destination high-res record  
+ * @param voltage_slope: Voltage slope in mV/hour
+ * @param power_mode: Current operating mode
+ * @retval bool: true if conversion successful
+ * @note Converts floating point flash data to scaled integer format
+ */
+bool ConvertFlashLogToHighRes(const void *flash_record,
+                              HighResTelemetryRecord_t *highres_record,
+                              int16_t voltage_slope,
+                              OperatingMode_t power_mode);
+
+/**
  * @brief Validate packet structure sizes at compile time
  * @note Call during initialization to verify packet sizes are correct
  * @retval bool: true if all packet sizes are valid

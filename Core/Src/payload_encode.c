@@ -203,6 +203,128 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
 }
 
 /**
+ * @brief Encode bulk telemetry packet from flash records (LIFO order)
+ */
+bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
+                                 const HighResTelemetryRecord_t *records,
+                                 uint8_t record_count,
+                                 uint32_t flash_page_addr,
+                                 const uint8_t *voltage_trend,
+                                 const uint8_t *mode_changes)
+{
+    if (!packet || !records || record_count == 0) {
+        return false;
+    }
+    
+    SEGGER_RTT_printf(0, "Encoding 222-byte bulk packet with %d records...\r\n", record_count);
+    
+    // Clear packet structure
+    memset(packet, 0, sizeof(BulkTelemetryPacket_t));
+    
+    // Set packet header
+    packet->packet_type = 0x01;  // Version 1 bulk format
+    packet->record_count = (record_count > 6) ? 6 : record_count;  // Max 6 records
+    packet->flash_page_addr = flash_page_addr;
+    
+    // Copy high-resolution records (up to 6)
+    for (uint8_t i = 0; i < packet->record_count && i < 6; i++) {
+        memcpy(&packet->records[i], &records[i], sizeof(HighResTelemetryRecord_t));
+    }
+    
+    // Add voltage trend if provided
+    if (voltage_trend != NULL) {
+        memcpy(packet->voltage_trend, voltage_trend, 10);
+    } else {
+        memset(packet->voltage_trend, 0, 10);
+    }
+    
+    // Add mode changes if provided  
+    if (mode_changes != NULL) {
+        memcpy(packet->mode_changes, mode_changes, 10);
+    } else {
+        memset(packet->mode_changes, 0, 10);
+    }
+    
+    // Calculate CRC32 for packet integrity (exclude CRC32 field itself)
+    packet->crc32 = CalculateCRC32((const uint8_t*)packet, sizeof(BulkTelemetryPacket_t) - 4);
+    
+    SEGGER_RTT_printf(0, "Bulk packet: Type=%d Records=%d FlashAddr=0x%08lX CRC32=0x%08lX\r\n",
+                      packet->packet_type, packet->record_count, 
+                      packet->flash_page_addr, packet->crc32);
+    
+    return true;
+}
+
+/**
+ * @brief Convert FlashLog_Record_t to HighResTelemetryRecord_t
+ */
+bool ConvertFlashLogToHighRes(const FlashLog_Record_t *flash_record,
+                              HighResTelemetryRecord_t *highres_record,
+                              int16_t voltage_slope,
+                              OperatingMode_t power_mode)
+{
+    if (!flash_record || !highres_record) {
+        return false;
+    }
+    
+    // Clear destination structure
+    memset(highres_record, 0, sizeof(HighResTelemetryRecord_t));
+    
+    // Copy basic fields
+    highres_record->timestamp = flash_record->timestamp;
+    highres_record->latitude = flash_record->latitude;
+    highres_record->longitude = flash_record->longitude;
+    highres_record->altitude = (uint16_t)flash_record->altitude_gps;
+    
+    // Convert floating point to scaled integers
+    highres_record->temperature = (int16_t)(flash_record->temperature * 10.0f);  // 0.1°C
+    highres_record->humidity = (uint16_t)(flash_record->humidity * 10.0f);       // 0.1%
+    highres_record->pressure = (uint16_t)(flash_record->pressure * 10.0f);       // 0.1hPa
+    
+    // Battery voltage
+    highres_record->battery_voltage = flash_record->battery_mv;
+    highres_record->solar_voltage = 0;  // Not stored in FlashLog_Record_t yet
+    highres_record->voltage_slope = voltage_slope;
+    
+    // GPS metadata
+    highres_record->satellites = flash_record->satellites;
+    highres_record->hdop = flash_record->gnss_hdop_x10;  // Already scaled by 10
+    
+    // Power mode and flags
+    highres_record->power_mode = (uint8_t)power_mode;
+    highres_record->flags = PackStatusFlags((bool)flash_record->gnss_valid, 
+                                            flash_record->satellites, 
+                                            power_mode);
+    
+    // Calculate CRC16 for integrity
+    highres_record->crc16 = CalculateCRC16((const uint8_t*)highres_record, 
+                                           sizeof(HighResTelemetryRecord_t) - 2);
+    
+    return true;
+}
+
+/**
+ * @brief Calculate CRC32 for bulk packets
+ */
+static uint32_t CalculateCRC32(const uint8_t *data, uint32_t length)
+{
+    uint32_t crc = 0xFFFFFFFF;
+    
+    for (uint32_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x00000001) {
+                crc = (crc >> 1) ^ 0xEDB88320;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+    
+    return ~crc;
+}
+
+/**
  * @brief Validate packet structure sizes at compile time
  */
 bool PayloadFormat_ValidateSizes(void)
