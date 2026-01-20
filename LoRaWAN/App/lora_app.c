@@ -43,11 +43,14 @@
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
 #include "timer_if.h"
+#include "payload_format.h"
+#include "flash_log.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
 extern GNSS_HandleTypeDef hgnss;  /* GNSS handle from sys_sensors.c */
+extern FlashLog_HandleTypeDef hflashlog;  /* Flash logging handle from main.c */
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -837,6 +840,37 @@ static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 {
   /* USER CODE BEGIN OnRxData_1 */
+  SEGGER_RTT_WriteString(0, "\r\n=== OnRxData Callback ===\r\n");
+  
+  // Check for LinkCheckAns response (from LinkCheckReq)
+  MibRequestConfirm_t mib;
+  mib.Type = MIB_LINK_CHECK;
+  if (LoRaMacMibGetRequestConfirm(&mib) == LORAMAC_STATUS_OK) {
+    uint8_t margin = mib.Param.LinkCheck.DemodMargin;
+    uint8_t gw_count = mib.Param.LinkCheck.NbGateways;
+    
+    // Log link check results
+    char link_msg[128];
+    snprintf(link_msg, sizeof(link_msg), 
+             "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", 
+             margin, gw_count);
+    SEGGER_RTT_WriteString(0, link_msg);
+    
+    // Evaluate link quality for future bulk transfer decisions
+    bool link_good = (margin >= 15 && gw_count >= 2);  // Example thresholds
+    SEGGER_RTT_printf(0, "Link quality: %s (margin=%ddB >= 15dB, gateways=%d >= 2)\r\n",
+                     link_good ? "GOOD" : "POOR", margin, gw_count);
+  }
+  
+  // Process any received application data
+  if (appData && appData->BufferSize > 0) {
+    char rx_msg[64];
+    snprintf(rx_msg, sizeof(rx_msg), "Received %d bytes on port %d\r\n", 
+             appData->BufferSize, appData->Port);
+    SEGGER_RTT_WriteString(0, rx_msg);
+  }
+  
+  SEGGER_RTT_WriteString(0, "=== OnRxData Callback END ===\r\n");
   /* USER CODE END OnRxData_1 */
 }
 
@@ -923,6 +957,19 @@ static void SendTxData(void)
   snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
   SEGGER_RTT_WriteString(0, pm_msg);
+  
+  /* ========== FLASH LOGGING: Store high-resolution data ========== */
+  // Log high-resolution telemetry data to external flash for later bulk transmission
+  // This happens continuously regardless of transmission success/failure
+  SEGGER_RTT_WriteString(0, "Logging high-resolution data to flash...\r\n");
+  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp);
+  if (log_status == FLASH_LOG_OK) {
+    uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
+    SEGGER_RTT_printf(0, "Flash log: Written record %lu (total records: %lu)\r\n", 
+                      record_count, record_count);
+  } else {
+    SEGGER_RTT_printf(0, "Flash log: Write failed (status: %d)\r\n", log_status);
+  }
   
   /* ========== END POWER MANAGEMENT ========== */
   
@@ -1118,6 +1165,13 @@ static void SendTxData(void)
       /* Calculate elapsed time for H3 lookup */
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
       
+      /* Check for restricted region - skip transmission if detected */
+      if (detected_region == 0xFF || detected_region >= 16) {  // Assuming restricted regions return special value
+        SEGGER_RTT_WriteString(0, "RESTRICTED REGION DETECTED: Skipping transmission for safety\r\n");
+        SEGGER_RTT_WriteString(0, "=== SendTxData END (RESTRICTED) ===\r\n");
+        return;  // Exit early - no transmission allowed in restricted areas
+      }
+      
       /* Convert floats to integers for printing (safe for all printf implementations) */
       int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);  // 6 decimal places
       int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000); // 6 decimal places
@@ -1260,6 +1314,11 @@ static void SendTxData(void)
   
   // Force data rate before each send (DR2 = 125 bytes max for US915)
   LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
+  
+  // Request link quality check (margin + gateway count)
+  LmHandlerLinkCheckReq();
+  SEGGER_RTT_WriteString(0, "LinkCheckReq sent with packet\r\n");
+  
   SEGGER_RTT_WriteString(0, "Sending LoRaWAN packet...\r\n");
   
   LmHandlerErrorStatus_t status = LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
