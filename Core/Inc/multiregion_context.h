@@ -31,10 +31,19 @@ extern "C" {
 /**
  * @brief Enable/disable automatic region switching
  * Set to 0 to disable region switching (for testing)
- * Set to 1 to enable automatic region switching based on GPS
+ * Set to 1 to enable automatic region switching based to GPS
  */
 #ifndef MULTIREGION_AUTO_SWITCH_ENABLED
 #define MULTIREGION_AUTO_SWITCH_ENABLED  0  // Disabled by default for safety
+#endif
+
+/**
+ * @brief Frame counter save interval for flash endurance
+ * Save frame counters every N successful transmissions instead of every TX
+ * Reduces flash writes by factor of N (improves endurance from ~83 hours to >800 hours)
+ */
+#ifndef FRAME_COUNTER_SAVE_INTERVAL
+#define FRAME_COUNTER_SAVE_INTERVAL      10  // Save every 10 transmissions
 #endif
 
 #define MAX_REGION_CONTEXTS              6  // US915, EU868, AS923, AU915, IN865, KR920

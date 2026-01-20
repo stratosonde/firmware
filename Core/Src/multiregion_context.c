@@ -38,6 +38,9 @@ static MultiRegionStorage_t g_storage;
 static bool g_initialized = false;
 static uint8_t g_flash_buffer[MULTIREGION_FLASH_PAGE_SIZE] __attribute__((aligned(8)));
 
+/* Batched frame counter save infrastructure */
+static uint8_t g_unsaved_tx_count = 0;  // Track unsaved successful transmissions
+
 /* External variables --------------------------------------------------------*/
 extern LmHandlerParams_t LmHandlerParams;
 
