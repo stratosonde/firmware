@@ -893,49 +893,48 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   uint8_t gw_count = 3;  // Assume multiple gateways for now
   
   // TODO: Implement proper LinkCheck result retrieval when LmHandler API is clarified
+  
+  // Log link check results
+  char link_msg[128];
+  snprintf(link_msg, sizeof(link_msg), 
+           "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", 
+           margin, gw_count);
+  SEGGER_RTT_WriteString(0, link_msg);
+  
+  // Evaluate link quality and trigger bulk transfer if conditions are met
+  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
+    SEGGER_RTT_WriteString(0, "Processing LinkCheckAns for bulk transfer decision...\r\n");
     
-    // Log link check results
-    char link_msg[128];
-    snprintf(link_msg, sizeof(link_msg), 
-             "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", 
-             margin, gw_count);
-    SEGGER_RTT_WriteString(0, link_msg);
+    // Check all conditions for bulk transfer
+    bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
+    uint16_t battery_mv = SYS_GetBatteryVoltage();
+    bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
+    bool has_cache = FlashLog_HasUnsentData(&hflashlog);
     
-    // Evaluate link quality and trigger bulk transfer if conditions are met
-    if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
-      SEGGER_RTT_WriteString(0, "Processing LinkCheckAns for bulk transfer decision...\r\n");
+    SEGGER_RTT_printf(0, "Link quality: margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
+                     margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
+                     link_good ? "GOOD" : "POOR");
+    SEGGER_RTT_printf(0, "Battery: %dmV (>=%d) -> %s\r\n", 
+                     battery_mv, BULK_BATTERY_MIN_MV, battery_good ? "GOOD" : "LOW");
+    SEGGER_RTT_printf(0, "Cache: %s\r\n", has_cache ? "HAS_DATA" : "NO_DATA");
+    
+    if (link_good && battery_good && has_cache) {
+      SEGGER_RTT_WriteString(0, "CONDITIONS MET: Triggering bulk transfer mode!\r\n");
+      g_tx_state = TX_STATE_BULK_TRANSFER;
+      g_bulk_packets_sent = 0;
       
-      // Check all conditions for bulk transfer
-      bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
-      uint16_t battery_mv = SYS_GetBatteryVoltage();
-      bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
-      bool has_cache = FlashLog_HasUnsentData(&hflashlog);
-      
-      SEGGER_RTT_printf(0, "Link quality: margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
-                       margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
-                       link_good ? "GOOD" : "POOR");
-      SEGGER_RTT_printf(0, "Battery: %dmV (>=%d) -> %s\r\n", 
-                       battery_mv, BULK_BATTERY_MIN_MV, battery_good ? "GOOD" : "LOW");
-      SEGGER_RTT_printf(0, "Cache: %s\r\n", has_cache ? "HAS_DATA" : "NO_DATA");
-      
-      if (link_good && battery_good && has_cache) {
-        SEGGER_RTT_WriteString(0, "CONDITIONS MET: Triggering bulk transfer mode!\r\n");
-        g_tx_state = TX_STATE_BULK_TRANSFER;
-        g_bulk_packets_sent = 0;
-        
-        // Trigger immediate bulk transfer (schedule next transmission)
-        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-      } else {
-        SEGGER_RTT_WriteString(0, "CONDITIONS NOT MET: Completing cycle (conservative approach)\r\n");
-        g_tx_state = TX_STATE_COMPLETE;
-      }
+      // Trigger immediate bulk transfer (schedule next transmission)
+      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
     } else {
-      // Link check result for non-probe transmissions (informational)
-      bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
-      SEGGER_RTT_printf(0, "Link quality: %s (margin=%ddB >= %d, gateways=%d >= %d)\r\n",
-                       link_good ? "GOOD" : "POOR", margin, LINK_MARGIN_THRESHOLD, 
-                       gw_count, GATEWAY_COUNT_THRESHOLD);
+      SEGGER_RTT_WriteString(0, "CONDITIONS NOT MET: Completing cycle (conservative approach)\r\n");
+      g_tx_state = TX_STATE_COMPLETE;
     }
+  } else {
+    // Link check result for non-probe transmissions (informational)
+    bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
+    SEGGER_RTT_printf(0, "Link quality: %s (margin=%ddB >= %d, gateways=%d >= %d)\r\n",
+                     link_good ? "GOOD" : "POOR", margin, LINK_MARGIN_THRESHOLD, 
+                     gw_count, GATEWAY_COUNT_THRESHOLD);
   }
   
   // Process any received application data

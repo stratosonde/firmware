@@ -785,8 +785,8 @@ region `FLASH' overflowed by XXXX bytes
 |-----------|------|-------|
 | `latLngToH3()` | ~100-200 μs | Coordinate conversion |
 | `h3ToRegion()` | ~500-800 μs | Binary search |
-| `latLngToRegion()` | ~700-1000 μs | Combined |
-| `findNearestRegions()` | ~2-5 ms | Ring search |
+| `latLngToRegion()` | ~2 ms | Combined (actual measured) |
+| `findNearestRegions()` | ~2 ms per region per ring | Ring search (actual measured) |
 
 **All operations are deterministic** (no dynamic allocation, no waits)
 
