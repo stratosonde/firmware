@@ -58,6 +58,8 @@ ADC_HandleTypeDef hadc;
 
 I2C_HandleTypeDef hi2c2;
 
+IWDG_HandleTypeDef hiwdg;
+
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi2;
@@ -232,6 +234,10 @@ int main(void)
   //TEST_UltraMinimal_STOP2();  // MCU enters STOP2 and never wakes - measure current
   /* ***** END TEMPORARY TEST ***** */
   
+  /* Initialize independent watchdog early for system safety */
+  MX_IWDG_Init();
+  SEGGER_RTT_WriteString(0, "IWDG watchdog initialized (4-second timeout)\r\n");
+  
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
    * vcom_Init (inside SystemApp_Init) needs DMA for UART */
@@ -308,7 +314,8 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSE|RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_LSE|RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
@@ -603,6 +610,35 @@ void MX_USART1_UART_Init(void)
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_32;
+  hiwdg.Init.Window = 4095;
+  hiwdg.Init.Reload = 4095;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
 
 }
 
