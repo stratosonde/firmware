@@ -37,6 +37,7 @@
 #include "w25q16jv.h"
 #include "flash_log.h"
 #include "payload_format.h"
+#include "config.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
 /* USER CODE END Includes */
 
@@ -305,6 +306,19 @@ int main(void)
   if (!PayloadFormat_ValidateSizes()) {
     SEGGER_RTT_WriteString(0, "ERROR: Payload format size validation failed!\r\n");
     Error_Handler();
+  }
+  
+  // Initialize configuration system
+  SEGGER_RTT_WriteString(0, "Initializing configuration system...\r\n");
+  ConfigStatus_t config_status = Config_Init();
+  if (config_status == CONFIG_OK) {
+    SEGGER_RTT_WriteString(0, "Configuration system initialized successfully\r\n");
+    
+    // Print current configuration for verification
+    Config_PrintCurrent();
+  } else {
+    SEGGER_RTT_printf(0, "WARNING: Configuration initialization failed (status: %d)\r\n", config_status);
+    SEGGER_RTT_WriteString(0, "Continuing with hardcoded defaults...\r\n");
   }
   
   // Optional: Run H3Lite profiling suite (enable for testing only)
