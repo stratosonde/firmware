@@ -147,12 +147,45 @@ bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region)
 }
 
 /**
- * @brief Save current active context to flash
+ * @brief Save current active context to flash (with batching for flash endurance)
  */
 bool MultiRegion_SaveCurrentContext(void)
 {
-    SEGGER_RTT_WriteString(0, "\r\n=== MultiRegion_SaveCurrentContext START ===\r\n");
-    APP_LOG(TS_ON, VLEVEL_M, "\r\n=== MultiRegion_SaveCurrentContext START ===\r\n");
+    SEGGER_RTT_WriteString(0, "\r\n=== MultiRegion_SaveCurrentContext START (BATCHED) ===\r\n");
+    APP_LOG(TS_ON, VLEVEL_M, "\r\n=== MultiRegion_SaveCurrentContext START (BATCHED) ===\r\n");
+    
+    if (!g_initialized) {
+        SEGGER_RTT_WriteString(0, "ERROR: Not initialized, cannot save\r\n");
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Not initialized, cannot save\r\n");
+        return false;
+    }
+    
+    // Increment unsaved transmission counter
+    g_unsaved_tx_count++;
+    SEGGER_RTT_printf(0, "Unsaved TX count: %d/%d\r\n", g_unsaved_tx_count, FRAME_COUNTER_SAVE_INTERVAL);
+    
+    // Check if we should save to flash (every N successful transmissions)
+    if (g_unsaved_tx_count < FRAME_COUNTER_SAVE_INTERVAL) {
+        SEGGER_RTT_WriteString(0, "Batching: Skipping flash save (interval not reached)\r\n");
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Batched save %d/%d\r\n", 
+                g_unsaved_tx_count, FRAME_COUNTER_SAVE_INTERVAL);
+        return true;  // Return success, just didn't write to flash
+    }
+    
+    // Reset counter and perform actual save
+    g_unsaved_tx_count = 0;
+    SEGGER_RTT_printf(0, "Batching: Performing flash save (reached %d TXs)\r\n", FRAME_COUNTER_SAVE_INTERVAL);
+    
+    return MultiRegion_ForceSaveCurrentContext();
+}
+
+/**
+ * @brief Force immediate save of current active context to flash (bypasses batching)
+ */
+bool MultiRegion_ForceSaveCurrentContext(void)
+{
+    SEGGER_RTT_WriteString(0, "\r\n=== MultiRegion_ForceSaveCurrentContext START ===\r\n");
+    APP_LOG(TS_ON, VLEVEL_M, "\r\n=== MultiRegion_ForceSaveCurrentContext START ===\r\n");
     
     if (!g_initialized) {
         SEGGER_RTT_WriteString(0, "ERROR: Not initialized, cannot save\r\n");
@@ -901,15 +934,15 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Join successful for %s (took %lus)\r\n", 
             RegionToString(region), join_time);
     
-    // Save the joined context
+    // Save the joined context (force save for critical join operations)
     HAL_Delay(500);  // Give MAC time to stabilize
-    MultiRegion_SaveCurrentContext();
+    MultiRegion_ForceSaveCurrentContext();
     
     // Send 2 post-join data packets to receive MAC commands (channel masks, etc.)
     SendPostJoinDataPackets(2);
     
-    // Save context again after data transmissions (frame counters updated)
-    MultiRegion_SaveCurrentContext();
+    // Save context again after data transmissions (frame counters updated, force save)
+    MultiRegion_ForceSaveCurrentContext();
     
     return LORAMAC_HANDLER_SUCCESS;
 }

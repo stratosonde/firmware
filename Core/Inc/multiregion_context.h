@@ -158,6 +158,13 @@ LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon);
 bool MultiRegion_SaveCurrentContext(void);
 
 /**
+ * @brief Force immediate save of current active context to flash (bypasses batching)
+ * @retval bool: true if save successful
+ * @note Use this for critical saves like during region switching
+ */
+bool MultiRegion_ForceSaveCurrentContext(void);
+
+/**
  * @brief Save all contexts to flash
  * @retval bool: true if save successful
  */
