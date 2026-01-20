@@ -93,6 +93,102 @@ static FlashLog_StatusTypeDef FlashLog_ReadHeader(FlashLog_HandleTypeDef *hlog,
     return FLASH_LOG_OK;
 }
 
+bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog)
+{
+    if (hlog == NULL || !hlog->initialized) {
+        return false;
+    }
+    
+    return (hlog->next_sequence > hlog->last_transmitted_sequence);
+}
+
+FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlog,
+                                                     FlashLog_Record_t *records,
+                                                     uint32_t max_count,
+                                                     uint32_t *actual_count)
+{
+    FlashLog_StatusTypeDef status;
+    uint32_t unsent_count, i;
+    uint32_t sequence_to_read;
+    
+    if (hlog == NULL || !hlog->initialized || records == NULL || actual_count == NULL) {
+        return FLASH_LOG_ERROR_PARAM;
+    }
+    
+    *actual_count = 0;
+    
+    /* Calculate how many unsent records we have */
+    unsent_count = FlashLog_GetUnsentCount(hlog);
+    
+    if (unsent_count == 0) {
+        return FLASH_LOG_ERROR_EMPTY;
+    }
+    
+    /* Limit to requested count */
+    if (max_count > unsent_count) {
+        max_count = unsent_count;
+    }
+    
+    /* Read records in LIFO order (newest first) */
+    for (i = 0; i < max_count; i++) {
+        sequence_to_read = hlog->next_sequence - 1 - i; /* Start from newest */
+        
+        /* Skip if this sequence was already transmitted */
+        if (sequence_to_read <= hlog->last_transmitted_sequence) {
+            break; /* No more unsent records */
+        }
+        
+        /* Convert sequence to offset for FlashLog_ReadRecord */
+        uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
+        
+        status = FlashLog_ReadRecord(hlog, &records[i], offset);
+        if (status != FLASH_LOG_OK) {
+            return status; /* Stop on error */
+        }
+        
+        (*actual_count)++;
+    }
+    
+    return FLASH_LOG_OK;
+}
+
+FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count)
+{
+    if (hlog == NULL || !hlog->initialized) {
+        return FLASH_LOG_ERROR_PARAM;
+    }
+    
+    if (count == 0) {
+        return FLASH_LOG_OK; /* Nothing to mark */
+    }
+    
+    /* Update last transmitted sequence to mark these records as sent */
+    uint32_t new_last_transmitted = hlog->last_transmitted_sequence + count;
+    
+    /* Don't exceed the latest sequence number */
+    if (new_last_transmitted >= hlog->next_sequence) {
+        new_last_transmitted = hlog->next_sequence - 1;
+    }
+    
+    hlog->last_transmitted_sequence = new_last_transmitted;
+    
+    /* Update header to persist transmission tracking */
+    return FlashLog_SyncHeader(hlog);
+}
+
+uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog)
+{
+    if (hlog == NULL || !hlog->initialized) {
+        return 0;
+    }
+    
+    if (hlog->next_sequence > hlog->last_transmitted_sequence) {
+        return hlog->next_sequence - hlog->last_transmitted_sequence;
+    }
+    
+    return 0;
+}
+
 /**
   * @brief  Validate header magic, version, and CRC
   */

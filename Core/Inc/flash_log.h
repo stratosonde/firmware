@@ -152,6 +152,7 @@ typedef struct {
     uint32_t oldest_addr;       /**< Cached oldest record address */
     uint32_t record_count;      /**< Cached total record count */
     uint32_t next_sequence;     /**< Next record sequence number */
+    uint32_t last_transmitted_sequence; /**< Sequence number of last transmitted record */
     uint8_t active_header;      /**< Active header slot (0 or 1) */
 } FlashLog_HandleTypeDef;
 
@@ -267,6 +268,42 @@ FlashLog_StatusTypeDef FlashLog_GetStats(FlashLog_HandleTypeDef *hlog,
                                          uint32_t *total_capacity,
                                          uint32_t *used_records,
                                          uint32_t *free_records);
+
+/**
+  * @brief  Check if there are unsent records available for bulk transmission
+  * @param  hlog: Pointer to flash log handle
+  * @retval true if unsent records exist, false otherwise
+  */
+bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog);
+
+/**
+  * @brief  Get unsent records for bulk transmission (LIFO order)
+  * @param  hlog: Pointer to flash log handle
+  * @param  records: Array to store unsent records
+  * @param  max_count: Maximum records to read (typically 6 for 222-byte packet)
+  * @param  actual_count: Pointer to store actual number read
+  * @retval FlashLog_StatusTypeDef
+  * @note   Returns newest unsent records first (LIFO order)
+  */
+FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlog,
+                                                     FlashLog_Record_t *records,
+                                                     uint32_t max_count,
+                                                     uint32_t *actual_count);
+
+/**
+  * @brief  Mark records as transmitted to avoid retransmission
+  * @param  hlog: Pointer to flash log handle
+  * @param  count: Number of newest records to mark as transmitted
+  * @retval FlashLog_StatusTypeDef
+  */
+FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count);
+
+/**
+  * @brief  Get count of unsent records
+  * @param  hlog: Pointer to flash log handle
+  * @retval Number of unsent records
+  */
+uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog);
 
 /* CRC32 utility -------------------------------------------------------------*/
 
