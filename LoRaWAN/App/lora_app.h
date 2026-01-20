@@ -64,16 +64,28 @@ typedef struct {
 #define APP_TX_DUTYCYCLE                            300000
 
 /*!
- * LoRaWAN User application port
+ * LoRaWAN User application port (CayenneLPP for debug/development)
  * @note do not use 224. It is reserved for certification
  */
 #define LORAWAN_USER_APP_PORT                       2
 
 /*!
- * LoRaWAN GNSS Detail port (custom binary format)
+ * LoRaWAN GNSS Detail port (custom binary format for debug/development)
  * @note Detailed satellite tracking and 3D speed telemetry
  */
 #define LORAWAN_GNSS_DETAIL_PORT                    3
+
+/*!
+ * LoRaWAN Compact Binary port (11-byte SF10 probe packet - PRODUCTION)
+ * @note Optimized for maximum range transmission
+ */
+#define LORAWAN_COMPACT_PORT                        10
+
+/*!
+ * LoRaWAN Bulk Binary port (222-byte SF7 bulk transfer - PRODUCTION)
+ * @note High-speed bulk data transfer when link conditions are good
+ */
+#define LORAWAN_BULK_PORT                           11
 
 /*!
  * LoRaWAN Switch class application port
