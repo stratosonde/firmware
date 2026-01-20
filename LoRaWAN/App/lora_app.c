@@ -1244,10 +1244,22 @@ static void SendTxData(void)
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
       
       /* Check for restricted region - skip transmission if detected */
-      if (detected_region == 0xFF || detected_region >= 16) {  // Assuming restricted regions return special value
-        SEGGER_RTT_WriteString(0, "RESTRICTED REGION DETECTED: Skipping transmission for safety\r\n");
-        SEGGER_RTT_WriteString(0, "=== SendTxData END (RESTRICTED) ===\r\n");
-        return;  // Exit early - no transmission allowed in restricted areas
+      // Use h3lite to detect region, check for restricted areas
+      RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
+      
+      if (h3_region_id == REGION_RESTRICTED || h3_region_id == REGION_UNKNOWN) {
+        const char* restriction_reason = (h3_region_id == REGION_RESTRICTED) ? 
+                                        "RESTRICTED REGION" : "UNKNOWN REGION";
+        SEGGER_RTT_printf(0, "%s DETECTED: Skipping transmission for safety\r\n", restriction_reason);
+        SEGGER_RTT_WriteString(0, "=== SendTxData END (SAFETY RESTRICTION) ===\r\n");
+        return;  // Exit early - no transmission allowed in restricted/unknown areas
+      }
+      
+      // Additional safety check for specific problematic regions (North Korea, disputed territories)
+      if (detected_region == 0xFF || detected_region >= 16) {  // Out of range enum values
+        SEGGER_RTT_WriteString(0, "INVALID REGION VALUE: Skipping transmission for safety\r\n");
+        SEGGER_RTT_WriteString(0, "=== SendTxData END (INVALID REGION) ===\r\n");
+        return;  // Exit early
       }
       
       /* Convert floats to integers for printing (safe for all printf implementations) */
