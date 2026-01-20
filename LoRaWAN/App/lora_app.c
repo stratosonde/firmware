@@ -45,6 +45,7 @@
 #include "timer_if.h"
 #include "payload_format.h"
 #include "flash_log.h"
+#include "config.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -798,42 +799,81 @@ static const char* GetModeName(OperatingMode_t mode) {
 static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint32_t *gps_timeout_ms) {
     uint32_t interval_ms;
     
-    switch(mode) {
-        case MODE_NORMAL:
-            interval_ms = 300000;      // 5 minutes
-            *gps_enabled = true;
-            *gps_timeout_ms = 60000;   // 60 seconds
-            break;
-            
-        case MODE_CONSERVATIVE:
-            interval_ms = 600000;      // 10 minutes
-            *gps_enabled = true;
-            *gps_timeout_ms = 60000;   // 60 seconds - allows for occasional cold starts
-            break;
-            
-        case MODE_REDUCED:
-            interval_ms = 900000;      // 15 minutes
-            *gps_enabled = false;
-            *gps_timeout_ms = 0;
-            break;
-            
-        case MODE_RECOVERY:
-            interval_ms = 1800000;     // 30 minutes
-            *gps_enabled = false;
-            *gps_timeout_ms = 0;
-            break;
-            
-        case MODE_SURVIVAL:
-            interval_ms = 3600000;     // 60 minutes
-            *gps_enabled = false;
-            *gps_timeout_ms = 0;
-            break;
-            
-        default:
-            interval_ms = 600000;      // 10 minutes (safe default)
-            *gps_enabled = true;
-            *gps_timeout_ms = 30000;
-            break;
+    // Get configuration pointer (use defaults if not available)
+    const SystemConfig_t *config = Config_Get();
+    if (config == NULL) {
+        // Fallback to hardcoded values if config not available
+        switch(mode) {
+            case MODE_NORMAL:
+                interval_ms = 300000;
+                *gps_enabled = true;
+                *gps_timeout_ms = 60000;
+                break;
+            case MODE_CONSERVATIVE:
+                interval_ms = 600000;
+                *gps_enabled = true;
+                *gps_timeout_ms = 60000;
+                break;
+            case MODE_REDUCED:
+                interval_ms = 900000;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+            case MODE_RECOVERY:
+                interval_ms = 1800000;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+            case MODE_SURVIVAL:
+                interval_ms = 3600000;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+            default:
+                interval_ms = 600000;
+                *gps_enabled = true;
+                *gps_timeout_ms = 30000;
+                break;
+        }
+    } else {
+        // Use configuration values
+        switch(mode) {
+            case MODE_NORMAL:
+                interval_ms = config->tx_interval_normal;
+                *gps_enabled = true;
+                *gps_timeout_ms = config->gps_timeout_normal * 1000;  // Convert to ms
+                break;
+                
+            case MODE_CONSERVATIVE:
+                interval_ms = config->tx_interval_conservative;
+                *gps_enabled = true;
+                *gps_timeout_ms = config->gps_timeout_conservative * 1000;  // Convert to ms
+                break;
+                
+            case MODE_REDUCED:
+                interval_ms = config->tx_interval_reduced;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+                
+            case MODE_RECOVERY:
+                interval_ms = config->tx_interval_recovery;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+                
+            case MODE_SURVIVAL:
+                interval_ms = config->tx_interval_survival;
+                *gps_enabled = false;
+                *gps_timeout_ms = 0;
+                break;
+                
+            default:
+                interval_ms = config->tx_interval_conservative;  // Conservative default
+                *gps_enabled = true;
+                *gps_timeout_ms = config->gps_timeout_conservative * 1000;
+                break;
+        }
     }
     
     return interval_ms;
