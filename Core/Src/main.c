@@ -61,6 +61,8 @@ ADC_HandleTypeDef hadc;
 
 I2C_HandleTypeDef hi2c2;
 
+IWDG_HandleTypeDef hiwdg;
+
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi2;
@@ -69,10 +71,6 @@ SUBGHZ_HandleTypeDef hsubghz;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
-
-/* Flash logging handles */
-W25Q_HandleTypeDef hw25q;
-FlashLog_HandleTypeDef hflashlog;
 
 /* USER CODE BEGIN PV */
 /* Note: RTT Virtual Terminal architecture:
@@ -88,6 +86,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_I2C2_Init(void);
+static void MX_IWDG_Init(void);
 /* USER CODE BEGIN PFP */
 void system_sleep(void);
 void leds_boot_seq(void);
@@ -239,8 +238,8 @@ int main(void)
   //TEST_UltraMinimal_STOP2();  // MCU enters STOP2 and never wakes - measure current
   /* ***** END TEMPORARY TEST ***** */
   
-  /* NOTE: IWDG watchdog disabled due to missing HAL driver */
-  SEGGER_RTT_WriteString(0, "IWDG watchdog disabled (HAL driver not available)\r\n");
+  /* NOTE: IWDG watchdog will be initialized and enabled below */
+  SEGGER_RTT_WriteString(0, "IWDG watchdog will be initialized (16.4s timeout)\r\n");
   
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
@@ -255,6 +254,7 @@ int main(void)
   MX_LoRaWAN_Init();
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
   /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
 
@@ -342,7 +342,8 @@ int main(void)
     MX_LoRaWAN_Process();
 
     /* USER CODE BEGIN 3 */
-    /* NOTE: Watchdog refresh disabled due to missing HAL driver */
+    /* Refresh watchdog to prevent reset (must be called within 16.4 seconds) */
+    HAL_IWDG_Refresh(&hiwdg);
   }
   /* USER CODE END 3 */
 }
@@ -367,12 +368,14 @@ void SystemClock_Config(void)
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_LSE|RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_LSE
+                              |RCC_OSCILLATORTYPE_MSI;
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_10;
+  RCC_OscInitStruct.LSIDiv = RCC_LSI_DIV1;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -488,6 +491,35 @@ static void MX_I2C2_Init(void)
   /* USER CODE BEGIN I2C2_Init 2 */
 
   /* USER CODE END I2C2_Init 2 */
+
+}
+
+/**
+  * @brief IWDG Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_IWDG_Init(void)
+{
+
+  /* USER CODE BEGIN IWDG_Init 0 */
+
+  /* USER CODE END IWDG_Init 0 */
+
+  /* USER CODE BEGIN IWDG_Init 1 */
+
+  /* USER CODE END IWDG_Init 1 */
+  hiwdg.Instance = IWDG;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_4;
+  hiwdg.Init.Window = 4095;
+  hiwdg.Init.Reload = 4095;
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN IWDG_Init 2 */
+
+  /* USER CODE END IWDG_Init 2 */
 
 }
 
@@ -666,7 +698,6 @@ void MX_USART1_UART_Init(void)
 
 }
 
-
 /**
   * Enable DMA controller clock
   */
@@ -719,7 +750,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /* PB10 (GPS power) initialization removed - now controlled by GNSS driver */
+  /*Configure GPIO pin : PB10 */
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);

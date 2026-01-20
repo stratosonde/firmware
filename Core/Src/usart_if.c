@@ -106,7 +106,7 @@ UTIL_ADV_TRACE_Status_t vcom_Init(void (*cb)(void *))
 
   /* USER CODE END vcom_Init_1 */
   TxCpltCallback = cb;
-  
+
   /* CRITICAL: UART1 is used for GPS, NOT vcom trace! */
   /* Using SEGGER RTT for all logging - no need for UART trace */
   /* Commented out to prevent interference with GPS on UART1 */

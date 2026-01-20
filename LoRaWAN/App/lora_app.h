@@ -125,7 +125,7 @@ typedef struct {
 /*!
  * LoRaWAN default activation type
  */
-#define LORAWAN_DEFAULT_ACTIVATION_TYPE             ACTIVATION_TYPE_ABP  // TEST: Using hardcoded session keys
+#define LORAWAN_DEFAULT_ACTIVATION_TYPE             ACTIVATION_TYPE_ABP
 
 /*!
  * LoRaWAN force rejoin even if the NVM context is restored

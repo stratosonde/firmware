@@ -271,7 +271,6 @@ static ActivationType_t ActivationType = LORAWAN_DEFAULT_ACTIVATION_TYPE;
 /**
   * @brief LoRaWAN force rejoin even if the NVM context is restored
   */
-// ForceRejoin: Uncomment to force rejoin on boot (useful for testing or network changes)
 static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
 
 /**
@@ -470,7 +469,7 @@ void LoRaWAN_Init(void)
     /* send every time timer elapses */
     UTIL_TIMER_Create(&TxTimer, TxPeriodicity, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
     UTIL_TIMER_Start(&TxTimer);
-    
+
     /* Trigger first transmission immediately (don't wait for timer) */
     SEGGER_RTT_WriteString(0, "Triggering first transmission immediately...\r\n");
     UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
@@ -1990,16 +1989,16 @@ static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t
 {
   if (queue->count >= PACKET_QUEUE_SIZE || size > sizeof(queue->entries[0].buffer))
     return false;
-  
+
   PacketQueueEntry_t *entry = &queue->entries[queue->head];
   memcpy(entry->buffer, data, size);
   entry->size = size;
   entry->port = port;
   entry->valid = true;
-  
+
   queue->head = (queue->head + 1) % PACKET_QUEUE_SIZE;
   queue->count++;
-  
+
   return true;
 }
 
@@ -2013,13 +2012,13 @@ static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry)
 {
   if (queue->count == 0)
     return false;
-  
+
   *entry = queue->entries[queue->tail];
   queue->entries[queue->tail].valid = false;
-  
+
   queue->tail = (queue->tail + 1) % PACKET_QUEUE_SIZE;
   queue->count--;
-  
+
   return true;
 }
 

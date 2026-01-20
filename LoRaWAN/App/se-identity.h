@@ -88,7 +88,7 @@ extern "C" {
 /*!
  * End-device IEEE EUI (big endian)
  * When set to 00,00,00,00,00,00,00,00 DevEui is automatically set with a value provided by MCU platform
- * 
+ *
  * Multi-region DevEUI encoding: 60:81:F9:53:25:0E:CH:FF
  *   C = Counter (upper nibble, 0-F) for disambiguating same freq
  *   H = Hundreds of MHz (8=800MHz, 9=900MHz)
@@ -102,7 +102,7 @@ extern "C" {
 #define LORAWAN_DEVICE_EUI_US915                           0x60,0x81,0xF9,0x53,0x25,0x10,0x09,0x15  // 915 MHz, Americas
 #define LORAWAN_DEVICE_EUI_EU868                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x68  // 868 MHz, Europe
 #define LORAWAN_DEVICE_EUI_AS923                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x23  // 923 MHz, Asia
-#define LORAWAN_DEVICE_EUI_AU915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x19,0x15  // 915 MHz, Australia (counter=1)
+#define LORAWAN_DEVICE_EUI_AU915                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x19,0x15  // 915 MHz, Australia (counter=1)   
 #define LORAWAN_DEVICE_EUI_IN865                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x08,0x65  // 865 MHz, India
 #define LORAWAN_DEVICE_EUI_KR920                           0x60,0x81,0xF9,0x53,0x25,0x0E,0x09,0x20  // 920 MHz, Korea
 
@@ -130,15 +130,13 @@ extern "C" {
 
 /*!
  * Forwarding Network session key
- * MULTIREGION: Set to zeros - actual keys loaded via LmHandlerSetKey() per region
  */
-#define LORAWAN_NWK_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
+#define LORAWAN_NWK_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
 
 /*!
- * Application session key  
- * MULTIREGION: Set to zeros - actual keys loaded via LmHandlerSetKey() per region
+ * Application session key
  */
-#define LORAWAN_APP_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
+#define LORAWAN_APP_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
 
 /*!
  * Format commissioning keys
