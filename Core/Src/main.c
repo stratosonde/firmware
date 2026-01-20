@@ -35,6 +35,8 @@
 #include "h3lite.h"
 #include "multiregion_h3.h"
 #include "w25q16jv.h"
+#include "flash_log.h"
+#include "payload_format.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
 /* USER CODE END Includes */
 
@@ -68,6 +70,10 @@ SUBGHZ_HandleTypeDef hsubghz;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
+
+/* Flash logging handles */
+W25Q_HandleTypeDef hw25q;
+FlashLog_HandleTypeDef hflashlog;
 
 /* USER CODE BEGIN PV */
 /* Note: RTT Virtual Terminal architecture:
@@ -265,6 +271,41 @@ int main(void)
     Error_Handler();
   }
   SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
+  
+  // Initialize external flash (W25Q16JV) for logging
+  SEGGER_RTT_WriteString(0, "Initializing external flash (W25Q16JV)...\r\n");
+  W25Q_StatusTypeDef w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);
+  if (w25q_status == W25Q_OK) {
+    uint32_t jedec_id;
+    if (W25Q_ReadJEDECID(&hw25q, &jedec_id) == W25Q_OK) {
+      SEGGER_RTT_printf(0, "W25Q16JV initialized successfully (JEDEC ID: 0x%06lX)\r\n", jedec_id);
+    } else {
+      SEGGER_RTT_WriteString(0, "W25Q16JV initialized but JEDEC ID read failed\r\n");
+    }
+  } else {
+    SEGGER_RTT_WriteString(0, "ERROR: W25Q16JV initialization failed!\r\n");
+    Error_Handler();
+  }
+  
+  // Initialize flash logging system
+  SEGGER_RTT_WriteString(0, "Initializing flash logging system...\r\n");
+  FlashLog_StatusTypeDef flashlog_status = FlashLog_Init(&hflashlog, &hw25q);
+  if (flashlog_status == FLASH_LOG_OK) {
+    uint32_t total_capacity, used_records, free_records;
+    FlashLog_GetStats(&hflashlog, &total_capacity, &used_records, &free_records);
+    SEGGER_RTT_printf(0, "Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
+                      used_records, total_capacity, free_records);
+  } else {
+    SEGGER_RTT_printf(0, "ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
+    Error_Handler();
+  }
+  
+  // Validate payload format sizes at compile time
+  SEGGER_RTT_WriteString(0, "Validating payload format sizes...\r\n");
+  if (!PayloadFormat_ValidateSizes()) {
+    SEGGER_RTT_WriteString(0, "ERROR: Payload format size validation failed!\r\n");
+    Error_Handler();
+  }
   
   // Optional: Run H3Lite profiling suite (enable for testing only)
   #ifdef H3LITE_PROFILING_ENABLED
