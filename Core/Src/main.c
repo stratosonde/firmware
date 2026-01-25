@@ -72,6 +72,10 @@ SUBGHZ_HandleTypeDef hsubghz;
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_tx;
 
+/* Flash logging handles */
+W25Q_HandleTypeDef hw25q;
+FlashLog_HandleTypeDef hflashlog;
+
 /* USER CODE BEGIN PV */
 /* Note: RTT Virtual Terminal architecture:
  * Channel 0 with virtual terminals (via 0xFF escape sequences):
@@ -510,9 +514,9 @@ static void MX_IWDG_Init(void)
 
   /* USER CODE END IWDG_Init 1 */
   hiwdg.Instance = IWDG;
-  hiwdg.Init.Prescaler = IWDG_PRESCALER_4;
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_256;  /* Maximum prescaler for longest timeout */
   hiwdg.Init.Window = 4095;
-  hiwdg.Init.Reload = 4095;
+  hiwdg.Init.Reload = 4095;  /* Maximum reload value */
   if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
   {
     Error_Handler();
