@@ -325,6 +325,23 @@ bool MultiRegion_ForceSaveCurrentContext(void)
     
     g_storage.active_slot = slot;
     
+    /*
+     * FRAME COUNTER MARGIN (C6 fix):
+     * When using batched saves, the device may reset between save points.
+     * On restore the frame counter would regress to the last saved value,
+     * causing the network server to reject all subsequent uplinks as replays.
+     *
+     * Solution: store uplink_counter + FRAME_COUNTER_SAVE_INTERVAL so the
+     * restored value is always ahead of any counter the server has seen.
+     * The live MAC counter is NOT modified — only the flash copy is advanced.
+     */
+    ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+    SEGGER_RTT_printf(0, "Frame counter margin applied: stored FCntUp=%lu (advanced by %d)\r\n",
+                      ctx->uplink_counter, FRAME_COUNTER_SAVE_INTERVAL);
+    
+    // Also reset the unsaved TX count since we're doing an actual write
+    g_unsaved_tx_count = 0;
+    
     // Save to flash
     SEGGER_RTT_WriteString(0, "Calling FlashWriteStorage...\r\n");
     bool result = FlashWriteStorage();
