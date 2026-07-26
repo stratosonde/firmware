@@ -31,11 +31,26 @@ extern "C" {
 /** @brief Configuration version (increment when structure changes) */
 #define CONFIG_VERSION                1
 
-/** @brief Configuration flash address (last 1KB of multiregion context flash) */
-#define CONFIG_FLASH_ADDRESS          (0x0803FC00UL)  // 1KB before end of flash
+/**
+  * @brief Configuration flash address
+  *
+  * @warning The STM32WLE5 erases internal flash in 2KB pages. This region MUST
+  *          therefore occupy a page of its own, otherwise Config_Save() would
+  *          erase a neighbouring page and destroy its contents.
+  *
+  * Internal flash page map (256KB device, 2KB pages):
+  *   0x0803E800  page 125 - System configuration     (this module)
+  *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
+  *   0x0803F800  page 127 - Multi-region contexts    (MULTIREGION_FLASH_BASE_ADDR)
+  *
+  * Previously this was 0x0803FC00, which sits *inside* page 127. Saving the
+  * configuration erased the whole page and wiped every stored region context
+  * (DevAddr, session keys and frame counters), and vice-versa.
+  */
+#define CONFIG_FLASH_ADDRESS          (0x0803E800UL)  // Page 125, dedicated
 
-/** @brief Configuration flash size */
-#define CONFIG_FLASH_SIZE             1024
+/** @brief Configuration flash region size (one full 2KB erase page) */
+#define CONFIG_FLASH_SIZE             2048
 
 /* Exported types ------------------------------------------------------------*/
 

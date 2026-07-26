@@ -41,12 +41,27 @@ _estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */
 _Min_Heap_Size = 0x200; /* required amount of heap  */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
+/*
+ * Reserved data pages at the top of internal flash (2KB erase pages).
+ * These are written at runtime and MUST NOT be occupied by code or rodata,
+ * otherwise an erase would destroy the firmware image.
+ *
+ *   0x0803E800  page 125 - System configuration    (CONFIG_FLASH_ADDRESS)
+ *   0x0803F000  page 126 - LoRaWAN NVM context     (LORAWAN_NVM_BASE_ADDRESS)
+ *   0x0803F800  page 127 - Multi-region contexts   (MULTIREGION_FLASH_BASE_ADDR)
+ *
+ * The FLASH region below is therefore shortened from 256K to 250K so the
+ * linker can never place code into these three pages.
+ */
+_reserved_flash_pages = 3;
+_flash_data_origin    = 0x0803E800;
+
 /* Memories definition */
 MEMORY
 {
   RAM    (xrw)   : ORIGIN = 0x20000000, LENGTH = 64K
   RAM2   (xrw)   : ORIGIN = 0x10000000, LENGTH = 32K
-  FLASH   (rx)   : ORIGIN = 0x08000000, LENGTH = 256K
+  FLASH   (rx)   : ORIGIN = 0x08000000, LENGTH = 250K   /* 256K - 6K reserved for runtime data */
 }
 
 /* Sections */
