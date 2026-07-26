@@ -886,13 +886,12 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   /* USER CODE BEGIN OnRxData_1 */
   SEGGER_RTT_WriteString(0, "\r\n=== OnRxData Callback ===\r\n");
   
-  // Check for LinkCheckAns response (from LinkCheckReq)
-  // Note: LinkCheck result is handled internally by LmHandler, 
-  // we'll use a simpler approach for now
-  uint8_t margin = 20;  // Assume good margin for now
-  uint8_t gw_count = 3;  // Assume multiple gateways for now
-  
-  // TODO: Implement proper LinkCheck result retrieval when LmHandler API is clarified
+  // Read real LinkCheck results from LmHandler RxParams
+  // LmHandlerRxParams_t already contains LinkCheck, DemodMargin, NbGateways
+  // populated by the MAC layer from the server's LinkCheckAns response
+  bool linkcheck_received = params->LinkCheck;
+  uint8_t margin = params->DemodMargin;
+  uint8_t gw_count = params->NbGateways;
   
   // Log link check results
   char link_msg[128];
@@ -902,7 +901,8 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   SEGGER_RTT_WriteString(0, link_msg);
   
   // Evaluate link quality and trigger bulk transfer if conditions are met
-  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
+  // Only evaluate if we actually received a LinkCheckAns (linkcheck_received == true)
+  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && linkcheck_received) {
     SEGGER_RTT_WriteString(0, "Processing LinkCheckAns for bulk transfer decision...\r\n");
     
     // Check all conditions for bulk transfer
@@ -929,9 +929,13 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
       SEGGER_RTT_WriteString(0, "CONDITIONS NOT MET: Completing cycle (conservative approach)\r\n");
       g_tx_state = TX_STATE_COMPLETE;
     }
+  } else if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && !linkcheck_received) {
+    // Downlink received but no LinkCheckAns - cannot assess link quality for bulk
+    SEGGER_RTT_WriteString(0, "Downlink received but no LinkCheckAns - skipping bulk evaluation\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
   } else {
     // Link check result for non-probe transmissions (informational)
-    bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
+    bool link_good = (linkcheck_received && margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
     SEGGER_RTT_printf(0, "Link quality: %s (margin=%ddB >= %d, gateways=%d >= %d)\r\n",
                      link_good ? "GOOD" : "POOR", margin, LINK_MARGIN_THRESHOLD, 
                      gw_count, GATEWAY_COUNT_THRESHOLD);
@@ -1070,10 +1074,15 @@ static void SendTxData(void)
   /* Declare ttf_ms at function scope so it's available for telemetry */
   uint32_t ttf_ms = 0;
   
-  // Check if GPS is disabled by power management
-  if (!gps_enabled_by_power_mgmt) {
-    /* GPS disabled by power management - skip acquisition */
-    SEGGER_RTT_WriteString(0, "GPS disabled by power management - skipping acquisition\r\n");
+  // Check if GPS is disabled by power management or bulk transfer mode
+  // C7a FIX: Skip GPS during bulk transfer - we're sending cached flash data, not live telemetry
+  if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
+    /* GPS disabled - skip acquisition */
+    if (g_tx_state == TX_STATE_BULK_TRANSFER) {
+      SEGGER_RTT_WriteString(0, "GPS skipped - bulk transfer mode (using cached data)\r\n");
+    } else {
+      SEGGER_RTT_WriteString(0, "GPS disabled by power management - skipping acquisition\r\n");
+    }
     hgnss.data.valid = false;
     hgnss.data.fix_quality = GNSS_FIX_INVALID;
     ttf_ms = 0;  // No GPS acquisition performed
@@ -1402,7 +1411,17 @@ static void SendTxData(void)
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
   
-  SEGGER_RTT_printf(0, "Adaptive TX: State=%d, sending SF10 probe...\r\n", g_tx_state);
+  /* C2 FIX: Reset stale TX states so every timer cycle sends actual data.
+   * If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
+   * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
+   * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData. */
+  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
+    SEGGER_RTT_printf(0, "Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
+    g_tx_state = TX_STATE_PROBE_SF10;
+    g_bulk_packets_sent = 0;
+  }
+  
+  SEGGER_RTT_printf(0, "Adaptive TX: State=%d\r\n", g_tx_state);
   
   switch (g_tx_state) {
     case TX_STATE_PROBE_SF10:
@@ -1448,9 +1467,11 @@ static void SendTxData(void)
     }
     
     case TX_STATE_WAIT_PROBE_ACK:
-      // This state is handled in OnRxData callback when LinkCheckAns is received
-      SEGGER_RTT_WriteString(0, "Waiting for LinkCheckAns response...\r\n");
-      g_tx_state = TX_STATE_COMPLETE;  // Fallback to complete if no response
+      /* Should not reach here - stale states are reset above before the switch.
+       * Fall through to PROBE_SF10 as safety fallback. */
+      SEGGER_RTT_WriteString(0, "WARN: Unexpected WAIT_PROBE_ACK in switch, resetting\r\n");
+      g_tx_state = TX_STATE_PROBE_SF10;
+      /* fall through to PROBE_SF10 - will send on next cycle */
       break;
       
     case TX_STATE_BULK_TRANSFER:
@@ -1683,6 +1704,20 @@ static void OnTxData(LmHandlerTxParams_t *params)
       SEGGER_RTT_printf(0, "OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
                         entry.port, entry.size, queue_status, PacketQueue_Count(&g_packet_queue));
     }
+  }
+  
+  /* C7b FIX: Continue bulk transfer if active - re-arm send task for next packet.
+   * After TX+RX windows complete, if we're still in BULK_TRANSFER with data remaining,
+   * schedule another SendTxData call to send the next bulk packet immediately. */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER && 
+      FlashLog_HasUnsentData(&hflashlog) && 
+      g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+    SEGGER_RTT_WriteString(0, "OnTxData: Re-arming bulk transfer (next packet)...\r\n");
+    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+  } else if (g_tx_state == TX_STATE_BULK_TRANSFER) {
+    SEGGER_RTT_WriteString(0, "OnTxData: Bulk transfer complete\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
+    g_bulk_packets_sent = 0;
   }
   /* USER CODE END OnTxData_1 */
 }
