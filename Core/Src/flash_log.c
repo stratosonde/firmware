@@ -130,15 +130,17 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlo
     }
     
     /* Read records in LIFO order (newest first) */
+    /* C4 FIX: Read FIFO (oldest unsent first) so MarkRecordsTransmitted
+     * correctly advances last_transmitted_sequence from the old end. */
     for (i = 0; i < max_count; i++) {
-        sequence_to_read = hlog->next_sequence - 1 - i; /* Start from newest */
+        sequence_to_read = hlog->last_transmitted_sequence + i; /* Start from oldest unsent */
         
-        /* Skip if this sequence was already transmitted */
-        if (sequence_to_read <= hlog->last_transmitted_sequence) {
-            break; /* No more unsent records */
+        /* Stop if we've reached the newest record */
+        if (sequence_to_read >= hlog->next_sequence) {
+            break;
         }
         
-        /* Convert sequence to offset for FlashLog_ReadRecord */
+        /* Convert sequence to LIFO offset for FlashLog_ReadRecord */
         uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
         
         status = FlashLog_ReadRecord(hlog, &records[i], offset);
@@ -231,6 +233,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     header.sequence = hlog->record_count;  /* Use record count as sequence */
     header.oldest_addr = hlog->oldest_addr;
     header.flags = 0;
+    header.last_transmitted_seq = hlog->last_transmitted_sequence;
     
     /* Calculate CRC32 (all fields except crc32 itself) */
     header.crc32 = FlashLog_CRC32((const uint8_t *)&header, 
@@ -317,11 +320,13 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
             hlog->write_addr = header_a.write_addr;
             hlog->record_count = header_a.record_count;
             hlog->oldest_addr = header_a.oldest_addr;
+            hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
             hlog->active_header = 0;
         } else {
             hlog->write_addr = header_b.write_addr;
             hlog->record_count = header_b.record_count;
             hlog->oldest_addr = header_b.oldest_addr;
+            hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
             hlog->active_header = 1;
         }
     } else if (valid_a) {
@@ -329,12 +334,14 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         hlog->write_addr = header_a.write_addr;
         hlog->record_count = header_a.record_count;
         hlog->oldest_addr = header_a.oldest_addr;
+        hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
         hlog->active_header = 0;
     } else if (valid_b) {
         /* Only B valid */
         hlog->write_addr = header_b.write_addr;
         hlog->record_count = header_b.record_count;
         hlog->oldest_addr = header_b.oldest_addr;
+        hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
         hlog->active_header = 1;
     } else {
         /* No valid headers - initialize fresh */

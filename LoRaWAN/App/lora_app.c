@@ -342,6 +342,7 @@ static PacketQueue_t g_packet_queue = {0};
 /* Adaptive transmission strategy state */
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
+static uint32_t g_bulk_pending_mark = 0;  /* C4: records to mark after confirmed TX */
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -1528,8 +1529,8 @@ static void SendTxData(void)
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
               
-              // Mark these records as transmitted
-              FlashLog_MarkRecordsTransmitted(&hflashlog, record_count);
+              // C4 FIX: Defer marking until OnTxData confirms actual TX
+              g_bulk_pending_mark = record_count;
               
               SEGGER_RTT_printf(0, "Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
@@ -1686,6 +1687,21 @@ static void OnTxData(LmHandlerTxParams_t *params)
   /* This ensures correct DevAddr, FCnt, and session state are saved */
   if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
     MultiRegion_SaveCurrentContext();
+    
+    /* C4 FIX: Mark flash records as transmitted only after confirmed TX */
+    if (g_bulk_pending_mark > 0) {
+      FlashLog_MarkRecordsTransmitted(&hflashlog, g_bulk_pending_mark);
+      SEGGER_RTT_printf(0, "OnTxData: Marked %lu records as transmitted\r\n", 
+                        (unsigned long)g_bulk_pending_mark);
+      g_bulk_pending_mark = 0;
+    }
+  } else {
+    /* TX failed - don't mark records, they'll be retransmitted */
+    if (g_bulk_pending_mark > 0) {
+      SEGGER_RTT_printf(0, "OnTxData: TX failed, NOT marking %lu records\r\n",
+                        (unsigned long)g_bulk_pending_mark);
+      g_bulk_pending_mark = 0;
+    }
   }
   
   /* Drain packet queue after RX windows complete */

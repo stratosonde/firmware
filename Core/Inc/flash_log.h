@@ -46,7 +46,7 @@ extern "C" {
 #define FLASH_LOG_HEADER_MAGIC    0xF1A5DEAD
 
 /** @brief Header version (increment if structure changes) */
-#define FLASH_LOG_HEADER_VERSION  1
+#define FLASH_LOG_HEADER_VERSION  2
 
 /** @brief Record size in bytes (must be power of 2 for efficiency) */
 #define FLASH_LOG_RECORD_SIZE     64
@@ -138,7 +138,8 @@ typedef struct __attribute__((packed)) {
     uint32_t sequence;          /**< Header update sequence (for ping-pong selection) */
     uint32_t oldest_addr;       /**< Address of oldest valid record */
     uint32_t flags;             /**< Status flags */
-    uint32_t reserved[3];       /**< Reserved for future use */
+    uint32_t last_transmitted_seq; /**< Last transmitted sequence (persisted for reboot recovery) */
+    uint32_t reserved[2];       /**< Reserved for future use */
     uint32_t crc32;             /**< CRC32 of preceding bytes */
 } FlashLog_Header_t;
 
