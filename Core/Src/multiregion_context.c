@@ -941,6 +941,12 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
             last_join_attempt = HAL_GetTick();
         }
         
+        // C5 FIX: Refresh watchdog during join wait to prevent reset.
+        // Join can take 5-30+ seconds (RX windows + retries), which can
+        // exceed the ~33s IWDG timeout and cause an unexpected reset.
+        extern IWDG_HandleTypeDef hiwdg;
+        HAL_IWDG_Refresh(&hiwdg);
+        
         // Delay to prevent tight loop (250ms is sufficient for MAC processing)
         HAL_Delay(250);
     }
