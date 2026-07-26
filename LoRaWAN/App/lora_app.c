@@ -52,6 +52,7 @@
 /* USER CODE BEGIN EV */
 extern GNSS_HandleTypeDef hgnss;  /* GNSS handle from sys_sensors.c */
 extern FlashLog_HandleTypeDef hflashlog;  /* Flash logging handle from main.c */
+extern IWDG_HandleTypeDef hiwdg;  /* Watchdog handle from main.c */
 /* USER CODE END EV */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -831,7 +832,7 @@ static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint
             default:
                 interval_ms = 600000;
                 *gps_enabled = true;
-                *gps_timeout_ms = 30000;
+                *gps_timeout_ms = 60000;  // 60 seconds (was 30s - bug fix)
                 break;
         }
     } else {
@@ -1116,7 +1117,8 @@ static void SendTxData(void)
   uint32_t gps_start = 0;
   ttf_ms = 0;  /* Will be updated when fix is obtained */
   
-  SEGGER_RTT_WriteString(0, "Waking GPS from standby for fix acquisition (20s max)...\r\n");
+  SEGGER_RTT_printf(0, "Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
+                    (unsigned long)(gps_timeout_ms / 1000));
   if (GNSS_WakeFromStandby(&hgnss) == GNSS_OK)
   {
     /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
@@ -1134,6 +1136,10 @@ static void SendTxData(void)
     {
       /* Process DMA buffer - parses NMEA and updates hgnss.data */
       GNSS_ProcessDMABuffer(&hgnss);
+      
+      /* CRITICAL: Refresh watchdog during GPS acquisition to prevent timeout reset */
+      /* GPS can take up to 60s, approaching the 32.76s watchdog timeout */
+      HAL_IWDG_Refresh(&hiwdg);
       
       /* Check if we have a good quality fix */
       if (GNSS_IsFixGoodQuality(&hgnss))
@@ -1316,8 +1322,10 @@ static void SendTxData(void)
   /* Add separator before continuing to telemetry */
   SEGGER_RTT_WriteString(0, "\r\n");
   
-  // Sensor data already read at top of function for temperature
-  SEGGER_RTT_WriteString(0, "Using previously read sensor data for telemetry\r\n");
+  // CRITICAL: Re-read sensor data AFTER GPS acquisition to include fresh GPS fix
+  SEGGER_RTT_WriteString(0, "Re-reading sensor data to capture fresh GPS fix...\r\n");
+  EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
+  SEGGER_RTT_WriteString(0, "Sensor data refreshed with current GPS position\r\n");
   
   // Initialize Cayenne LPP payload
   CayenneLppReset();
@@ -1391,7 +1399,7 @@ static void SendTxData(void)
   SEGGER_RTT_WriteString(0, lpp_msg);
   
   /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
-  // Step 1: Always send 11-byte compact packet at SF10 with LinkCheckReq
+  // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
   
   SEGGER_RTT_printf(0, "Adaptive TX: State=%d, sending SF10 probe...\r\n", g_tx_state);
@@ -1399,26 +1407,31 @@ static void SendTxData(void)
   switch (g_tx_state) {
     case TX_STATE_PROBE_SF10:
     {
-      // Encode 11-byte compact telemetry packet
+      // Encode 10-byte compact telemetry packet
       CompactTelemetryPacket_t compact_packet;
       uint16_t timestamp_min = (uint16_t)(now_timestamp / 60);  // Convert to minutes
       
       if (EncodeCompactBinaryPacket(&compact_packet, &sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
         
-        // Send at SF10 (DR0) for maximum range
-        LmHandlerSetTxDatarate(DR_0);  // SF10
-        LmHandlerLinkCheckReq();       // Request link quality
-        
-        LmHandlerAppData_t compactData;
-        compactData.Port = LORAWAN_COMPACT_PORT;  // Port 10
-        compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
-        compactData.Buffer = (uint8_t*)&compact_packet;
-        
-        SEGGER_RTT_printf(0, "Sending 11-byte compact packet at SF10 (DR0) on port %d with LinkCheckReq\r\n", 
-                          LORAWAN_COMPACT_PORT);
-        
-        LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+      // Send at SF10 (DR0) for maximum range
+      LmHandlerSetTxDatarate(DR_0);  // SF10
+      
+      // Prepare packet data BEFORE requesting LinkCheck
+      LmHandlerAppData_t compactData;
+      compactData.Port = LORAWAN_COMPACT_PORT;  // Port 10
+      compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
+      compactData.Buffer = (uint8_t*)&compact_packet;
+      
+      // Request LinkCheck immediately before send (should piggyback in FOpts)
+      SEGGER_RTT_WriteString(0, "Requesting LinkCheck...\r\n");
+      LmHandlerErrorStatus_t linkcheck_status = LmHandlerLinkCheckReq();
+      SEGGER_RTT_printf(0, "LinkCheckReq status: %d\r\n", linkcheck_status);
+      
+      SEGGER_RTT_printf(0, "Sending 10-byte compact packet at SF10 (DR0) on port %d\r\n", 
+                        LORAWAN_COMPACT_PORT);
+      
+      LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
           g_tx_state = TX_STATE_WAIT_PROBE_ACK;  // Wait for LinkCheckAns
@@ -1644,32 +1657,13 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
-  char rtt_buf[128];
+  SEGGER_RTT_printf(0, "\r\nOnTxData: Status=%d DR=%d Ch=%lu FCnt=%lu\r\n",
+                    params->Status, params->Datarate,
+                    (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
   
-  SEGGER_RTT_WriteString(0, "\r\n=== OnTxData Callback ===\r\n");
-  snprintf(rtt_buf, sizeof(rtt_buf), "  IsMcpsConfirm: %d\r\n", params->IsMcpsConfirm);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %d\r\n", params->Status);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", params->Datarate, params->TxPower);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Channel: %lu, UplinkCounter: %lu\r\n", 
-           (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
-  SEGGER_RTT_WriteString(0, rtt_buf);
-  
-  if (params->IsMcpsConfirm)
-  {
-    snprintf(rtt_buf, sizeof(rtt_buf), "  AckReceived: %d\r\n", params->AckReceived);
-    SEGGER_RTT_WriteString(0, rtt_buf);
-  }
-  
-  // CRITICAL FIX: Capture context after successful TX (not before region switch)
-  // This ensures correct DevAddr, FCnt, and session state are saved
+  /* CRITICAL: Capture context after successful TX (not before region switch) */
+  /* This ensures correct DevAddr, FCnt, and session state are saved */
   if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
-    SEGGER_RTT_WriteString(0, "  TX successful - capturing context\r\n");
     MultiRegion_SaveCurrentContext();
   }
   
@@ -1680,39 +1674,16 @@ static void OnTxData(LmHandlerTxParams_t *params)
     PacketQueueEntry_t entry;
     if (PacketQueue_Pop(&g_packet_queue, &entry))
     {
-      char queue_msg[80];
-      snprintf(queue_msg, sizeof(queue_msg), 
-               "  Sending queued packet: Port %d, %d bytes (queue remaining: %d)\r\n",
-               entry.port, entry.size, PacketQueue_Count(&g_packet_queue));
-      SEGGER_RTT_WriteString(0, queue_msg);
-      
-      /* Prepare packet data */
       LmHandlerAppData_t queuedData;
       queuedData.Port = entry.port;
       queuedData.BufferSize = entry.size;
       queuedData.Buffer = entry.buffer;
       
-      /* Send queued packet */
       LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-      
-      const char* queue_status_str;
-      switch(queue_status) {
-        case LORAMAC_HANDLER_SUCCESS: queue_status_str = "SUCCESS"; break;
-        case LORAMAC_HANDLER_BUSY_ERROR: queue_status_str = "BUSY_ERROR"; break;
-        case LORAMAC_HANDLER_ERROR: queue_status_str = "ERROR"; break;
-        case LORAMAC_HANDLER_NO_NETWORK_JOINED: queue_status_str = "NO_NETWORK_JOINED"; break;
-        case LORAMAC_HANDLER_DUTYCYCLE_RESTRICTED: queue_status_str = "DUTYCYCLE_RESTRICTED"; break;
-        default: queue_status_str = "UNKNOWN"; break;
-      }
-      
-      char result_msg[80];
-      snprintf(result_msg, sizeof(result_msg), "  Queued packet send status: %s (%d)\r\n", 
-               queue_status_str, queue_status);
-      SEGGER_RTT_WriteString(0, result_msg);
+      SEGGER_RTT_printf(0, "OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
+                        entry.port, entry.size, queue_status, PacketQueue_Count(&g_packet_queue));
     }
   }
-  
-  SEGGER_RTT_WriteString(0, "=== OnTxData Callback END ===\r\n");
   /* USER CODE END OnTxData_1 */
 }
 
@@ -1785,7 +1756,9 @@ static void OnClassChange(DeviceClass_t deviceClass)
 static void OnMacProcessNotify(void)
 {
   /* USER CODE BEGIN OnMacProcessNotify_1 */
-
+  /* NOTE: Do NOT refresh the watchdog here - this runs in IRQ context and
+   * refreshing from an interrupt would defeat the watchdog's purpose
+   * (a hung main loop with live radio IRQs would never reset) */
   /* USER CODE END OnMacProcessNotify_1 */
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LmHandlerProcess), CFG_SEQ_Prio_0);
 
