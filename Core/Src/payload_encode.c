@@ -51,9 +51,9 @@ static uint32_t CalculateCRC32(const uint8_t *data, uint32_t length);
 /* Exported functions --------------------------------------------------------*/
 
 /**
- * @brief Encode compact 11-byte telemetry packet
+ * @brief Encode compact 10-byte telemetry packet
  */
-bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet, 
+bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
                                const void *sensor_data,
                                uint16_t timestamp_min,
                                int16_t voltage_slope,
@@ -65,7 +65,7 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     
     const sensor_t *sensors = (const sensor_t*)sensor_data;
     
-    SEGGER_RTT_WriteString(0, "Encoding 11-byte compact binary packet...\r\n");
+    SEGGER_RTT_WriteString(0, "Encoding 10-byte compact binary packet...\r\n");
     
     // Clear packet structure
     memset(packet, 0, sizeof(CompactTelemetryPacket_t));
@@ -94,10 +94,8 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     // Convert battery voltage (REQUIRED - DevStatusAns is on-demand only)
     packet->battery_volt_50mv = ConvertBatteryVoltageToCompact(sensors->battery_voltage);
     
-    // Pack status flags
-    packet->status_flags = PackStatusFlags(sensors->gnss_valid, 
-                                           sensors->satellites, 
-                                           power_mode);
+    // NOTE: status_flags removed to reduce packet to 10 bytes for LinkCheckReq compatibility
+    // GPS/satellite/mode info available in CayenneLPP debug packets
     
     // Debug logging with safe integer conversions
     int32_t lat_micro = sensors->gnss_valid ? (int32_t)(sensors->latitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
@@ -338,8 +336,8 @@ bool PayloadFormat_ValidateSizes(void)
     bool valid = true;
     
     // Check packet sizes
-    if (sizeof(CompactTelemetryPacket_t) != 11) {
-        SEGGER_RTT_printf(0, "ERROR: CompactTelemetryPacket_t size = %d bytes (expected 11)\r\n", 
+    if (sizeof(CompactTelemetryPacket_t) != 10) {
+        SEGGER_RTT_printf(0, "ERROR: CompactTelemetryPacket_t size = %d bytes (expected 10)\r\n", 
                           sizeof(CompactTelemetryPacket_t));
         valid = false;
     }
@@ -357,7 +355,7 @@ bool PayloadFormat_ValidateSizes(void)
     }
     
     if (valid) {
-        SEGGER_RTT_WriteString(0, "Payload format sizes validated: 11/32/222 bytes\r\n");
+        SEGGER_RTT_WriteString(0, "Payload format sizes validated: 10/32/222 bytes\r\n");
     }
     
     return valid;

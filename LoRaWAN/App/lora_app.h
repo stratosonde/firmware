@@ -76,7 +76,7 @@ typedef struct {
 #define LORAWAN_GNSS_DETAIL_PORT                    3
 
 /*!
- * LoRaWAN Compact Binary port (11-byte SF10 probe packet - PRODUCTION)
+ * LoRaWAN Compact Binary port (10-byte SF10 probe packet - PRODUCTION)
  * @note Optimized for maximum range transmission
  */
 #define LORAWAN_COMPACT_PORT                        10
@@ -183,7 +183,7 @@ typedef enum {
 
 /* Adaptive Transmission Strategy */
 typedef enum {
-    TX_STATE_PROBE_SF10 = 0,      // Send 11-byte at SF10
+    TX_STATE_PROBE_SF10 = 0,      // Send 10-byte at SF10
     TX_STATE_WAIT_PROBE_ACK,      // Waiting for LinkCheckAns
     TX_STATE_BULK_TRANSFER,       // Sending cached packets at SF7
     TX_STATE_COMPLETE             // Done with cycle

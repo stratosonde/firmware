@@ -6,7 +6,7 @@
   * @attention
   *
   * This module defines efficient binary packet formats for LoRaWAN transmission:
-  * - CompactTelemetryPacket_t: 11-byte packet for SF10 (maximum range)
+  * - CompactTelemetryPacket_t: 10-byte packet for SF10 (maximum range w/ LinkCheck)
   * - HighResTelemetryRecord_t: 32-byte record for flash storage  
   * - BulkTelemetryPacket_t: 222-byte packet for SF7 bulk transfer
   *
@@ -30,7 +30,7 @@ extern "C" {
 /* LoRaWAN port assignments for different packet types */
 #define LORAWAN_LPP_PORT          2   // CayenneLPP (development/debug)
 #define LORAWAN_GNSS_DETAIL_PORT  3   // GNSS satellite detail (development/debug) 
-#define LORAWAN_COMPACT_PORT      10  // 11-byte compact binary (SF10 probe) - PRODUCTION
+#define LORAWAN_COMPACT_PORT      10  // 10-byte compact binary (SF10 probe) - PRODUCTION
 #define LORAWAN_BULK_PORT         11  // 222-byte bulk binary (SF7 bulk) - PRODUCTION
 
 /* Compile-time control flags for debug packet formats */
@@ -73,10 +73,11 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 
 /**
- * @brief 11-byte compact telemetry packet (SF10 maximum payload for US915)
+ * @brief 10-byte compact telemetry packet (SF10 with room for MAC commands)
  * @note Optimized for maximum range transmission at SF10
  * @note Includes battery voltage (required since DevStatusAns is on-demand only)
  * @note Altitude calculated on ground station from pressure + temperature
+ * @note Status byte removed to fit LinkCheckReq MAC command in FOpts (saves 1 byte)
  */
 typedef struct __attribute__((packed)) {
     uint16_t timestamp_min;     // Minutes since epoch (2 bytes) - 45 days range
@@ -86,8 +87,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  pressure_10hPa;    // Pressure / 10hPa from 950hPa base (1 byte) - 950-2500 hPa
     uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
     uint8_t  humidity_5pct;     // Humidity / 5% resolution (1 byte) - 0-100% in 20 steps
-    uint8_t  status_flags;      // GPS fix + power mode + satellites (1 byte)
-} CompactTelemetryPacket_t;  // Total: 11 bytes (maximum SF10 US915 payload)
+} CompactTelemetryPacket_t;  // Total: 10 bytes (leaves room for MAC commands in FOpts)
 
 /**
  * @brief High-resolution telemetry record for flash storage
@@ -139,7 +139,7 @@ typedef struct __attribute__((packed)) {
 /* Exported functions --------------------------------------------------------*/
 
 /**
- * @brief Encode compact 11-byte telemetry packet
+ * @brief Encode compact 10-byte telemetry packet
  * @param packet: Destination packet structure
  * @param sensor_data: Source sensor data
  * @param timestamp_min: Timestamp in minutes since epoch
@@ -147,7 +147,7 @@ typedef struct __attribute__((packed)) {
  * @param power_mode: Current operating mode
  * @retval bool: true if encoding successful
  */
-bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet, 
+bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
                                const void *sensor_data,
                                uint16_t timestamp_min,
                                int16_t voltage_slope,

@@ -76,29 +76,49 @@ flowchart TD
    - If over ocean, transmit to closest region or two
    - No transmission in restricted areas (e.g., North Korea)
 
-## Data Format
+## Data Formats
 
-### Low-Resolution Packet (11 bytes)
+### Production Packets
 
-```c
-typedef struct {
-    uint8_t timestamp[2];         // Compressed timestamp (minutes since epoch)
-    uint8_t latitude[2];          // 100m resolution latitude
-    uint8_t longitude[2];         // 100m resolution longitude
-    uint8_t altitude;             // Compressed altitude
-    uint8_t temperature;          // Compressed temperature
-    uint8_t pressure;             // Compressed pressure
-    uint8_t status;               // Battery, satellites, flags
-    uint8_t packet_index;         // LSB of sequence number (0-255)
-} LowResTelemetryPacket_t;
-```
+The Stratosonde uses two main packet formats for production:
 
-### Data Compression Techniques
+#### Port 10: Compact Binary Packet (10 bytes)
 
-- **Position**: 100m resolution for latitude/longitude
-- **Time**: Minute-based epoch time
-- **Measurements**: Scaled and offset to maximize resolution in expected ranges
-- **Status**: Bit-packed information for battery, satellites, and flags
+Ultra-compact telemetry optimized for SF10 (maximum range):
+
+| Field | Type | Size | Resolution |
+|-------|------|------|------------|
+| Timestamp | uint16 BE | 2 bytes | 1 minute |
+| Latitude | int16 BE | 2 bytes | ~100m |
+| Longitude | int16 BE | 2 bytes | ~100m |
+| Temperature | int8 | 1 byte | 2°C |
+| Pressure | uint8 | 1 byte | 10 hPa |
+| Battery | uint8 | 1 byte | 50 mV |
+| Humidity | uint8 | 1 byte | 5% |
+
+**Note**: Altitude calculated on backend from pressure + temperature. No status byte to leave room for MAC commands (LinkCheckReq) in FOpts field.
+
+#### Port 11: Bulk Binary Packet (222 bytes)
+
+High-resolution historical data transfer at SF7:
+
+- Header: 6 bytes (packet type, record count, flash address)
+- Records: Up to 6 × 32-byte high-resolution records
+- Metadata: 24 bytes (voltage trend, mode history, CRC32)
+
+Each 32-byte record includes: full-precision GPS, environmental sensors (0.1° resolution), battery/solar voltages, voltage slope, satellites, HDOP, power mode, and CRC16.
+
+### Debug Packets (Development Only)
+
+- **Port 2**: CayenneLPP format (~30 bytes)
+- **Port 3**: GNSS Detail with satellite tracking (~40-60 bytes)
+
+### Data Compression Strategy
+
+- **GPS coordinates**: 100m resolution for compact, full precision for bulk
+- **Time**: Minute epochs (compact), second epochs (bulk)
+- **Sensors**: Scaled/offset to maximize resolution in expected ranges
+- **Multi-tier**: Compact for real-time, bulk for historical backfill
 
 ## Key Functions
 
