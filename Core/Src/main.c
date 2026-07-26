@@ -216,8 +216,10 @@ int main(void)
   /* USER CODE BEGIN 1 */
   /* Configure RTT Terminal 0 for all debug output */
   /* Everything goes to Terminal 0 for simple viewer compatibility */
-  SEGGER_RTT_ConfigUpBuffer(0, NULL, NULL, 0, SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL);
-  SEGGER_RTT_WriteString(0, "=== RTT Terminal 0 Configured ===\r\n");
+  /* Increased buffer size and non-blocking mode to prevent watchdog hangs */
+  static char rtt_buffer[4096];  // 4KB buffer (up from default 1KB)
+  SEGGER_RTT_ConfigUpBuffer(0, "Terminal", rtt_buffer, sizeof(rtt_buffer), SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+  SEGGER_RTT_WriteString(0, "=== RTT Terminal 0 Configured (4KB, NON-BLOCKING) ===\r\n");
   SEGGER_RTT_WriteString(0, "All output: System, NMEA, APP_LOG\r\n");
 
   /* USER CODE END 1 */
@@ -243,7 +245,7 @@ int main(void)
   /* ***** END TEMPORARY TEST ***** */
   
   /* NOTE: IWDG watchdog will be initialized and enabled below */
-  SEGGER_RTT_WriteString(0, "IWDG watchdog will be initialized (16.4s timeout)\r\n");
+  SEGGER_RTT_WriteString(0, "IWDG watchdog will be initialized (32.76s timeout)\r\n");
   
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
@@ -276,7 +278,7 @@ int main(void)
   
   // Initialize external flash (W25Q16JV) for logging
   SEGGER_RTT_WriteString(0, "Initializing external flash (W25Q16JV)...\r\n");
-  W25Q_StatusTypeDef w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);
+  W25Q_StatusTypeDef w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);  // Use software CS on PB9
   if (w25q_status == W25Q_OK) {
     uint32_t jedec_id;
     if (W25Q_ReadJEDECID(&hw25q, &jedec_id) == W25Q_OK) {
@@ -346,7 +348,7 @@ int main(void)
     MX_LoRaWAN_Process();
 
     /* USER CODE BEGIN 3 */
-    /* Refresh watchdog to prevent reset (must be called within 16.4 seconds) */
+    /* Refresh watchdog to prevent reset (must be called within 32.76 seconds) */
     HAL_IWDG_Refresh(&hiwdg);
   }
   /* USER CODE END 3 */
@@ -602,6 +604,8 @@ static void MX_SPI2_Init(void)
 
   /* USER CODE BEGIN SPI2_Init 1 */
   /* Override CubeMX generated DataSize - W25Q16 flash requires 8-bit */
+  /* Software NSS required - W25Q16JV needs CS low for entire command sequences */
+  /* Hardware NSS pulse mode corrupts multi-byte commands */
   /* USER CODE END SPI2_Init 1 */
   /* SPI2 parameter configuration*/
   hspi2.Instance = SPI2;
@@ -610,14 +614,14 @@ static void MX_SPI2_Init(void)
   hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_HARD_OUTPUT;
+  hspi2.Init.NSS = SPI_NSS_SOFT;  /* Software NSS for W25Q16JV compatibility */
   hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi2.Init.CRCPolynomial = 7;
   hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
-  hspi2.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  /* NSSPMode removed - not applicable with software NSS */
   if (HAL_SPI_Init(&hspi2) != HAL_OK)
   {
     Error_Handler();
@@ -734,6 +738,15 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  /* CRITICAL: Pre-initialize Flash CS (PB9) HIGH before SPI init */
+  /* W25Q16JV must see CS HIGH during power-up to avoid undefined state */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);  /* CS HIGH = deselected */
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);

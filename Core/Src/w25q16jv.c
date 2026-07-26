@@ -6,7 +6,8 @@
   *
   * Implementation Notes:
   *   - Uses blocking SPI transfers for simplicity and reliability
-  *   - Hardware NSS is used (SPI2_NSS on PB9) - no software CS needed
+  *   - Software CS is used (GPIO PB9) - hardware NSS pulse mode corrupts
+  *     multi-byte command sequences on the W25Q16JV
   *   - All operations check BUSY status before proceeding
   *   - Timeouts prevent infinite loops on hardware failures
   *
@@ -16,6 +17,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "w25q16jv.h"
 #include <string.h>
+#include "SEGGER_RTT.h"
 
 /* Private defines -----------------------------------------------------------*/
 #define W25Q_SPI_TIMEOUT     100   /* SPI HAL timeout in ms */
@@ -106,21 +108,31 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* Ensure CS is high initially */
     W25Q_CS_High(hw25q);
     
-    /* Small delay for device to be ready after power-up */
-    HAL_Delay(1);
+    /* Power-up delay: tVSL max 10ms per datasheet (using 20ms for safety) */
+    HAL_Delay(20);
     
     /* Release from power-down in case device was in sleep mode */
     status = W25Q_ReleasePowerDown(hw25q);
     if (status != W25Q_OK) {
+        SEGGER_RTT_printf(0, "W25Q_Init: ReleasePowerDown FAILED (status=%d)\r\n", status);
         return status;
     }
     
-    /* Small delay after release from power-down (tRES1 = 3us) */
-    HAL_Delay(1);
+    /* Delay after release from power-down: tRES1 = 3us typ, using 5ms for safety */
+    HAL_Delay(5);
+    
+    /* Software reset to ensure clean state */
+    status = W25Q_Reset(hw25q);
+    if (status != W25Q_OK) {
+        SEGGER_RTT_printf(0, "W25Q_Init: Reset FAILED (status=%d)\r\n", status);
+        return status;
+    }
+    HAL_Delay(1);  /* tRST = 30us max, using 1ms */
     
     /* Read and verify JEDEC ID */
     status = W25Q_ReadJEDECID(hw25q, &jedec_id);
     if (status != W25Q_OK) {
+        SEGGER_RTT_printf(0, "W25Q_Init: ReadJEDEC FAILED (status=%d)\r\n", status);
         return status;
     }
     
@@ -129,6 +141,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* We accept any W25Q16 variant (manufacturer 0xEF, memory type 0x40, capacity 0x15) */
     if ((jedec_id & 0xFFFF00) != 0xEF4000) {
         /* Not a Winbond W25Q series device */
+        SEGGER_RTT_printf(0, "W25Q_Init: VERIFICATION FAILED - Wrong device ID: 0x%06lX\r\n", jedec_id);
         return W25Q_ERROR_NOT_FOUND;
     }
     

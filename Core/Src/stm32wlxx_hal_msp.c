@@ -307,12 +307,12 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
     /**SPI2 GPIO Configuration
-    PB9     ------> SPI2_NSS
     PB14     ------> SPI2_MISO
     PA10     ------> SPI2_MOSI
     PB13     ------> SPI2_SCK
+    (PB9 CS managed as GPIO, not AF)
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_14|GPIO_PIN_13;
+    GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_13;  /* PB9 removed - managed as GPIO */
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -351,12 +351,12 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
     __HAL_RCC_SPI2_CLK_DISABLE();
 
     /**SPI2 GPIO Configuration
-    PB9     ------> SPI2_NSS
     PB14     ------> SPI2_MISO
     PA10     ------> SPI2_MOSI
     PB13     ------> SPI2_SCK
+    (PB9 CS managed as GPIO, not AF)
     */
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_9|GPIO_PIN_14|GPIO_PIN_13);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_14|GPIO_PIN_13);  /* PB9 removed - managed as GPIO */
 
     HAL_GPIO_DeInit(GPIOA, GPIO_PIN_10);
 
