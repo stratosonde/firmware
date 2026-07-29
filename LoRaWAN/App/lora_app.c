@@ -734,6 +734,15 @@ static OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
                                                    uint16_t current_voltage,
                                                    uint16_t time_to_critical) {
     
+    // VOLTAGE-BASED FLOOR: Emergency low voltage (LTO threshold)
+    // BUG 1.5 FIX: This MUST be first — at sunrise (positive slope, near-dead battery),
+    // the slope branches would select NORMAL/CONSERVATIVE and re-enable GPS + frequent TX,
+    // causing brownout. Below the absolute floor = SURVIVAL, regardless of slope.
+    if (current_voltage < 4300) {
+        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V (LTO critical) -> SURVIVAL\r\n");
+        return MODE_SURVIVAL;
+    }
+    
     // EMERGENCY: Depleting fast and will hit critical soon
     if (current_slope < -30 && time_to_critical != 0xFFFF && time_to_critical < 6) {
         SEGGER_RTT_WriteString(0, "PREDICT: Critical in <6h -> SURVIVAL\r\n");
@@ -762,12 +771,6 @@ static OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
     if (current_slope > 0) {
         SEGGER_RTT_WriteString(0, "PREDICT: Stable/charging -> CONSERVATIVE\r\n");
         return MODE_CONSERVATIVE;
-    }
-    
-    // VOLTAGE-BASED OVERRIDE: Emergency low voltage (LTO threshold)
-    if (current_voltage < 4300) {
-        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V (LTO critical) -> SURVIVAL\r\n");
-        return MODE_SURVIVAL;
     }
     
     // DEFAULT: Conservative
@@ -997,7 +1000,16 @@ static void SendTxData(void)
     time_to_target_signed = 0;  // Stable voltage
   }
   
-  // GPS temperature lockout check (supercap fails below configured temperature)
+  // Real-time mode selection based on voltage slope and battery state
+  OperatingMode_t predicted_mode = SelectModeFromPredictions(slope_mv_per_hour, battery_mv_normalized, time_to_critical);
+  current_mode = predicted_mode;  // Use predicted mode directly (no historical override)
+  
+  // Apply operating mode configuration
+  uint32_t new_interval = ApplyOperatingMode(current_mode, &gps_enabled_by_power_mgmt, &gps_timeout_ms);
+  
+  // BUG 1.4 FIX: GPS temperature lockout check AFTER ApplyOperatingMode so it has final say.
+  // Previously this ran BEFORE ApplyOperatingMode, which unconditionally set *gps_enabled=true
+  // for NORMAL/CONSERVATIVE modes, overwriting the lockout.
   const SystemConfig_t *config = Config_Get();
   int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
   
@@ -1008,13 +1020,6 @@ static void SendTxData(void)
              temperature_c, gps_lockout_temp);
     SEGGER_RTT_WriteString(0, temp_msg);
   }
-  
-  // Real-time mode selection based on voltage slope and battery state
-  OperatingMode_t predicted_mode = SelectModeFromPredictions(slope_mv_per_hour, battery_mv_normalized, time_to_critical);
-  current_mode = predicted_mode;  // Use predicted mode directly (no historical override)
-  
-  // Apply operating mode configuration
-  uint32_t new_interval = ApplyOperatingMode(current_mode, &gps_enabled_by_power_mgmt, &gps_timeout_ms);
   
   // Update timer interval if changed
   UTIL_TIMER_Stop(&TxTimer);
@@ -1258,23 +1263,21 @@ static void SendTxData(void)
       /* Calculate elapsed time for H3 lookup */
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
       
-      /* Check for restricted region - skip transmission if detected */
-      // Use h3lite to detect region, check for restricted areas
+      /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
+       * REGION_UNKNOWN means open ocean or uncovered H3 cells — keep current region and
+       * transmit normally (standard convention over international waters). Previously this
+       * also blocked UNKNOWN, causing the balloon to go silent over every ocean crossing. */
       RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
       
-      if (h3_region_id == REGION_RESTRICTED || h3_region_id == REGION_UNKNOWN) {
-        const char* restriction_reason = (h3_region_id == REGION_RESTRICTED) ? 
-                                        "RESTRICTED REGION" : "UNKNOWN REGION";
-        SEGGER_RTT_printf(0, "%s DETECTED: Skipping transmission for safety\r\n", restriction_reason);
+      if (h3_region_id == REGION_RESTRICTED) {
+        SEGGER_RTT_WriteString(0, "RESTRICTED REGION DETECTED: Skipping transmission for safety\r\n");
         SEGGER_RTT_WriteString(0, "=== SendTxData END (SAFETY RESTRICTION) ===\r\n");
-        return;  // Exit early - no transmission allowed in restricted/unknown areas
+        return;  // Exit early - no transmission allowed in restricted areas
       }
       
-      // Additional safety check for specific problematic regions (North Korea, disputed territories)
-      if (detected_region == 0xFF || detected_region >= 16) {  // Out of range enum values
-        SEGGER_RTT_WriteString(0, "INVALID REGION VALUE: Skipping transmission for safety\r\n");
-        SEGGER_RTT_WriteString(0, "=== SendTxData END (INVALID REGION) ===\r\n");
-        return;  // Exit early
+      if (h3_region_id == REGION_UNKNOWN) {
+        SEGGER_RTT_WriteString(0, "UNKNOWN REGION (ocean/uncovered): Keeping current region, transmitting normally\r\n");
+        // Do NOT return — continue with current region
       }
       
       /* Convert floats to integers for printing (safe for all printf implementations) */

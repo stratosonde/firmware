@@ -944,8 +944,11 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
         // C5 FIX: Refresh watchdog during join wait to prevent reset.
         // Join can take 5-30+ seconds (RX windows + retries), which can
         // exceed the ~33s IWDG timeout and cause an unexpected reset.
+        // BUG 3.1 FIX: Guard against NULL Instance — this code can run before MX_IWDG_Init()
         extern IWDG_HandleTypeDef hiwdg;
-        HAL_IWDG_Refresh(&hiwdg);
+        if (hiwdg.Instance != NULL) {
+          HAL_IWDG_Refresh(&hiwdg);
+        }
         
         // Delay to prevent tight loop (250ms is sufficient for MAC processing)
         HAL_Delay(250);

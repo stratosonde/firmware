@@ -117,6 +117,16 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlo
     
     *actual_count = 0;
     
+    /* BUG 1.7 FIX: Clamp watermark after ring-buffer wraparound.
+     * If unsent backlog exceeds capacity (e.g. long ocean gap), the oldest-unsent
+     * sequence maps to an overwritten record. Skip to the oldest record that still
+     * exists in flash to prevent permanent bulk-transfer wedge. */
+    uint32_t available = FlashLog_GetAvailableRecords(hlog);
+    if (hlog->next_sequence > available &&
+        hlog->last_transmitted_sequence < (hlog->next_sequence - available)) {
+        hlog->last_transmitted_sequence = hlog->next_sequence - available;
+    }
+    
     /* Calculate how many unsent records we have */
     unsent_count = FlashLog_GetUnsentCount(hlog);
     

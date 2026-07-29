@@ -1231,6 +1231,8 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   if (dma_status != HAL_OK)
   {
     SEGGER_RTT_WriteString(0, "[GPS WAKE] ERROR - DMA start failed\r\n");
+    /* BUG 2.4 FIX: Re-enable STOP mode on error path to prevent permanent ~mA Sleep-only */
+    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
     return GNSS_ERROR;
   }
   SEGGER_RTT_WriteString(0, "[GPS WAKE] DMA started - ready to receive\r\n");
