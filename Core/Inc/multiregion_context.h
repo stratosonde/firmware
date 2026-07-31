@@ -34,7 +34,7 @@ extern "C" {
  * Set to 1 to enable automatic region switching based to GPS
  */
 #ifndef MULTIREGION_AUTO_SWITCH_ENABLED
-#define MULTIREGION_AUTO_SWITCH_ENABLED  0  // Disabled by default for safety
+#define MULTIREGION_AUTO_SWITCH_ENABLED  1  // Enabled: auto-switch region based on GPS+H3 in flight
 #endif
 
 /**
