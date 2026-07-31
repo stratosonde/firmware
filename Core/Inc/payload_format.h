@@ -35,11 +35,11 @@ extern "C" {
 
 /* Compile-time control flags for debug packet formats */
 #ifndef ENABLE_DEBUG_LPP
-#define ENABLE_DEBUG_LPP           1  // 1 = Enable CayenneLPP on port 2, 0 = Disable
+#define ENABLE_DEBUG_LPP           0  // 0 = Default OFF for flight builds (opt-in for debug)
 #endif
 
 #ifndef ENABLE_GNSS_DETAIL_PACKET
-#define ENABLE_GNSS_DETAIL_PACKET  1  // 1 = Enable GNSS detail on port 3, 0 = Disable
+#define ENABLE_GNSS_DETAIL_PACKET  0  // 0 = Default OFF for flight builds (opt-in for debug)
 #endif
 
 #ifndef DEBUG_LPP_TX_INTERVAL

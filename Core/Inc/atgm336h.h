@@ -163,7 +163,8 @@ typedef struct
 
 /* ATGM336H PCAS Configuration Commands */
 #define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // GGA + RMC + GSV + VTG
-#define GNSS_CMD_HIGH_ALT_MODE   "$PCAS04,5*1C\r\n"                // High altitude mode (CRITICAL!)
+#define GNSS_CMD_CONSTELLATION   "$PCAS04,5*1C\r\n"                // Constellation: GPS+GLONASS (was mislabeled as high-alt mode)
+#define GNSS_CMD_AIRBORNE_MODE   "$PCAS11,5*18\r\n"                // Airborne dynamic model — defeats 18km CoCom limit (CRITICAL!)
 #define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2B\r\n"             // 1 Hz update rate
 #define GNSS_CMD_SATELLITE_SYS   "$PCAS04,7*1A\r\n"                // GPS + BeiDou + GLONASS (all constellations)
 #define GNSS_CMD_FIX_MODE        "$PCAS11,2*1E\r\n"                // Auto 2D/3D fix

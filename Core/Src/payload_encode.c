@@ -26,7 +26,9 @@
 
 /* GPS coordinate conversion factors */
 #define GPS_BINARY_TO_DEGREES       (90.0f / 8388607.0f)  // Convert sensor_t binary to degrees
-#define DEGREES_TO_100M_RESOLUTION  (1.0f / 0.0009009f)   // ~100m at equator (0.0009009° ≈ 100m)
+/* DEGREES_TO_100M_RESOLUTION removed — replaced by full-range int16 scaling (see ADR-0005) */
+#define LAT_SCALE_FACTOR  (32767.0f / 90.0f)   // Maps ±90° to full int16 range (~300m resolution)
+#define LON_SCALE_FACTOR  (32767.0f / 180.0f)  // Maps ±180° to full int16 range (~550m resolution at equator)
 
 /* Compact packet scaling factors */
 #define TEMPERATURE_SCALE_FACTOR    2     // 2°C resolution
@@ -384,18 +386,16 @@ static uint16_t GetTimestampMinutes(void)
  */
 static int16_t ConvertLatitudeToCompact(int32_t binary_latitude)
 {
-    // Convert binary to degrees
+    // Convert binary to degrees, then scale to full int16 range (±90°)
+    // Ground decoder: lat_deg = encoded × 90 / 32767
     float lat_degrees = binary_latitude * GPS_BINARY_TO_DEGREES;
+    int32_t lat_scaled = (int32_t)(lat_degrees * LAT_SCALE_FACTOR);
     
-    // Convert to 100m resolution (approximately)
-    // At equator: 1 degree ≈ 111.32 km, so 0.0009009° ≈ 100m
-    int32_t lat_100m_units = (int32_t)(lat_degrees * DEGREES_TO_100M_RESOLUTION);
+    // Clamp to int16_t range (maps exactly to ±90°)
+    if (lat_scaled > 32767) lat_scaled = 32767;
+    if (lat_scaled < -32768) lat_scaled = -32768;
     
-    // Clamp to int16_t range (-32768 to +32767) = ±3276.7 km from equator
-    if (lat_100m_units > 32767) lat_100m_units = 32767;
-    if (lat_100m_units < -32768) lat_100m_units = -32768;
-    
-    return (int16_t)lat_100m_units;
+    return (int16_t)lat_scaled;
 }
 
 /**
@@ -403,17 +403,16 @@ static int16_t ConvertLatitudeToCompact(int32_t binary_latitude)
  */
 static int16_t ConvertLongitudeToCompact(int32_t binary_longitude)
 {
-    // Convert binary to degrees
-    float lon_degrees = binary_longitude * (180.0f / 8388607.0f);  // Full longitude range
+    // Convert binary to degrees, then scale to full int16 range (±180°)
+    // Ground decoder: lon_deg = encoded × 180 / 32767
+    float lon_degrees = binary_longitude * (180.0f / 8388607.0f);
+    int32_t lon_scaled = (int32_t)(lon_degrees * LON_SCALE_FACTOR);
     
-    // Convert to 100m resolution
-    int32_t lon_100m_units = (int32_t)(lon_degrees * DEGREES_TO_100M_RESOLUTION);
+    // Clamp to int16_t range (maps exactly to ±180°)
+    if (lon_scaled > 32767) lon_scaled = 32767;
+    if (lon_scaled < -32768) lon_scaled = -32768;
     
-    // Clamp to int16_t range
-    if (lon_100m_units > 32767) lon_100m_units = 32767;
-    if (lon_100m_units < -32768) lon_100m_units = -32768;
-    
-    return (int16_t)lon_100m_units;
+    return (int16_t)lon_scaled;
 }
 
 /**

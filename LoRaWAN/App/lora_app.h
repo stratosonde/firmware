@@ -161,7 +161,7 @@ typedef struct {
 #define ACTIVE_REGION                               LORAMAC_REGION_US915
 
 #undef APP_TX_DUTYCYCLE
-#define APP_TX_DUTYCYCLE                            300000  /* 30 seconds */
+#define APP_TX_DUTYCYCLE                            300000  /* 5 minutes (300000 ms) */
 
 #undef LORAWAN_ADR_STATE
 #define LORAWAN_ADR_STATE                           LORAMAC_HANDLER_ADR_OFF

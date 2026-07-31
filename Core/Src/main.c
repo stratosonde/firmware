@@ -804,11 +804,11 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+  /* Degrade-and-continue: log the error, never halt (ADR-0001).
+   * At 40 km altitude, a hang is permanent death.
+   * Do NOT disable interrupts — IWDG must remain active.
+   * For truly unrecoverable errors, callers should use NVIC_SystemReset() directly. */
+  SEGGER_RTT_WriteString(0, "ERROR_HANDLER: Non-fatal error, continuing...\r\n");
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT

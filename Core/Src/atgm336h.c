@@ -221,11 +221,19 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
-  /* Send HIGH ALTITUDE MODE command - CRITICAL for balloon operation! */
-  SEGGER_RTT_WriteString(0, "Sending: HIGH ALTITUDE MODE (defeats 18km limit)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_HIGH_ALT_MODE) != GNSS_OK)
+  /* Send constellation selection command (GPS+GLONASS) */
+  SEGGER_RTT_WriteString(0, "Sending: Constellation select (GPS+GLONASS)...\r\n");
+  if (GNSS_SendCommand(hgnss, GNSS_CMD_CONSTELLATION) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send high altitude mode\r\n");
+    SEGGER_RTT_WriteString(0, "WARNING: Failed to send constellation config\r\n");
+  }
+  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  
+  /* CRITICAL: Send airborne dynamic model command (defeats 18km CoCom limit) */
+  SEGGER_RTT_WriteString(0, "Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
+  if (GNSS_SendCommand(hgnss, GNSS_CMD_AIRBORNE_MODE) != GNSS_OK)
+  {
+    SEGGER_RTT_WriteString(0, "WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
