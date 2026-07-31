@@ -29,6 +29,7 @@
 #include "atgm336h.h"  // For GNSS_HandleTypeDef and power state check
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For TCXO control
 #include "w25q16jv.h"  // For external flash deep power-down
+#include "stm32wlxx_ll_pwr.h"  // For LL_PWR_ClearFlag_C1STOP_C1STB
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -38,6 +39,8 @@ extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart1;
 extern SUBGHZ_HandleTypeDef hsubghz;
 extern ADC_HandleTypeDef hadc;
+extern IWDG_HandleTypeDef hiwdg;
+extern RTC_HandleTypeDef hrtc;
 void SystemClock_Config(void);
 void MX_DMA_Init(void);
 void MX_USART1_UART_Init(void);
@@ -66,7 +69,12 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+/* IWDG Chunked Sleep Configuration (ADR-0001: Forward Progress Always)
+ * IWDG timeout = (4095 × 256) / 32000 ≈ 32.76 seconds
+ * Wake interval must be safely below this to refresh the watchdog.
+ * RTC Wakeup Timer: RTCCLK/16 = 32768/16 = 2048 Hz */
+#define IWDG_SAFE_SLEEP_SECONDS   25     /* Must be < 32.76s IWDG timeout */
+#define IWDG_WAKEUP_COUNTS        (IWDG_SAFE_SLEEP_SECONDS * 2048)  /* 51200 */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -206,11 +214,65 @@ void PWR_EnterStopMode(void)
   LL_PWR_ClearFlag_C1STOP_C1STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
+  /* === IWDG Chunked Sleep (ADR-0001: Forward Progress Always) ===
+   * Problem: IWDG timeout is ~32.76s, but sleep periods can be 5+ minutes.
+   *   Without chunked sleep, IWDG resets the MCU during STOP2.
+   * Solution: Use RTC Wakeup Timer to wake every 25s, refresh IWDG,
+   *   then re-enter STOP2. LoRaWAN RTC Alarm A also wakes us for real events.
+   * Exit conditions: LoRaWAN alarm fires, or any non-wakeup-timer interrupt. */
 
-  /* USER CODE END EnterStopMode_2 */
-  HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
-  /* USER CODE BEGIN EnterStopMode_3 */
+  /* Enable NVIC for RTC Wakeup Timer (uses EXTI line 19 internally) */
+  HAL_NVIC_SetPriority(RTC_WKUP_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(RTC_WKUP_IRQn);
 
+  while (1)
+  {
+    /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz, 25s = 51200 counts */
+    /* 4th param: WakeUpAutoClr = 0 (no auto-clear, we clear manually) */
+    HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, IWDG_WAKEUP_COUNTS,
+                                 RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0);
+
+    /* Clear wakeup flags before sleeping */
+    __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
+    LL_PWR_ClearFlag_C1STOP_C1STB();
+
+    /* USER CODE END EnterStopMode_2 */
+    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
+    /* USER CODE BEGIN EnterStopMode_3 */
+
+    /* === Woke up — immediately refresh IWDG === */
+    HAL_IWDG_Refresh(&hiwdg);
+
+    /* Deactivate wakeup timer to avoid spurious triggers */
+    HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+
+    /* Check what woke us:
+     * - RTC Alarm A (LoRaWAN timer event) → exit chunked sleep
+     * - RTC Wakeup Timer only → just IWDG refresh, re-enter STOP2
+     * - Any other source (GPIO, etc.) → exit chunked sleep */
+    uint32_t is_wakeup_timer = __HAL_RTC_WAKEUPTIMER_GET_FLAG(&hrtc, RTC_FLAG_WUTF);
+    uint32_t is_alarm_a = __HAL_RTC_ALARM_GET_FLAG(&hrtc, RTC_FLAG_ALRAF);
+
+    if (is_alarm_a)
+    {
+      /* LoRaWAN timer event — exit chunked sleep */
+      __HAL_RTC_WAKEUPTIMER_CLEAR_FLAG(&hrtc, RTC_FLAG_WUTF);
+      break;
+    }
+
+    if (is_wakeup_timer && !is_alarm_a)
+    {
+      /* Only our IWDG refresh timer fired — clear flag, re-enter STOP2 */
+      __HAL_RTC_WAKEUPTIMER_CLEAR_FLAG(&hrtc, RTC_FLAG_WUTF);
+      continue;
+    }
+
+    /* Something else woke us (GPIO interrupt, etc.) — exit */
+    break;
+  }
+
+  /* Disable wakeup timer NVIC (no longer needed until next sleep) */
+  HAL_NVIC_DisableIRQ(RTC_WKUP_IRQn);
   /* USER CODE END EnterStopMode_3 */
 }
 

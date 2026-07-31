@@ -295,4 +295,14 @@ void DMA1_Channel1_IRQHandler(void)
 {
   HAL_DMA_IRQHandler(&hdma_usart1_rx);
 }
+
+/**
+  * @brief This function handles RTC Wakeup Timer Interrupt.
+  * @note  Used by IWDG chunked sleep to periodically wake from STOP2
+  *        and refresh the watchdog. See stm32_lpm_if.c PWR_EnterStopMode().
+  */
+void RTC_WKUP_IRQHandler(void)
+{
+  HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
+}
 /* USER CODE END 1 */

@@ -12,8 +12,7 @@ GPS GPRMC time is the **master clock**. On each valid fix, convert UTC to Unix e
 1. GPS is master: on each good fix, GPRMC UTC → Unix epoch → set RTC via `SysTimeSet()`
 2. RTC is flywheel: coasts through fixless cycles
 3. Re-set RTC from GPS on EVERY cold boot (robust even without backup domain power)
-4. DeviceTimeReq over LoRaWAN as fallback time source (rides FOpts)
-5. Software must not depend on VBAT being backed by coin cell/supercap
+4. Software must not depend on VBAT being backed by coin cell/supercap
 
 ## Rejected Alternative
 - Using the RTC as an independent time source — rejected because the RTC starts at 0 on power-up and nothing was setting it, making "epoch" actually mean "seconds since boot."
