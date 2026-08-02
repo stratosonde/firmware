@@ -38,7 +38,7 @@
 | F24 | LOW | SOS/StopJoin residue (dead EXTI3, dangerous ABP flip) | **FIXED** — EXTI3 config/handler, StopJoin, StopJoinTimer all removed | `main.c`, `stm32wlxx_it.c`, `lora_app.c` |
 | F25 | LOW | LED + `HAL_Delay(50)` in `EnvSensors_Read` | **FIXED** — removed | `sys_sensors.c` |
 | F26 | LOW | `flash_log.h` comment contradicts ADR-0004 | **FIXED** — header docs now describe sectors 0/1 + data from sector 2 | `flash_log.h` |
-| F27 | LOW | Float printf without `-u _printf_float` | **FIXED** — three `%.1f` sites converted to integer deci-prints | `lora_app.c` |
+| F27 | LOW | Float printf without `-u _printf_float` | **FIXED** — three `%.1f` sites converted to integer deci-prints. FW-16: five more sites found + converted (atgm336h GPS summary x2, multiregion_h3 nearest/detection logs x3) | `lora_app.c`, `atgm336h.c`, `multiregion_h3.c` |
 | P1-17 | HIGH | Debug payloads default-ON + DR side effect | **PARTIAL** — defaults=0 done; DR save/restore pending | `payload_format.h`, `lora_app.c:1601` |
 | P2-12 | MEDIUM | W25Q deep-power-down commented out | **OPEN** | `stm32_lpm_if.c:130-132` |
 | P2-13 | MEDIUM | VREFBUF disabled, never re-enabled | **OPEN** | `stm32_lpm_if.c:187` |

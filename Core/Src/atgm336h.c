@@ -529,22 +529,30 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
     if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID)
     {
       /* Valid fix - show full details */
+      /* FW-16: integer-only print (float printf support is not linked) */
+      int32_t hdop_d = (int32_t)(hgnss->data.hdop * 10.0f);
+      int32_t lat_u  = (int32_t)(hgnss->data.latitude * 1000000.0);
+      int32_t lon_u  = (int32_t)(hgnss->data.longitude * 1000000.0);
+      int32_t alt_d  = (int32_t)(hgnss->data.altitude * 10.0f);
+      int32_t spd_d  = (int32_t)(hgnss->data.speed * 10.0f);
       snprintf(summary, sizeof(summary),
-               "[GPS] FIX | Sats:%d HDOP:%.1f | Lat:%.6f Lon:%.6f Alt:%.1fm | Speed:%.1fkm/h\r\n",
+               "[GPS] FIX | Sats:%d HDOP:%d.%d | Lat:%d.%06d Lon:%d.%06d Alt:%d.%dm | Speed:%d.%dkm/h\r\n",
                hgnss->data.satellites,
-               hgnss->data.hdop,
-               hgnss->data.latitude,
-               hgnss->data.longitude,
-               hgnss->data.altitude,
-               hgnss->data.speed);
+               (int)(hdop_d / 10), (int)((hdop_d < 0 ? -hdop_d : hdop_d) % 10),
+               (int)(lat_u / 1000000), (int)((lat_u < 0 ? -lat_u : lat_u) % 1000000),
+               (int)(lon_u / 1000000), (int)((lon_u < 0 ? -lon_u : lon_u) % 1000000),
+               (int)(alt_d / 10), (int)((alt_d < 0 ? -alt_d : alt_d) % 10),
+               (int)(spd_d / 10), (int)((spd_d < 0 ? -spd_d : spd_d) % 10));
     }
     else
     {
       /* No fix - show basic status */
+      /* FW-16: integer-only print (float printf support is not linked) */
+      int32_t hdop_d2 = (int32_t)(hgnss->data.hdop * 10.0f);
       snprintf(summary, sizeof(summary),
-               "[GPS] Searching... | Sats visible:%d | HDOP:%.1f | Status:%s\r\n",
+               "[GPS] Searching... | Sats visible:%d | HDOP:%d.%d | Status:%s\r\n",
                hgnss->data.satellites_in_view,
-               hgnss->data.hdop,
+               (int)(hdop_d2 / 10), (int)((hdop_d2 < 0 ? -hdop_d2 : hdop_d2) % 10),
                (hgnss->data.fix_quality == GNSS_FIX_INVALID) ? "No Fix" : "Acquiring");
     }
     
