@@ -950,12 +950,15 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   uint8_t margin = params->DemodMargin;
   uint8_t gw_count = params->NbGateways;
   
-  // Log link check results
-  char link_msg[128];
-  snprintf(link_msg, sizeof(link_msg), 
-           "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", 
-           margin, gw_count);
-  SEGGER_RTT_WriteString(0, link_msg);
+  // FW-17: only log margin/gateway count when a LinkCheckAns was actually
+  // received — otherwise these fields are garbage
+  if (linkcheck_received) {
+    char link_msg[128];
+    snprintf(link_msg, sizeof(link_msg),
+             "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n",
+             margin, gw_count);
+    SEGGER_RTT_WriteString(0, link_msg);
+  }
   
   // Evaluate link quality and trigger bulk transfer if conditions are met
   // Only evaluate if we actually received a LinkCheckAns (linkcheck_received == true)

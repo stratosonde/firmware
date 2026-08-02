@@ -85,11 +85,8 @@ extern "C" {
 #define LOW_POWER_DISABLE                    0
 
 /* USER CODE BEGIN EC */
-/* TEMPORARILY DISABLE SLEEP for baseline current measurement */
-/* Setting to 1 keeps MCU running continuously - measure this current first */
-/* Then set back to 0 and measure sleep current to compare */
-#undef LOW_POWER_DISABLE
-#define LOW_POWER_DISABLE                    0  /* CHANGED: 0 → 1 for baseline test */
+/* FW-18: stale baseline-test comment removed. LOW_POWER_DISABLE is 0
+ * (low-power STOP2 enabled) — the single definition above is authoritative. */
 /* USER CODE END EC */
 
 /* External variables --------------------------------------------------------*/
