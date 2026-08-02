@@ -1626,7 +1626,9 @@ static void SendTxData(void)
       LmHandlerErrorStatus_t linkcheck_status = LmHandlerLinkCheckReq();
       SEGGER_RTT_printf(0, "LinkCheckReq status: %d\r\n", linkcheck_status);
       
-      SEGGER_RTT_printf(0, "Sending 10-byte compact packet at SF10 (DR0) on port %d\r\n", 
+      /* FW-14: log actual size, not a stale hardcoded number */
+      SEGGER_RTT_printf(0, "Sending %u-byte compact packet at SF10 on port %d\r\n",
+                        (unsigned)sizeof(CompactTelemetryPacket_t),
                         LORAWAN_COMPACT_PORT);
       
       LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
@@ -1712,8 +1714,10 @@ static void SendTxData(void)
             bulkData.BufferSize = sizeof(BulkTelemetryPacket_t);
             bulkData.Buffer = (uint8_t*)&bulk_packet;
             
-            SEGGER_RTT_printf(0, "Sending 222-byte bulk packet at SF7 (DR3) on port %d with %d records\r\n",
-                              LORAWAN_BULK_PORT, record_count);
+            /* FW-14: log actual size, not a stale hardcoded number */
+            SEGGER_RTT_printf(0, "Sending %u-byte bulk packet at SF7 on port %d with %lu records\r\n",
+                              (unsigned)sizeof(BulkTelemetryPacket_t),
+                              LORAWAN_BULK_PORT, (unsigned long)record_count);
             
             LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
             
