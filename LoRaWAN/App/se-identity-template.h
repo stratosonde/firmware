@@ -1,3 +1,4 @@
+/* F6/F7 TEMPLATE ONLY: copy to se-identity.h, generate FRESH random AppKey/NwkKey (the committed keys are burned), fill JoinEUI + per-region DevEUIs to match the Chirpstack registration (F7: default vs US915 DevEUI historically differed - 25,0E vs 25,20 - keep consistent). se-identity.h is gitignored. */
 /*!
  * \file      se-identity.h
  *
@@ -109,7 +110,7 @@ extern "C" {
 /*!
  * App/Join server IEEE EUI (big endian)
  */
-#define LORAWAN_JOIN_EUI                                   60,81,F9,58,2E,57,13,5E
+#define LORAWAN_JOIN_EUI                                   00,00,00,00,00,00,00,00
 
 /*!
  * Device address on the network (big endian)
@@ -121,22 +122,22 @@ extern "C" {
 /*!
  * Application root key
  */
-#define LORAWAN_APP_KEY                                    F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_APP_KEY                                    00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
  * Network root key
  */
-#define LORAWAN_NWK_KEY                                    F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_NWK_KEY                                    00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
  * Forwarding Network session key
  */
-#define LORAWAN_NWK_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_NWK_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
  * Application session key
  */
-#define LORAWAN_APP_S_KEY                                  F0,0C,2A,6E,BC,60,3A,71,F9,E4,E4,72,9D,27,3C,D2
+#define LORAWAN_APP_S_KEY                                  00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
 /*!
  * Format commissioning keys

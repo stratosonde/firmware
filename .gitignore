@@ -34,3 +34,6 @@ Thumbs.db
 # STM32CubeIDE specific
 .metadata/
 .recommenders/
+
+# F6: real LoRaWAN keys - never commit (ADR-0006)
+LoRaWAN/App/se-identity.h
