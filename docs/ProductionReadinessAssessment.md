@@ -16,7 +16,7 @@
 | P0-4 | BLOCKER | Error_Handler bricks sonde | **FIXED** | `main.c:804` degrade-and-continue |
 | P0-5/6 / F4+F5 | BLOCKER | Multi-region: only US915 joined; infinite join loop reachable in flight | **FIXED** — T1 ladder (ADR-0006): rejoin is COMMISSIONING-only; FLIGHT with no session = RF silence, profile keeps flying (GPS + flash). Bench gate B2 remains | `lora_app.c`, `multiregion_context.c` |
 | P0-NEW | BLOCKER | GNSS PCAS04→PCAS11 airborne mode | **FIXED** (bench gate B8 remains) | `atgm336h.h:167` `$PCAS11,5*18` |
-| F1 | BLOCKER | Fault handlers are brick traps; IWDG armed late | **FIXED** — fault handlers breadcrumb (magic+code) to RTC backup reg then `NVIC_SystemReset`; cause surfaces in status byte. FW-2: RTCAPB clock + backup access now enabled before breadcrumb read/write (was silently unreadable pre-RTC-init) (bench gate B4) | `stm32wlxx_it.c:102`, `reset_cause.c:21-22` |
+| F1 | BLOCKER | Fault handlers are brick traps; IWDG armed late | **FIXED** — fault handlers breadcrumb (magic+code) to RTC backup reg then `NVIC_SystemReset`; cause surfaces in status byte. FW-2: RTCAPB clock + backup access now enabled before breadcrumb read/write (was silently unreadable pre-RTC-init). FW-5: IWDG now armed immediately after `SystemClock_Config()` (was after `MX_LoRaWAN_Init`) — watchdog covers boot/commissioning; join-wait refresh path audited OK (bench gate B4) | `stm32wlxx_it.c:102`, `reset_cause.c:21-22`, `main.c` |
 | F3 | HIGH | LSE failure = reboot loop; LSECSS trip does nothing | **FIXED** — LSE failure fails over to LSI RTC clock and keeps flying (bench gate B3) | `main.c` SystemClock_Config |
 | F6 / P1-8 | HIGH | Real keys in public repo; AppKey == NwkKey | **PARTIAL** — `se-identity-template.h` committed, `se-identity.h` gitignored; key rotation + git history purge is a bench/manual step before launch | `se-identity-template.h`, `.gitignore` |
 | F7 | HIGH | DevEUI mismatch (default vs US915 context) | **PARTIAL** — discrepancy flagged in template; settle against Chirpstack during F6 re-provisioning | `se-identity.h:99` vs `:102` |
@@ -80,7 +80,7 @@ Submodule `Middlewares/Third_Party/h3lite` @ `8d15d6b` (firmware pointer bumped 
 | B6 | SHT31 unplugged → stale bit, lockout treats temp as COLD, no +18 °C | PENDING |
 | B7 | Clock/UART-baud sanity after first STOP2 wake | PENDING |
 | B8 | HackRF GPS sim > 18 km → ATGM336H holds fix (PCAS11 airborne) | PENDING |
-| — | IWDG option-bit (IWDG_STOP) state on production board | PENDING |
+| — | IWDG option-bit (IWDG_STOP) state on production board; consider IWDG_SW option byte so IWDG is hardware-enabled from reset (FW-5 follow-up) | PENDING |
 | — | End-to-end energy budget (overnight solar survival) | PENDING |
 
 ## Flash Size Budget

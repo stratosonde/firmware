@@ -156,6 +156,12 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
+  /* FW-5: arm the IWDG immediately after clock config so the watchdog covers
+   * the entire boot/commissioning path (was after MX_LoRaWAN_Init — a wedge
+   * in peripheral init or pre-join could spin forever with no watchdog).
+   * The join-wait loop already refreshes via its hiwdg.Instance guard. */
+  MX_IWDG_Init();
+
   /* F13b: Capture condensed reset cause (RCC->CSR + fault breadcrumb) once,
    * early, then clear flags so the next boot reads clean. Surfaced in the
    * uplink status byte (ADR-0007). */
@@ -163,8 +169,8 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
 
-  /* NOTE: IWDG watchdog will be initialized and enabled below */
-  SEGGER_RTT_WriteString(0, "IWDG watchdog will be initialized (32.76s timeout)\r\n");
+  /* NOTE: IWDG watchdog armed above, right after SystemClock_Config (FW-5) */
+  SEGGER_RTT_WriteString(0, "IWDG watchdog armed (32.76s timeout)\r\n");
   
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
@@ -179,7 +185,7 @@ int main(void)
   MX_LoRaWAN_Init();  /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
-  MX_IWDG_Init();
+  /* MX_IWDG_Init(); - FW-5: moved up, immediately after SystemClock_Config() */
   /* USER CODE BEGIN 2 */
   /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
 
