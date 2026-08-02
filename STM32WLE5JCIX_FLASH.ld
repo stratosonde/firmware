@@ -46,22 +46,27 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
  * These are written at runtime and MUST NOT be occupied by code or rodata,
  * otherwise an erase would destroy the firmware image.
  *
+ *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/ADR-0006)
+ *   0x0803C800  page 121 - Tier-1 credentials copy B
+ *   0x0803D000  page 122 - Tier-1 credentials copy C
+ *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)
+ *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
  *   0x0803E800  page 125 - System configuration    (CONFIG_FLASH_ADDRESS)
  *   0x0803F000  page 126 - LoRaWAN NVM context     (LORAWAN_NVM_BASE_ADDRESS)
- *   0x0803F800  page 127 - Multi-region contexts   (MULTIREGION_FLASH_BASE_ADDR)
+ *   0x0803F800  page 127 - legacy multi-region page (retired, reserved)
  *
- * The FLASH region below is therefore shortened from 256K to 250K so the
- * linker can never place code into these three pages.
+ * The FLASH region below is therefore shortened from 256K to 240K so the
+ * linker can never place code into these eight pages.
  */
-_reserved_flash_pages = 3;
-_flash_data_origin    = 0x0803E800;
+_reserved_flash_pages = 8;
+_flash_data_origin    = 0x0803C000;
 
 /* Memories definition */
 MEMORY
 {
   RAM    (xrw)   : ORIGIN = 0x20000000, LENGTH = 64K
   RAM2   (xrw)   : ORIGIN = 0x10000000, LENGTH = 32K
-  FLASH   (rx)   : ORIGIN = 0x08000000, LENGTH = 250K   /* 256K - 6K reserved for runtime data */
+  FLASH   (rx)   : ORIGIN = 0x08000000, LENGTH = 240K   /* 256K - 16K reserved for runtime data */
 }
 
 /* Sections */

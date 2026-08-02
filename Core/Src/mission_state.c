@@ -44,7 +44,9 @@ void MissionState_Init(void)
     MissionState_t persisted = (MissionState_t)(raw & 0xFFFFUL);
 
     /* Door anchor (ADR-0006): the session bank decides, not the lone flag.
-     * Until the Tier-1 bank lands (T1), anchor to any valid joined context. */
+     * FW-1: the bank is now the Tier-1 credential store — IsRegionJoined()
+     * only returns true when a CRC-valid Tier-1 copy supplied the context,
+     * so this anchors to Tier-1 presence even if the DR0 record is corrupt. */
     bool bank_commissioned =
         MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ||
         MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868) ||

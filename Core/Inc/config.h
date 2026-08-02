@@ -39,9 +39,14 @@ extern "C" {
   *          erase a neighbouring page and destroy its contents.
   *
   * Internal flash page map (256KB device, 2KB pages):
+  *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/ADR-0006)
+  *   0x0803C800  page 121 - Tier-1 credentials copy B
+  *   0x0803D000  page 122 - Tier-1 credentials copy C
+  *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)
+  *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
   *   0x0803E800  page 125 - System configuration     (this module)
   *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
-  *   0x0803F800  page 127 - Multi-region contexts    (MULTIREGION_FLASH_BASE_ADDR)
+  *   0x0803F800  page 127 - legacy multi-region page (retired, reserved)
   *
   * Previously this was 0x0803FC00, which sits *inside* page 127. Saving the
   * configuration erased the whole page and wiped every stored region context

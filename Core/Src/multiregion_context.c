@@ -28,16 +28,91 @@
 #include <stdio.h>
 
 /* Private defines -----------------------------------------------------------*/
-/* Flash storage location - last 2KB page of STM32WLE5 flash */
-#define MULTIREGION_FLASH_BASE_ADDR      0x0803F800  // Last page before end of 256KB flash
+/* Two-tier session storage (FW-1 / ADR-0006).
+ * Flash map (2KB pages; reserved region is now pages 120-127 = 16KB):
+ *   0x0803C000  page 120 - Tier-1 credentials copy A
+ *   0x0803C800  page 121 - Tier-1 credentials copy B
+ *   0x0803D000  page 122 - Tier-1 credentials copy C
+ *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)
+ *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
+ *   0x0803E800  page 125 - System configuration     (config module)
+ *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
+ *   0x0803F800  page 127 - legacy single-page store (retired, reserved)
+ *
+ * Tier-1 holds immutable join credentials (DevAddr/DevEUI/session keys) as
+ * three redundant, independently CRC'd copies written once at commissioning
+ * and never erased in flight. Tier-2 holds only the dynamic frame counters,
+ * ping-ponged between two slots with erase-before-write, so a brownout
+ * mid-save can never take the credentials with it. */
 #define MULTIREGION_FLASH_PAGE_SIZE      2048
 
+#define TIER1_NUM_COPIES                 3
+#define TIER2_NUM_SLOTS                  2
+
+#define TIER1_MAGIC                      0x54314D52UL  /* 'T1MR' */
+#define TIER2_MAGIC                      0x54324D52UL  /* 'T2MR' */
+
 /* Private types -------------------------------------------------------------*/
+
+/**
+ * @brief Tier-1 credential bank: one full copy of all region contexts.
+ *        Written once at commissioning to three separate flash pages.
+ */
+typedef struct {
+    uint32_t magic;                      // TIER1_MAGIC
+    uint16_t version;                    // MULTIREGION_VERSION
+    uint8_t num_valid;                   // How many contexts are joined
+    uint8_t active_slot;                 // Active slot at commissioning time
+    MinimalRegionContext_t contexts[MAX_REGION_CONTEXTS];
+    uint32_t crc32;                      // Whole-bank validation
+} __attribute__((aligned(8))) Tier1Bank_t;
+
+/**
+ * @brief Tier-2 per-region dynamic entry (frame counters + radio state)
+ */
+typedef struct {
+    uint32_t uplink_counter;
+    uint32_t downlink_counter;
+    uint32_t last_rx_mic;
+    uint32_t last_used;
+    uint8_t datarate;
+    int8_t tx_power;
+    uint8_t adr_enabled;
+    uint8_t valid;                       // Entry carries live counter data
+} Tier2Entry_t;
+
+/**
+ * @brief Tier-2 counter bank: dynamic state only, ping-ponged between two
+ *        flash slots. The monotonic sequence picks the newest valid slot
+ *        on restore.
+ */
+typedef struct {
+    uint32_t magic;                      // TIER2_MAGIC
+    uint16_t version;                    // MULTIREGION_VERSION
+    uint8_t active_slot;                 // Most recently active slot
+    uint8_t reserved;
+    uint32_t sequence;                   // Monotonic; newest slot wins
+    Tier2Entry_t entries[MAX_REGION_CONTEXTS];
+    uint32_t crc32;                      // Whole-bank validation
+} __attribute__((aligned(8))) Tier2Bank_t;
+
+/* Compile-time checks: each bank must fit in one 2KB flash page */
+_Static_assert(sizeof(Tier1Bank_t) <= MULTIREGION_FLASH_PAGE_SIZE,
+               "Tier-1 bank must fit in one flash page");
+_Static_assert(sizeof(Tier2Bank_t) <= MULTIREGION_FLASH_PAGE_SIZE,
+               "Tier-2 bank must fit in one flash page");
 
 /* Private variables ---------------------------------------------------------*/
 static MultiRegionStorage_t g_storage;
 static bool g_initialized = false;
 static uint8_t g_flash_buffer[MULTIREGION_FLASH_PAGE_SIZE] __attribute__((aligned(8)));
+
+/* Two-tier persistence state */
+static const uint32_t TIER1_ADDRS[TIER1_NUM_COPIES] = { 0x0803C000UL, 0x0803C800UL, 0x0803D000UL };
+static const uint32_t TIER2_ADDRS[TIER2_NUM_SLOTS]  = { 0x0803D800UL, 0x0803E000UL };
+static uint32_t g_t2_sequence = 0;       // Last Tier-2 sequence written/read
+static int8_t g_t2_last_slot = -1;       // Last Tier-2 slot written (-1 = none)
+static bool g_tier1_dirty = false;       // Static credentials changed, Tier-1 rewrite needed
 
 /* Batched frame counter save infrastructure */
 static uint8_t g_unsaved_tx_count = 0;  // Track unsaved successful transmissions
@@ -52,6 +127,10 @@ static bool ValidateContextCRC(MinimalRegionContext_t *ctx);
 static void UpdateContextCRC(MinimalRegionContext_t *ctx);
 static bool FlashReadStorage(void);
 static bool FlashWriteStorage(void);
+static bool FlashReadTier1(Tier1Bank_t *out);
+static bool FlashWriteTier1(void);
+static bool FlashReadTier2(Tier2Bank_t *out);
+static bool FlashWriteTier2(void);
 static int8_t FindContextSlot(LoRaMacRegion_t region);
 static bool CaptureCurrentContext(MinimalRegionContext_t *ctx);
 static bool RestoreContextToMAC(MinimalRegionContext_t *ctx);
@@ -74,34 +153,25 @@ void MultiRegion_Init(void)
     // Initialize flash interface
     FLASH_IF_Init(g_flash_buffer);
     
-    // Try to restore contexts from flash
+    // Try to restore contexts from flash (Tier-1 credentials + Tier-2 counters)
     if (FlashReadStorage()) {
-        // Validate magic number and version
-        if (g_storage.magic == MULTIREGION_MAGIC && g_storage.version == MULTIREGION_VERSION) {
-            // Validate CRC
-            uint32_t stored_crc = g_storage.crc32;
-            g_storage.crc32 = 0;
-            uint32_t calculated_crc = CalculateCRC32((uint8_t*)&g_storage, sizeof(g_storage) - 4);
-            
-            if (stored_crc == calculated_crc) {
-                APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Restored %d contexts from flash\r\n", 
-                        g_storage.num_valid);
-                g_initialized = true;
-                return;
-            } else {
-                APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Flash CRC mismatch, initializing fresh\r\n");
-            }
-        } else {
-            APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Invalid magic/version, initializing fresh\r\n");
-        }
+        APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Restored %d contexts from flash\r\n",
+                g_storage.num_valid);
+        g_initialized = true;
+        return;
     }
-    
+
+    APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: No valid Tier-1 bank, initializing fresh\r\n");
+
     // Initialize fresh storage
     memset(&g_storage, 0, sizeof(g_storage));
     g_storage.magic = MULTIREGION_MAGIC;
     g_storage.version = MULTIREGION_VERSION;
     g_storage.active_slot = 0xFF;  // No active region yet
     g_storage.num_valid = 0;
+    g_t2_sequence = 0;
+    g_t2_last_slot = -1;
+    g_tier1_dirty = false;
     
     // Note: We rely on DevAddr==0 to detect empty slots, not region value
     // memset already zeroed everything, which is perfect for our needs
@@ -312,6 +382,9 @@ bool MultiRegion_ForceSaveCurrentContext(void)
         } else {
             SEGGER_RTT_WriteString(0, "  ERROR: Failed to get NwkSKey!\r\n");
         }
+
+        // FW-1: static credentials changed - Tier-1 bank rewrite required (commissioning-only)
+        g_tier1_dirty = true;
     }
     
     // Now capture dynamic context (frame counters, datarate, etc.)
@@ -746,14 +819,29 @@ void MultiRegion_GetStats(uint8_t *total_slots, uint8_t *used_slots)
 bool MultiRegion_ClearAllContexts(void)
 {
     APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Clearing all contexts\r\n");
-    
+
     memset(&g_storage, 0, sizeof(g_storage));
     g_storage.magic = MULTIREGION_MAGIC;
     g_storage.version = MULTIREGION_VERSION;
     g_storage.active_slot = 0xFF;
     g_storage.num_valid = 0;
-    
-    return FlashWriteStorage();
+    g_t2_sequence = 0;
+    g_t2_last_slot = -1;
+    g_tier1_dirty = false;
+
+    // Erase all tier pages (3x Tier-1 + 2x Tier-2)
+    bool ok = true;
+    for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
+        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+            ok = false;
+        }
+    }
+    for (uint8_t i = 0; i < TIER2_NUM_SLOTS; i++) {
+        if (FLASH_IF_Erase((void*)TIER2_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 /**
@@ -1199,7 +1287,10 @@ bool MultiRegion_InitializeRegionFromChirpstack(
     
     // Calculate CRC
     UpdateContextCRC(ctx);
-    
+
+    // FW-1: credentials written - Tier-1 bank rewrite required (commissioning path)
+    g_tier1_dirty = true;
+
     // Save to flash
     bool result = FlashWriteStorage();
     
@@ -1293,46 +1384,270 @@ static void UpdateContextCRC(MinimalRegionContext_t *ctx)
 }
 
 /**
- * @brief Read storage from flash
+ * @brief Read Tier-1 credential bank from flash (three redundant copies).
+ *        First CRC-valid copy wins; any invalid copy is repaired from the
+ *        good one (ADR-0006 restore-repair: a bad copy is erased/rewritten
+ *        only while at least one good copy remains intact).
  */
-static bool FlashReadStorage(void)
+static bool FlashReadTier1(Tier1Bank_t *out)
 {
-    FLASH_IF_StatusTypedef status = FLASH_IF_Read(&g_storage, 
-                                                    (void*)MULTIREGION_FLASH_BASE_ADDR, 
-                                                    sizeof(MultiRegionStorage_t));
-    
-    return (status == FLASH_IF_OK);
+    bool copy_ok[TIER1_NUM_COPIES] = { false, false, false };
+    int8_t good = -1;
+
+    for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
+        Tier1Bank_t tmp;
+        if (FLASH_IF_Read(&tmp, (void*)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+            continue;
+        }
+        if (tmp.magic != TIER1_MAGIC || tmp.version != MULTIREGION_VERSION) {
+            continue;
+        }
+        uint32_t stored_crc = tmp.crc32;
+        tmp.crc32 = 0;
+        if (CalculateCRC32((uint8_t*)&tmp, sizeof(Tier1Bank_t) - 4) != stored_crc) {
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d CRC mismatch\r\n", i);
+            continue;
+        }
+        tmp.crc32 = stored_crc;
+        copy_ok[i] = true;
+        if (good < 0) {
+            memcpy(out, &tmp, sizeof(Tier1Bank_t));
+            good = (int8_t)i;
+        }
+    }
+
+    if (good < 0) {
+        return false;
+    }
+
+    // Restore-repair: rewrite any bad copy from the good one
+    for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
+        if (copy_ok[i]) {
+            continue;
+        }
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Repairing Tier-1 copy %d from copy %d\r\n", i, good);
+        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+            continue;
+        }
+        FLASH_IF_Write((void*)TIER1_ADDRS[i], out, sizeof(Tier1Bank_t));
+    }
+
+    return true;
 }
 
 /**
- * @brief Write storage to flash
+ * @brief Write Tier-1 credential bank to all three pages and read-back
+ *        verify each copy. Commissioning-only: Tier-1 pages are never
+ *        erased in flight.
+ */
+static bool FlashWriteTier1(void)
+{
+    Tier1Bank_t t1;
+    memset(&t1, 0, sizeof(t1));
+    t1.magic = TIER1_MAGIC;
+    t1.version = MULTIREGION_VERSION;
+    t1.num_valid = g_storage.num_valid;
+    t1.active_slot = g_storage.active_slot;
+    memcpy(t1.contexts, g_storage.contexts, sizeof(t1.contexts));
+    t1.crc32 = 0;
+    t1.crc32 = CalculateCRC32((uint8_t*)&t1, sizeof(Tier1Bank_t) - 4);
+
+    bool all_ok = true;
+    for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
+        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d erase failed\r\n", i);
+            all_ok = false;
+            continue;
+        }
+        if (FLASH_IF_Write((void*)TIER1_ADDRS[i], &t1, sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d write failed\r\n", i);
+            all_ok = false;
+            continue;
+        }
+        // Commissioning read-back: verify the copy just written
+        Tier1Bank_t verify;
+        if (FLASH_IF_Read(&verify, (void*)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK ||
+            memcmp(&verify, &t1, sizeof(Tier1Bank_t)) != 0) {
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d verify failed\r\n", i);
+            all_ok = false;
+        }
+    }
+    return all_ok;
+}
+
+/**
+ * @brief Read Tier-2 counter bank from flash; newest CRC-valid slot wins.
+ */
+static bool FlashReadTier2(Tier2Bank_t *out)
+{
+    bool found = false;
+    uint32_t best_seq = 0;
+
+    for (uint8_t i = 0; i < TIER2_NUM_SLOTS; i++) {
+        Tier2Bank_t tmp;
+        if (FLASH_IF_Read(&tmp, (void*)TIER2_ADDRS[i], sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
+            continue;
+        }
+        if (tmp.magic != TIER2_MAGIC || tmp.version != MULTIREGION_VERSION) {
+            continue;
+        }
+        uint32_t stored_crc = tmp.crc32;
+        tmp.crc32 = 0;
+        if (CalculateCRC32((uint8_t*)&tmp, sizeof(Tier2Bank_t) - 4) != stored_crc) {
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-2 slot %d CRC mismatch\r\n", i);
+            continue;
+        }
+        tmp.crc32 = stored_crc;
+        if (!found || tmp.sequence > best_seq) {
+            memcpy(out, &tmp, sizeof(Tier2Bank_t));
+            best_seq = tmp.sequence;
+            g_t2_last_slot = (int8_t)i;
+            found = true;
+        }
+    }
+    return found;
+}
+
+/**
+ * @brief Write Tier-2 counter bank to the alternate ping-pong slot.
+ *        Erase-before-write on the *idle* slot: a brownout mid-save leaves
+ *        the previous slot fully intact (ADR-0004 pattern). The C6 counter
+ *        margin (applied by the caller) covers the resulting regression.
+ */
+static bool FlashWriteTier2(void)
+{
+    Tier2Bank_t t2;
+    memset(&t2, 0, sizeof(t2));
+    t2.magic = TIER2_MAGIC;
+    t2.version = MULTIREGION_VERSION;
+    t2.active_slot = g_storage.active_slot;
+    t2.sequence = g_t2_sequence + 1;
+
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        MinimalRegionContext_t *ctx = &g_storage.contexts[i];
+        if (ctx->dev_addr == 0 || ctx->dev_addr == 0xFFFFFFFF) {
+            continue;  // Entry stays zeroed/invalid
+        }
+        t2.entries[i].uplink_counter = ctx->uplink_counter;
+        t2.entries[i].downlink_counter = ctx->downlink_counter;
+        t2.entries[i].last_rx_mic = ctx->last_rx_mic;
+        t2.entries[i].last_used = ctx->last_used;
+        t2.entries[i].datarate = ctx->datarate;
+        t2.entries[i].tx_power = ctx->tx_power;
+        t2.entries[i].adr_enabled = ctx->adr_enabled;
+        t2.entries[i].valid = 1;
+    }
+    t2.crc32 = 0;
+    t2.crc32 = CalculateCRC32((uint8_t*)&t2, sizeof(Tier2Bank_t) - 4);
+
+    uint8_t slot = (uint8_t)((g_t2_last_slot + 1) % TIER2_NUM_SLOTS);
+
+    if (FLASH_IF_Erase((void*)TIER2_ADDRS[slot], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-2 slot %d erase failed\r\n", slot);
+        return false;
+    }
+    if (FLASH_IF_Write((void*)TIER2_ADDRS[slot], &t2, sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-2 slot %d write failed\r\n", slot);
+        return false;
+    }
+
+    g_t2_sequence = t2.sequence;
+    g_t2_last_slot = (int8_t)slot;
+    return true;
+}
+
+/**
+ * @brief Restore storage from flash: Tier-1 credentials overlaid with the
+ *        newest valid Tier-2 counter bank.
+ * @retval true if a valid Tier-1 bank was found (contexts restored)
+ */
+static bool FlashReadStorage(void)
+{
+    Tier1Bank_t t1;
+    if (!FlashReadTier1(&t1)) {
+        return false;  // Virgin bank (or unrecoverable) -> COMMISSIONING door anchor
+    }
+
+    g_storage.magic = MULTIREGION_MAGIC;
+    g_storage.version = MULTIREGION_VERSION;
+    g_storage.num_valid = t1.num_valid;
+    g_storage.active_slot = t1.active_slot;
+    memcpy(g_storage.contexts, t1.contexts, sizeof(g_storage.contexts));
+
+    Tier2Bank_t t2;
+    if (FlashReadTier2(&t2)) {
+        g_t2_sequence = t2.sequence;
+        if (t2.active_slot < MAX_REGION_CONTEXTS) {
+            g_storage.active_slot = t2.active_slot;
+        }
+        for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+            if (!t2.entries[i].valid) {
+                continue;
+            }
+            MinimalRegionContext_t *ctx = &g_storage.contexts[i];
+            ctx->uplink_counter = t2.entries[i].uplink_counter;
+            ctx->downlink_counter = t2.entries[i].downlink_counter;
+            ctx->last_rx_mic = t2.entries[i].last_rx_mic;
+            ctx->last_used = t2.entries[i].last_used;
+            ctx->datarate = t2.entries[i].datarate;
+            ctx->tx_power = t2.entries[i].tx_power;
+            ctx->adr_enabled = t2.entries[i].adr_enabled;
+        }
+    } else {
+        /* Degrade ladder (ADR-0006): keys good, counters lost ->
+         * counter = last persisted (Tier-1 commissioning value) + margin.
+         * The C6 margin keeps the restored FCntUp ahead of the server. */
+        APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Tier-2 counters lost; using Tier-1 values + margin\r\n");
+        for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+            MinimalRegionContext_t *ctx = &g_storage.contexts[i];
+            if (ctx->dev_addr != 0 && ctx->dev_addr != 0xFFFFFFFF) {
+                ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+            }
+        }
+    }
+
+    /* Re-stamp per-entry CRCs on the merged working copy so the existing
+     * ValidateContextCRC() checks (IsRegionJoined / SwitchToRegion) hold. */
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        UpdateContextCRC(&g_storage.contexts[i]);
+    }
+
+    return true;
+}
+
+/**
+ * @brief Persist storage to flash.
+ *        Tier-2 (counters) is always written (ping-pong, erase-before-write).
+ *        Tier-1 (credentials) is written only when static fields changed
+ *        (g_tier1_dirty) and only in COMMISSIONING - Tier-1 pages are never
+ *        erased in flight (FW-1 / ADR-0006).
  */
 static bool FlashWriteStorage(void)
 {
-    // Update CRC
-    g_storage.crc32 = 0;
-    g_storage.crc32 = CalculateCRC32((uint8_t*)&g_storage, sizeof(g_storage) - 4);
-    
-    // Erase flash page
-    FLASH_IF_StatusTypedef status = FLASH_IF_Erase((void*)MULTIREGION_FLASH_BASE_ADDR, 
-                                                     MULTIREGION_FLASH_PAGE_SIZE);
-    
-    if (status != FLASH_IF_OK) {
-        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Flash erase failed\r\n");
-        return false;
+    bool ok = true;
+
+    if (g_tier1_dirty) {
+        if (MissionState_IsCommissioning()) {
+            if (FlashWriteTier1()) {
+                g_tier1_dirty = false;
+            } else {
+                APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 write failed\r\n");
+                ok = false;
+            }
+        } else {
+            /* Should be unreachable (joins are commissioning-only); never
+             * erase credential pages in flight regardless. */
+            SEGGER_RTT_WriteString(0, "MultiRegion: Tier-1 write SUPPRESSED in FLIGHT\r\n");
+            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 write suppressed in FLIGHT\r\n");
+            g_tier1_dirty = false;
+        }
     }
-    
-    // Write to flash
-    status = FLASH_IF_Write((void*)MULTIREGION_FLASH_BASE_ADDR, 
-                            &g_storage, 
-                            sizeof(MultiRegionStorage_t));
-    
-    if (status != FLASH_IF_OK) {
-        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Flash write failed\r\n");
-        return false;
+
+    if (!FlashWriteTier2()) {
+        ok = false;
     }
-    
-    return true;
+
+    return ok;
 }
 
 /**

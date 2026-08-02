@@ -46,7 +46,7 @@
 | P2-13 | MEDIUM | VREFBUF disabled, never re-enabled | **OPEN** | `stm32_lpm_if.c:187` |
 | P2-14 | LOW | Stale 300000ms comment | **FIXED** | `lora_app.h` |
 | P2-15 | LOW | Geofence dead code, bulk TODOs, blocking delays | **OPEN** | various |
-| T1 | BLOCKER | Session integrity: two-tier storage, one-way door | **FIXED** — COMMISSIONING-only rejoin, FLIGHT RF-silence ladder live | `lora_app.c` |
+| T1 | BLOCKER | Session integrity: two-tier storage, one-way door | **FIXED** — ladder half (COMMISSIONING-only rejoin, FLIGHT RF-silence) + storage half (FW-1): Tier-1 credentials as 3 redundant CRC'd copies (pages 120–122, written once at commissioning, read-back verified, restore-repair of bad copies, never erased in flight); Tier-2 frame counters ping-pong (pages 123/124, erase-before-write, sequence-newest-wins); counter-loss degrade = Tier-1 + C6 margin; door anchors to Tier-1 presence. Bench gate B5 extended (power-cut × 50) | `lora_app.c`, `multiregion_context.c`, `STM32WLE5JCIX_FLASH.ld` (FLASH now 240K) |
 | T2 | HIGH | Data honesty: stale bits + status byte | **FIXED** — stale bits (GPS/temp/hum) + status byte live; flash record carries reserved flags field for future stale bits | `sys_sensors.c`, `payload_encode.c` |
 | T3 | BLOCKER | Mission state machine (COMMISSIONING/FLIGHT) | **FIXED** — door anchored to session bank, one-way transitions, join + GPS-config gated to COMMISSIONING. FW-3: `MissionState_Update()` now called each work cycle (was defined but never called — ASCENT never transitioned to FLOAT) | `mission_state.c`, `lora_app.c:1094` |
 | T4 | BLOCKER | Flash ring rewrite to ADR-0004 | **FIXED** — retires P0-3, F15, F26 (bench gate B1 remains) | `flash_log.c`, `flash_log.h` |
@@ -88,7 +88,8 @@ Submodule `Middlewares/Third_Party/h3lite` @ `8d15d6b` (firmware pointer bumped 
 | Build | total (text+data) | headroom (of 256KB) |
 |-------|-------|---------------------|
 | Post-Phase-1–6 (2026-08-01) | 239,096 | ~23 KB |
-| Post-h3lite region engine (2026-08-02, `dc9e1a2`) | 191,904 | ~70 KB |
+| Post-h3lite region engine (2026-08-02, `dc9e1a2`) | 191,904 | ~70 KB (of 250K) |
+| Post-FW-1 two-tier storage (2026-08-02) | 192,808 | ~53 KB (of 240K — linker shrunk 250K→240K for pages 120–124) |
 
 Region table went 65,718 B → 18,224 B (4,556 packed uint32 entries) — a 47,192 B flash saving.
 
