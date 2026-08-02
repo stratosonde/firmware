@@ -1669,7 +1669,15 @@ static int8_t FindContextSlot(LoRaMacRegion_t region)
                  g_storage.contexts[i].region,
                  g_storage.contexts[i].dev_addr);
         SEGGER_RTT_WriteString(0, debug_msg);
-        
+
+        /* FW-9: skip empty slots. LORAMAC_REGION_AS923 == 0, so an erased/
+         * zeroed slot otherwise "matches" an AS923 lookup. A real slot always
+         * has a DevAddr (never 0 or 0xFFFFFFFF). */
+        if (g_storage.contexts[i].dev_addr == 0 ||
+            g_storage.contexts[i].dev_addr == 0xFFFFFFFFUL) {
+            continue;
+        }
+
         if (g_storage.contexts[i].region == region) {
             snprintf(debug_msg, sizeof(debug_msg), "  -> Found at slot %d!\r\n", i);
             SEGGER_RTT_WriteString(0, debug_msg);

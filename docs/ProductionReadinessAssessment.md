@@ -43,6 +43,7 @@
 | FW-18 | LOW | Stale `LOW_POWER_DISABLE` comment/block on flight-critical flag | **FIXED** — removed | `sys_conf.h` |
 | FW-6 | MEDIUM | Voltage-slope Δt amplification (tiny Δt → 10 mV ADC noise = spurious SURVIVAL) | **FIXED** — 600 s minimum Δt before recompute; returns last valid slope otherwise (new `last_slope_mv_per_hour` in `VoltageSlope_t`); covers dt==0 | `lora_app.c::CalculateVoltageSlope`, `lora_app.h` |
 | FW-10 | MEDIUM | `LORAWAN_FORCE_REJOIN_AT_BOOT` brick switch (FLIGHT + virgin bank = permanent RF silence) | **FIXED** — context clear gated behind `MissionState_IsCommissioning()` (door anchored before the check), compile-time `#warning` tripwire when flag true | `lora_app.c` |
+| FW-9 | MEDIUM | `FindContextSlot()` region-sentinel collision (AS923=0 matches erased-slot zeros) | **FIXED** — slots with DevAddr 0/0xFFFFFFFF skipped before the region compare | `multiregion_context.c::FindContextSlot` |
 | P1-17 | HIGH | Debug payloads default-ON + DR side effect | **PARTIAL** — defaults=0 done; DR save/restore pending | `payload_format.h`, `lora_app.c:1601` |
 | P2-12 | MEDIUM | W25Q deep-power-down commented out | **OPEN** | `stm32_lpm_if.c:130-132` |
 | P2-13 | MEDIUM | VREFBUF disabled, never re-enabled | **OPEN** | `stm32_lpm_if.c:187` |
