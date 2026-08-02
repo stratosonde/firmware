@@ -276,6 +276,15 @@ static ActivationType_t ActivationType = LORAWAN_DEFAULT_ACTIVATION_TYPE;
   */
 static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
 
+/* FW-10: this flag must NEVER be true in a build flashed to a flight unit —
+ * combined with the T1 ladder it produces FLIGHT + virgin bank = permanent
+ * RF silence. The runtime gate in LoRaWAN_Init() (commissioning-only clear)
+ * is the real protection; this compile-time tripwire makes a mis-configured
+ * build loud at build time. */
+#if LORAWAN_FORCE_REJOIN_AT_BOOT
+#warning "LORAWAN_FORCE_REJOIN_AT_BOOT=true: commissioning builds only - never flash to a flight unit"
+#endif
+
 /**
   * @brief LoRaWAN handler Callbacks
   */
@@ -417,11 +426,18 @@ void LoRaWAN_Init(void)
    * the bank, not a lone flag, anchors the one-way door. Idempotent. */
   MissionState_Init();
   
-  /* Check ForceRejoin flag - if true, clear all saved contexts */
+  /* Check ForceRejoin flag - if true, clear all saved contexts.
+   * FW-10: gated behind COMMISSIONING. MissionState_Init() above has already
+   * anchored the door to the bank, so a flight unit booting a mis-flashed
+   * build reads FLIGHT and skips the wipe (its bank stays intact). */
   if (ForceRejoin) {
-    SEGGER_RTT_WriteString(0, "\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
-    MultiRegion_ClearAllContexts();
-    SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
+    if (MissionState_IsCommissioning()) {
+      SEGGER_RTT_WriteString(0, "\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
+      MultiRegion_ClearAllContexts();
+      SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
+    } else {
+      SEGGER_RTT_WriteString(0, "FORCE REJOIN ignored: mission is FLIGHT (FW-10)\r\n");
+    }
   }
   
   /* F22 FIX (ADR-0008): GNSS reconfiguration is COMMISSIONING-ONLY.
@@ -717,20 +733,25 @@ static int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv,
     // Calculate time difference
     uint32_t time_change_sec = slope->current_timestamp - slope->baseline_timestamp;
     
-    if (time_change_sec == 0) return 0;
-    
+    /* FW-6: a tiny dt amplifies ~10 mV of ADC noise into a huge spurious
+     * slope (dv*3600/dt) — e.g. back-to-back SendTxData cycles re-armed by
+     * bulk transfer (C7b). Require 600 s of history before recomputing;
+     * below that return the last valid slope (also covers dt == 0). */
+    if (time_change_sec < 600) return slope->last_slope_mv_per_hour;
+
     // Calculate voltage change
     int32_t voltage_change = slope->current_voltage_mv - slope->baseline_voltage_mv;
-    
+
     // Convert to mV/hour
     int16_t slope_mv_per_hour = (int16_t)((voltage_change * 3600) / time_change_sec);
-    
+
     // Every 2 hours (7200 seconds), shift baseline forward
     if (time_change_sec >= 7200) {
         slope->baseline_voltage_mv = slope->current_voltage_mv;
         slope->baseline_timestamp = slope->current_timestamp;
     }
-    
+
+    slope->last_slope_mv_per_hour = slope_mv_per_hour;
     return slope_mv_per_hour;
 }
 

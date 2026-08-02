@@ -42,6 +42,7 @@ typedef struct {
     uint32_t baseline_timestamp;     // Timestamp at baseline
     uint16_t current_voltage_mv;     // Most recent voltage reading
     uint32_t current_timestamp;      // Most recent timestamp
+    int16_t  last_slope_mv_per_hour; // FW-6: last valid slope (returned when dt < MIN_SLOPE_DT)
 } VoltageSlope_t;
 
 /* USER CODE END ET */

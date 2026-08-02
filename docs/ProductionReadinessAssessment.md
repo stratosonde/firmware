@@ -41,6 +41,8 @@
 | F27 | LOW | Float printf without `-u _printf_float` | **FIXED** — three `%.1f` sites converted to integer deci-prints. FW-16: five more sites found + converted (atgm336h GPS summary x2, multiregion_h3 nearest/detection logs x3) | `lora_app.c`, `atgm336h.c`, `multiregion_h3.c` |
 | FW-17 | LOW | LinkCheck log prints garbage DemodMargin/NbGateways when no LinkCheckAns received | **FIXED** — margin/gateway-count logged only when a LinkCheckAns was actually received | `lora_app.c` |
 | FW-18 | LOW | Stale `LOW_POWER_DISABLE` comment/block on flight-critical flag | **FIXED** — removed | `sys_conf.h` |
+| FW-6 | MEDIUM | Voltage-slope Δt amplification (tiny Δt → 10 mV ADC noise = spurious SURVIVAL) | **FIXED** — 600 s minimum Δt before recompute; returns last valid slope otherwise (new `last_slope_mv_per_hour` in `VoltageSlope_t`); covers dt==0 | `lora_app.c::CalculateVoltageSlope`, `lora_app.h` |
+| FW-10 | MEDIUM | `LORAWAN_FORCE_REJOIN_AT_BOOT` brick switch (FLIGHT + virgin bank = permanent RF silence) | **FIXED** — context clear gated behind `MissionState_IsCommissioning()` (door anchored before the check), compile-time `#warning` tripwire when flag true | `lora_app.c` |
 | P1-17 | HIGH | Debug payloads default-ON + DR side effect | **PARTIAL** — defaults=0 done; DR save/restore pending | `payload_format.h`, `lora_app.c:1601` |
 | P2-12 | MEDIUM | W25Q deep-power-down commented out | **OPEN** | `stm32_lpm_if.c:130-132` |
 | P2-13 | MEDIUM | VREFBUF disabled, never re-enabled | **OPEN** | `stm32_lpm_if.c:187` |
