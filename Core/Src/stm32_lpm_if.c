@@ -225,6 +225,14 @@ void PWR_EnterStopMode(void)
   HAL_NVIC_SetPriority(RTC_WKUP_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(RTC_WKUP_IRQn);
 
+  /* FW-4: if the TxTimer/Alarm-A chain dies while the RTC wakeup timer keeps
+   * ticking, this loop would sleep in 25s chunks forever with a satisfied
+   * IWDG. Two guards: (1) run the progress deadman here — it reads RTC time
+   * and self-resets; (2) bound the chunk count past the worst-case cycle
+   * (SURVIVAL = 1h -> 150 chunks of 25s ~ 62.5 min). */
+  extern void Deadman_Check(void);  /* defined in lora_app.c */
+  uint32_t chunks = 0;
+
   while (1)
   {
     /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz, 25s = 51200 counts */
@@ -242,6 +250,8 @@ void PWR_EnterStopMode(void)
 
     /* === Woke up — immediately refresh IWDG === */
     HAL_IWDG_Refresh(&hiwdg);
+    Deadman_Check();  /* FW-4: no-op in COMMISSIONING; resets if no work cycle for 3h */
+    if (++chunks > 150) break;  /* FW-4: never sleep forever (belt and braces) */
 
     /* Deactivate wakeup timer to avoid spurious triggers */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
