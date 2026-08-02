@@ -46,7 +46,7 @@
 | P2-15 | LOW | Geofence dead code, bulk TODOs, blocking delays | **OPEN** | various |
 | T1 | BLOCKER | Session integrity: two-tier storage, one-way door | **FIXED** — COMMISSIONING-only rejoin, FLIGHT RF-silence ladder live | `lora_app.c` |
 | T2 | HIGH | Data honesty: stale bits + status byte | **FIXED** — stale bits (GPS/temp/hum) + status byte live; flash record carries reserved flags field for future stale bits | `sys_sensors.c`, `payload_encode.c` |
-| T3 | BLOCKER | Mission state machine (COMMISSIONING/FLIGHT) | **FIXED** — door anchored to session bank, one-way transitions, join + GPS-config gated to COMMISSIONING (boot LED blink remains, ~1 s, negligible) | `mission_state.c`, `lora_app.c` |
+| T3 | BLOCKER | Mission state machine (COMMISSIONING/FLIGHT) | **FIXED** — door anchored to session bank, one-way transitions, join + GPS-config gated to COMMISSIONING. FW-3: `MissionState_Update()` now called each work cycle (was defined but never called — ASCENT never transitioned to FLOAT) | `mission_state.c`, `lora_app.c:1094` |
 | T4 | BLOCKER | Flash ring rewrite to ADR-0004 | **FIXED** — retires P0-3, F15, F26 (bench gate B1 remains) | `flash_log.c`, `flash_log.h` |
 
 ## Bench-Verify Checklist (hardware, before launch)
