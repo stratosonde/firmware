@@ -2,7 +2,7 @@
 
 **Living document.** This file tracks *code truth only* — a row is FIXED only when the fix is in the code, not when the design is agreed. Design rationale lives in `docs/adr/`; the implementation plan and verification evidence live in `docs/FixWorkorderPlan.md`; the authoritative finding list is `archive/stratosonde-fix-workorder-2026-07-31.md`.
 
-**Base commit:** `181f997` · **Last reconciled with code:** 2026-08-01 (post Phase 1–6 implementation; build clean, 239,096 B flash used)
+**Base commit:** `181f997` · **Last reconciled with code:** 2026-08-02 (post `ReviewFixImplementationPlan.md` items 1–11, 14–16; build clean, 191,904 B flash used)
 
 ---
 
@@ -39,6 +39,8 @@
 | F25 | LOW | LED + `HAL_Delay(50)` in `EnvSensors_Read` | **FIXED** — removed | `sys_sensors.c` |
 | F26 | LOW | `flash_log.h` comment contradicts ADR-0004 | **FIXED** — header docs now describe sectors 0/1 + data from sector 2 | `flash_log.h` |
 | F27 | LOW | Float printf without `-u _printf_float` | **FIXED** — three `%.1f` sites converted to integer deci-prints. FW-16: five more sites found + converted (atgm336h GPS summary x2, multiregion_h3 nearest/detection logs x3) | `lora_app.c`, `atgm336h.c`, `multiregion_h3.c` |
+| FW-17 | LOW | LinkCheck log prints garbage DemodMargin/NbGateways when no LinkCheckAns received | **FIXED** — margin/gateway-count logged only when a LinkCheckAns was actually received | `lora_app.c` |
+| FW-18 | LOW | Stale `LOW_POWER_DISABLE` comment/block on flight-critical flag | **FIXED** — removed | `sys_conf.h` |
 | P1-17 | HIGH | Debug payloads default-ON + DR side effect | **PARTIAL** — defaults=0 done; DR save/restore pending | `payload_format.h`, `lora_app.c:1601` |
 | P2-12 | MEDIUM | W25Q deep-power-down commented out | **OPEN** | `stm32_lpm_if.c:130-132` |
 | P2-13 | MEDIUM | VREFBUF disabled, never re-enabled | **OPEN** | `stm32_lpm_if.c:187` |
@@ -48,6 +50,23 @@
 | T2 | HIGH | Data honesty: stale bits + status byte | **FIXED** — stale bits (GPS/temp/hum) + status byte live; flash record carries reserved flags field for future stale bits | `sys_sensors.c`, `payload_encode.c` |
 | T3 | BLOCKER | Mission state machine (COMMISSIONING/FLIGHT) | **FIXED** — door anchored to session bank, one-way transitions, join + GPS-config gated to COMMISSIONING. FW-3: `MissionState_Update()` now called each work cycle (was defined but never called — ASCENT never transitioned to FLOAT) | `mission_state.c`, `lora_app.c:1094` |
 | T4 | BLOCKER | Flash ring rewrite to ADR-0004 | **FIXED** — retires P0-3, F15, F26 (bench gate B1 remains) | `flash_log.c`, `flash_log.h` |
+
+## h3lite Region Engine (ReviewFixImplementationPlan Phase 2)
+
+Submodule `Middlewares/Third_Party/h3lite` @ `8d15d6b` (firmware pointer bumped in `dc9e1a2`). Verification harness: `h3lite/test/{xval_pts.c, t_index.py, t_city.py, t_table.py}`.
+
+| ID | Issue | Status | Verified at |
+|----|-------|--------|-------------|
+| H3-1 / H3-4 | Res-1/res-2 table entries unmatchable (no resolution in key); 12 B/entry struct | **FIXED** — packed 4 B `RegionEntry` (baseCell/res/partialIndex/regionId), `findRegion()` binary search, `h3ToRegion()` probes res3→res2→res1 first-hit-wins | `h3lite/src/h3lite.c`, `generate_lookup_table.py` |
+| H3-2 | 269 duplicate / 35 conflicting keys; order-dependent region-blind compaction | **FIXED** — uniform-only compaction, deterministic conflict resolution (largest intersected area, lowest-ID tiebreak), 0.6° seaward buffer for coastal erosion | `generate_lookup_table.py` |
+| H3-3 | NZ→AS923-1C, HK→CN470 assignments vs RP002 | **AUDITED, DATA FROZEN** — full discrepancy report in `docs/RegionDataAudit.md`; AS923-1B/1C/CD900-1A are non-existent plans; HK is a cell-granularity issue (needs small-territory override). Data changes pending user review | `docs/RegionDataAudit.md`, `hplans/audit_vs_rp002.py` |
+| H3-5 | Unconditional `printf()` in `h3ToRegion()` hot path | **FIXED** — gated behind `H3LITE_DEBUG_PRINT` | `h3lite/src/h3lite.c` |
+| H3-6(1) | `h3GetRing` latent buffer bug (no actual-count return) | **FIXED** — returns actual count, −1 on pentagon/failure; caller loops on returned count; pentagon limitation documented (846/927 rings exact, 81 clean failures, 0 wrong-content) | `h3lite/src/h3lite_neighbor.c`, `h3lite.c`, `h3lite/README.md` |
+| H3-7 | `getRegionName` clamp kills CN470/EU433/CD900-1A names | **FIXED** — sizeof-based clamp + `REGION_RESTRICTED`→"RESTRICTED" guard | `h3lite/src/h3lite.c` |
+| H3-8 | `REGION_RESTRICTED` (255) unreachable — no restricted-region data | **OPEN** — blocked on region-data review (needs NK GeoJSON → regionId 255, 255-always-wins in generator) | `lora_app.c::SendTxData` (branch exists) |
+| H3-9 | Dead `baseCellTable` (576 B misleading data) | **FIXED** — deleted | `h3lite/src/h3lite.c`, `h3lite_faceijk.c` |
+
+**Measured baselines (host harness):** T-INDEX 0/259,200 mismatches (0.5° global grid vs `h3` 4.5.0) · T-CITY 49/52 correct (3 fails = Wellington/Auckland/Hong Kong — region-data issues frozen per H3-3, not engine bugs) · T-TABLE 0 duplicate keys / 0 conflicts.
 
 ## Bench-Verify Checklist (hardware, before launch)
 
@@ -69,6 +88,9 @@
 | Build | total (text+data) | headroom (of 256KB) |
 |-------|-------|---------------------|
 | Post-Phase-1–6 (2026-08-01) | 239,096 | ~23 KB |
+| Post-h3lite region engine (2026-08-02, `dc9e1a2`) | 191,904 | ~70 KB |
+
+Region table went 65,718 B → 18,224 B (4,556 packed uint32 entries) — a 47,192 B flash saving.
 
 Monitor after each structural phase; T1/T3/T4 add code.
 
