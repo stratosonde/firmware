@@ -194,10 +194,16 @@ uint16_t SYS_GetBatteryVoltage(void)
   }
   else
   {
-    /* Convert ADC value to voltage in mV
-       ADC is 12-bit (0-4095), VDDA = 3300 mV
-       Apply 2x scaling for 0.5 voltage divider */
-    batteryVoltagemV = (measuredLevel * 3300 / 4096) * 2;
+    /* F18 FIX: Ratiometric conversion using measured VDDA (VREFINT).
+       VDDA sags in cold/under load; assuming 3300 mV caused ~275 mV error
+       at the 4300 mV survival floor. Fall back to 3300 if VDDA read fails. */
+    uint16_t vdda_mv = SYS_GetBatteryLevel();
+    if (vdda_mv == 0)
+    {
+      vdda_mv = 3300;
+    }
+    /* ADC is 12-bit (0-4095); apply 2x scaling for 0.5 voltage divider */
+    batteryVoltagemV = (uint16_t)(((uint32_t)measuredLevel * vdda_mv / 4096) * 2);
   }
 
   return batteryVoltagemV;
@@ -222,10 +228,14 @@ uint16_t SYS_GetSolarVoltage(void)
   }
   else
   {
-    /* Convert ADC value to voltage in mV
-       ADC is 12-bit (0-4095), VDDA = 3300 mV
-       No voltage divider, so no scaling needed */
-    solarVoltagemV = (measuredLevel * 3300 / 4096);
+    /* F18 FIX: Ratiometric conversion using measured VDDA (same bug as battery).
+       No voltage divider on PB3, so no scaling needed. */
+    uint16_t vdda_mv = SYS_GetBatteryLevel();
+    if (vdda_mv == 0)
+    {
+      vdda_mv = 3300;
+    }
+    solarVoltagemV = (uint16_t)((uint32_t)measuredLevel * vdda_mv / 4096);
   }
 
   return solarVoltagemV;

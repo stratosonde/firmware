@@ -46,6 +46,9 @@
 #include "payload_format.h"
 #include "flash_log.h"
 #include "config.h"
+#include "mission_state.h"
+#include "reset_cause.h"      /* F13a: deadman breadcrumb register */
+#include "stm32_systime.h"    /* F12: SysTimeSet (ADR-0003) */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -187,13 +190,12 @@ static void StoreContext(void);
 /**
   * @brief  stop current LoRa execution to switch into non default Activation mode
   */
-static void StopJoin(void);
+/* F24 FIX: StopJoin removed (dead SOS-button path; OTAA->ABP flip was dangerous) */
 
 /**
   * @brief  Join switch timer callback function
   * @param  context ptr of Join switch context
   */
-static void OnStopJoinTimerEvent(void *context);
 
 /**
   * @brief  Notifies the upper layer that the NVM context has changed
@@ -333,7 +335,6 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 /**
   * @brief Join Timer period
   */
-static UTIL_TIMER_Object_t StopJoinTimer;
 
 /* USER CODE BEGIN PV */
 /* Packet queue for deferred transmission after RX windows */
@@ -390,13 +391,13 @@ void LoRaWAN_Init(void)
 
   /* USER CODE END LoRaWAN_Init_1 */
 
-  UTIL_TIMER_Create(&StopJoinTimer, JOIN_TIME, UTIL_TIMER_ONESHOT, OnStopJoinTimerEvent, NULL);
+  /* F24 FIX: StopJoinTimer removed */
 
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LmHandlerProcess), UTIL_SEQ_RFU, LmHandlerProcess);
 
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), UTIL_SEQ_RFU, SendTxData);
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaStoreContextEvent), UTIL_SEQ_RFU, StoreContext);
-  UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaStopJoinEvent), UTIL_SEQ_RFU, StopJoin);
+  /* F24 FIX: StopJoin task removed */
 
   /* Init Info table used by LmHandler*/
   LoraInfo_Init();
@@ -411,6 +412,10 @@ void LoRaWAN_Init(void)
   /* Initialize Multi-region context manager */
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
+
+  /* T3 (ADR-0008): decide mission state now that the session bank is loaded —
+   * the bank, not a lone flag, anchors the one-way door. Idempotent. */
+  MissionState_Init();
   
   /* Check ForceRejoin flag - if true, clear all saved contexts */
   if (ForceRejoin) {
@@ -419,14 +424,18 @@ void LoRaWAN_Init(void)
     SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
   }
   
-  /* DISABLED: GPS Reconfiguration - runs during recommissioning only */
-  SEGGER_RTT_WriteString(0, "*** Reconfiguring GPS module (all constellations) ***\r\n");
-  GNSS_PowerOn(&hgnss);
-  HAL_Delay(1000);  // Let GPS boot
-  GNSS_Configure(&hgnss);  // Sends PCAS04,7 (GPS+BeiDou+GLONASS) + PCAS00 (save)
-  HAL_Delay(500);   // Let GPS save to flash
-  GNSS_PowerOff(&hgnss);
-  SEGGER_RTT_WriteString(0, "*** GPS reconfigured and saved to flash ***\r\n\r\n");
+  /* F22 FIX (ADR-0008): GNSS reconfiguration is COMMISSIONING-ONLY.
+   * PCAS03/04/05/11 are saved to the GNSS module's internal flash via PCAS00 —
+   * writing that flash on every boot wears it for zero benefit. */
+  if (MissionState_IsCommissioning()) {
+    SEGGER_RTT_WriteString(0, "*** COMMISSIONING: Reconfiguring GPS module (all constellations) ***\r\n");
+    GNSS_PowerOn(&hgnss);
+    HAL_Delay(1000);  // Let GPS boot
+    GNSS_Configure(&hgnss);  // Sends PCAS04,7 + PCAS11 airborne + PCAS00 (save)
+    HAL_Delay(500);   // Let GPS save to flash
+    GNSS_PowerOff(&hgnss);
+    SEGGER_RTT_WriteString(0, "*** GPS reconfigured and saved to flash ***\r\n\r\n");
+  }
   
   /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
   /* Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path */
@@ -449,15 +458,23 @@ void LoRaWAN_Init(void)
     SEGGER_RTT_WriteString(0, "No valid contexts found - running OTAA provision\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "Starting OTAA multi-region provision\r\n");
     
-    /* Pre-join all regions via OTAA (includes post-join data packets) */
-    /* This will: */
-    /*   1. Join each region via OTAA */
-    /*   2. Save session keys/DevAddr/counters to flash */
-    /*   3. Send 2 post-join data packets per region */
-    /*   4. Display session keys via RTT (for Chirpstack server setup) */
-    MultiRegion_PreJoinAllRegions();
-    
-    APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
+    if (MissionState_IsCommissioning()) {
+      /* Pre-join all regions via OTAA (includes post-join data packets) */
+      /* This will: */
+      /*   1. Join each region via OTAA */
+      /*   2. Save session keys/DevAddr/counters to flash */
+      /*   3. Send 2 post-join data packets per region */
+      /*   4. Display session keys via RTT (for Chirpstack server setup) */
+      MultiRegion_PreJoinAllRegions();
+
+      APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
+    } else {
+      /* T1 ladder (ADR-0006), rung 3: FLIGHT with a virgin session bank means
+       * RF silence. Keep flying the profile — GPS, flash logging, timers —
+       * but never attempt a join. */
+      APP_LOG(TS_ON, VLEVEL_H, "FLIGHT: no valid session bank - RF silence, logging only\r\n");
+      SEGGER_RTT_WriteString(0, "FLIGHT MODE with no saved session: RF SILENCE (ADR-0006)\r\n");
+    }
   }
 
   /* USER CODE END LoRaWAN_Init_2 */
@@ -496,6 +513,42 @@ void LoRaWAN_Init(void)
 
 /* Private functions ---------------------------------------------------------*/
 /* USER CODE BEGIN PrFD */
+
+/**
+  * @brief  F16 FIX: Resolve a datarate by SPREADING FACTOR, not hardcoded index.
+  *         DR indices are region-specific: "DR_3" means SF7@125kHz in US915/AU915
+  *         but SF7 means DR_5 in EU868/AS923, and "DR_0" is SF10 in US915 but
+  *         SF12 in EU868. Hardcoding an index silently changes airtime (and can
+  *         even select an invalid DR) when the balloon crosses into another
+  *         region. Resolve SF -> DR per active region.
+  * @param  sf: desired spreading factor (7..10 supported here)
+  * @retval Datarate enum for the currently active region
+  */
+static int8_t DatarateFromSF(uint8_t sf)
+{
+  LoRaMacRegion_t region = LmHandlerParams.ActiveRegion;
+
+  if (sf == 10) {
+    /* SF10: US915/AU915 DR_0, EU868/AS923 DR_2 */
+    switch (region) {
+      case LORAMAC_REGION_US915:
+      case LORAMAC_REGION_AU915:  return DR_0;
+      case LORAMAC_REGION_EU868:
+      case LORAMAC_REGION_AS923:  return DR_2;
+      default:                    return DR_0;
+    }
+  } else if (sf == 7) {
+    /* SF7@125kHz: US915/AU915 DR_3, EU868/AS923 DR_5 */
+    switch (region) {
+      case LORAMAC_REGION_US915:
+      case LORAMAC_REGION_AU915:  return DR_3;
+      case LORAMAC_REGION_EU868:
+      case LORAMAC_REGION_AS923:  return DR_5;
+      default:                    return DR_3;
+    }
+  }
+  return LORAWAN_DEFAULT_DATA_RATE;
+}
 
 /**
   * @brief  Encode detailed GNSS telemetry packet (satellite tracking + 3D speed)
@@ -957,10 +1010,88 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   /* USER CODE END OnRxData_1 */
 }
 
+/**
+  * @brief  F13a (ADR-0001): progress deadman. SendTxData is the only place a
+  *         full work cycle provably begins — mark RTC seconds here. If the
+  *         sequencer/timer wedges (no cycle for 3x the worst-case interval),
+  *         Deadman_Check breadcrumbs and resets. COMMISSIONING is exempt:
+  *         on the bench a human can sit idle for hours legitimately.
+  */
+#define DEADMAN_BKP_REG     RTC_BKP_DR2
+#define DEADMAN_TIMEOUT_S   (3U * 3600U)   /* 3x worst-case cycle (SURVIVAL=1h) */
+
+static void Deadman_MarkProgress(void)
+{
+  extern RTC_HandleTypeDef hrtc;
+  uint16_t ms_unused;
+  HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, TIMER_IF_GetTime(&ms_unused));
+}
+
+void Deadman_Check(void)
+{
+  extern RTC_HandleTypeDef hrtc;
+  uint16_t ms_unused;
+  uint32_t now = TIMER_IF_GetTime(&ms_unused);
+  uint32_t last = HAL_RTCEx_BKUPRead(&hrtc, DEADMAN_BKP_REG);
+
+  if (last == 0) {
+    HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);  /* first boot: seed */
+    return;
+  }
+  if (MissionState_IsCommissioning()) {
+    return;  /* bench: human idle is legitimate */
+  }
+  if ((now - last) > DEADMAN_TIMEOUT_S) {
+    SEGGER_RTT_WriteString(0, "DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
+    HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
+                        RESET_CAUSE_FAULT_MAGIC | 6U);  /* 6 = deadman */
+    NVIC_SystemReset();
+  }
+}
+
+/**
+  * @brief  F12 (ADR-0003): discipline system time from a good GPS fix so flash
+  *         records carry absolute UTC epoch seconds instead of boot-relative
+  *         time. GPS is the only trustworthy clock source on the balloon.
+  *         date = DDMMYY, timestamp = HHMMSS (NMEA RMC).
+  */
+static uint32_t DaysFromCivil(int y, unsigned m, unsigned d)
+{
+  y -= (m <= 2);
+  int era = (y >= 0 ? y : y - 399) / 400;
+  unsigned yoe = (unsigned)(y - era * 400);
+  unsigned doy = (153U * (m + (m > 2 ? (unsigned)-3 : 9U)) + 2U) / 5U + d - 1U;
+  unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
+  return (uint32_t)(era * 146097 + (int)doe - 719468);
+}
+
+static void SysTimeSyncFromGnss(void)
+{
+  uint32_t d = hgnss.data.date;       /* DDMMYY */
+  uint32_t t = hgnss.data.timestamp;  /* HHMMSS */
+  if (d == 0 || t == 0) return;
+
+  int day = (int)(d / 10000U);
+  int mon = (int)((d / 100U) % 100U);
+  int yr  = 2000 + (int)(d % 100U);
+  if (yr < 2024 || mon < 1 || mon > 12 || day < 1 || day > 31) return;
+
+  uint32_t epoch = DaysFromCivil(yr, (unsigned)mon, (unsigned)day) * 86400U
+                 + (t / 10000U) * 3600U + ((t / 100U) % 100U) * 60U + (t % 100U);
+
+  SysTime_t st;
+  st.Seconds = epoch;
+  st.SubSeconds = 0;
+  SysTimeSet(st);
+  SEGGER_RTT_printf(0, "SysTime disciplined from GPS: %lu epoch seconds\r\n",
+                    (unsigned long)epoch);
+}
+
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
-  
+  Deadman_MarkProgress();  /* F13a: a work cycle provably started */
+
   /* ========== SIMPLIFIED POWER MANAGEMENT WITH TEMPERATURE COMPENSATION ========== */
   static VoltageSlope_t voltage_slope = {0};
   static OperatingMode_t current_mode = MODE_CONSERVATIVE;
@@ -1013,11 +1144,21 @@ static void SendTxData(void)
   const SystemConfig_t *config = Config_Get();
   int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
   
-  if (temperature_c < gps_lockout_temp) {
+  /* F9/T2 (ADR-0007): stale/unknown temperature is treated as COLD — the GPS
+   * stays locked out. Fail safe, not fail sunny: a temp-sensor glitch must
+   * never fire the GPS during the dawn brownout the lockout exists to prevent. */
+  if (sensor_data.temp_stale || temperature_c < gps_lockout_temp) {
     gps_enabled_by_power_mgmt = false;
-    char temp_msg[80];
-    snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %.1f°C < %d°C (supercap inoperative)\r\n",
-             temperature_c, gps_lockout_temp);
+    /* F27 FIX: integer-only print (no float printf support linked) */
+    int temp_deci = (int)(temperature_c * 10.0f);
+    char temp_msg[96];
+    if (sensor_data.temp_stale) {
+      snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d°C)\r\n",
+               temp_deci / 10, abs(temp_deci % 10));
+    } else {
+      snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %d.%d°C < %d°C (supercap inoperative)\r\n",
+               temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
+    }
     SEGGER_RTT_WriteString(0, temp_msg);
   }
   
@@ -1027,10 +1168,13 @@ static void SendTxData(void)
   UTIL_TIMER_Start(&TxTimer);
   
   // Log power management status
+  /* F27 FIX: integer-only print (no float printf support linked) */
+  int temp_deci_pm = (int)(temperature_c * 10.0f);
   char pm_msg[256];
-  snprintf(pm_msg, sizeof(pm_msg), 
-           "\r\n=== POWER MGMT: Temp=%.1fC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
-           temperature_c, battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
+  snprintf(pm_msg, sizeof(pm_msg),
+           "\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
+           temp_deci_pm / 10, abs(temp_deci_pm % 10),
+           battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
   SEGGER_RTT_WriteString(0, pm_msg);
   
   if (time_to_target_signed < 0) {
@@ -1046,29 +1190,28 @@ static void SendTxData(void)
            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
   SEGGER_RTT_WriteString(0, pm_msg);
   
-  /* ========== FLASH LOGGING: Store high-resolution data ========== */
-  // Log high-resolution telemetry data to external flash for later bulk transmission
-  // This happens continuously regardless of transmission success/failure
-  SEGGER_RTT_WriteString(0, "Logging high-resolution data to flash...\r\n");
-  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp);
-  if (log_status == FLASH_LOG_OK) {
-    uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
-    SEGGER_RTT_printf(0, "Flash log: Written record %lu (total records: %lu)\r\n", 
-                      record_count, record_count);
-  } else {
-    SEGGER_RTT_printf(0, "Flash log: Write failed (status: %d)\r\n", log_status);
-  }
-  
+  /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
+   * (see below). Previously the record was written here with the PREVIOUS
+   * cycle's position and the CURRENT timestamp — the whole track was
+   * spatially stale by one interval. */
+
   /* ========== END POWER MANAGEMENT ========== */
   
-  /* Check join status - if not joined, trigger a new join attempt */
+  /* T1 ladder (ADR-0006): rejoin is a COMMISSIONING-ONLY operation.
+   * In FLIGHT, an invalid session means RF silence — keep flying the profile
+   * (GPS + flash logging below), skip only the transmission. */
+  bool rf_silence = false;
   if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
   {
-    SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
-    LmHandlerJoin(ActivationType, true);
-    return; /* Exit - will send data after join succeeds */
+    if (MissionState_IsCommissioning()) {
+      SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
+      LmHandlerJoin(ActivationType, true);
+      return; /* Exit - will send data after join succeeds */
+    }
+    rf_silence = true;
+    SEGGER_RTT_WriteString(0, "SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
-  
+
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
   /* ========== GPS HOT-START MODE ENABLED ========== */
@@ -1185,12 +1328,14 @@ static void SendTxData(void)
       uint32_t elapsed = HAL_GetTick() - gps_start;
       if (elapsed - last_status_print >= 5000)
       {
+        /* F27 FIX: integer-only print (no float printf support linked) */
+        int hdop_deci = (int)(hgnss.data.hdop * 10.0f);
         char status_msg[100];
-        snprintf(status_msg, sizeof(status_msg), 
-                 "[GPS %lus] Sats:%d/%d HDOP:%.1f Fix:%s\r\n",
+        snprintf(status_msg, sizeof(status_msg),
+                 "[GPS %lus] Sats:%d/%d HDOP:%d.%d Fix:%s\r\n",
                  (unsigned long)(elapsed / 1000),
                  hgnss.data.satellites, hgnss.data.satellites_in_view,
-                 hgnss.data.hdop,
+                 hdop_deci / 10, hdop_deci % 10,
                  (hgnss.data.fix_quality != GNSS_FIX_INVALID) ? "Yes" : "No");
         SEGGER_RTT_WriteString(0, status_msg);
         last_status_print = elapsed;
@@ -1213,18 +1358,22 @@ static void SendTxData(void)
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
         have_previous_fix = true;
+        EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
       }
       else
       {
         /* GPS timeout - use last known position if available */
         if (have_previous_fix)
         {
-          SEGGER_RTT_WriteString(0, "GPS: Timeout - using last known position\r\n");
+          /* F8/T2 (ADR-0007): last-known-good position still flows, but the
+           * GPS-stale bit is set so nothing downstream mistakes it for live. */
+          SEGGER_RTT_WriteString(0, "GPS: Timeout - using last known position (STALE)\r\n");
           hgnss.data.latitude = last_valid_lat;
           hgnss.data.longitude = last_valid_lon;
           hgnss.data.altitude = last_valid_alt;
           hgnss.data.valid = true;  /* Mark as valid to proceed with transmission */
           hgnss.data.fix_quality = GNSS_FIX_GPS;  /* Indicate GPS fix type */
+          EnvSensors_MarkGnssStale(true);
         }
         else
         {
@@ -1240,6 +1389,8 @@ static void SendTxData(void)
       last_valid_lon = hgnss.data.longitude;
       last_valid_alt = hgnss.data.altitude;
       have_previous_fix = true;
+      EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
+      SysTimeSyncFromGnss();            /* F12 (ADR-0003): epoch seconds */
       SEGGER_RTT_WriteString(0, "GPS: Fix acquired and stored as last known position\r\n");
     }
     
@@ -1339,7 +1490,22 @@ static void SendTxData(void)
   SEGGER_RTT_WriteString(0, "Re-reading sensor data to capture fresh GPS fix...\r\n");
   EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
   SEGGER_RTT_WriteString(0, "Sensor data refreshed with current GPS position\r\n");
-  
+
+  /* ========== FLASH LOGGING: Store high-resolution data ========== */
+  /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
+   * sensor re-read — so position, time, and environment in a record describe
+   * the same moment. Timestamp is taken fresh at write time. */
+  SEGGER_RTT_WriteString(0, "Logging high-resolution data to flash...\r\n");
+  now_timestamp = TIMER_IF_GetTime(&ms_unused);  // Fresh RTC seconds at write time
+  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp);
+  if (log_status == FLASH_LOG_OK) {
+    uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
+    SEGGER_RTT_printf(0, "Flash log: Written record %lu (total records: %lu)\r\n",
+                      record_count, record_count);
+  } else {
+    SEGGER_RTT_printf(0, "Flash log: Write failed (status: %d)\r\n", log_status);
+  }
+
   // Initialize Cayenne LPP payload
   CayenneLppReset();
   SEGGER_RTT_WriteString(0, "CayenneLpp reset\r\n");
@@ -1426,7 +1592,12 @@ static void SendTxData(void)
   }
   
   SEGGER_RTT_printf(0, "Adaptive TX: State=%d\r\n", g_tx_state);
-  
+
+  /* T1 (ADR-0006): RF silence skips the entire transmit state machine —
+   * GPS acquisition and flash logging above have already run. */
+  if (rf_silence) {
+    g_tx_state = TX_STATE_PROBE_SF10;  /* keep state machine parked */
+  } else
   switch (g_tx_state) {
     case TX_STATE_PROBE_SF10:
     {
@@ -1437,8 +1608,8 @@ static void SendTxData(void)
       if (EncodeCompactBinaryPacket(&compact_packet, &sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
         
-      // Send at SF10 (DR0) for maximum range
-      LmHandlerSetTxDatarate(DR_0);  // SF10
+      // F16 FIX: Send at SF10, resolved per-region (was hardcoded DR_0)
+      LmHandlerSetTxDatarate(DatarateFromSF(10));  // SF10 in ANY region
       
       // Prepare packet data BEFORE requesting LinkCheck
       LmHandlerAppData_t compactData;
@@ -1499,25 +1670,38 @@ static void SendTxData(void)
           SEGGER_RTT_printf(0, "Retrieved %lu unsent records from flash\r\n", record_count);
           
           // Convert flash records to high-res format for bulk packet
+          /* F10 FIX: Failed conversion => skip that record entirely.
+           * Previously the loop logged a warning and still packed the record
+           * (zero-filled) — fabricated data transmitted as science.
+           * A gap is honest; fabricated data is not. */
           HighResTelemetryRecord_t highres_records[6];
+          uint8_t packed_count = 0;
           for (uint32_t i = 0; i < record_count && i < 6; i++) {
-            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[i], 
+            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count],
                                          slope_mv_per_hour, current_mode)) {
-              SEGGER_RTT_printf(0, "Warning: Failed to convert flash record %lu\r\n", i);
+              SEGGER_RTT_printf(0, "Warning: Failed to convert flash record %lu - skipped\r\n", i);
+              continue;  /* Skip bad record, keep packing the rest */
             }
+            packed_count++;
           }
-          
+
+          if (packed_count == 0) {
+            SEGGER_RTT_WriteString(0, "No records convertible - skipping bulk packet\r\n");
+            g_tx_state = TX_STATE_COMPLETE;
+            break;
+          }
+
           // Encode bulk packet
           BulkTelemetryPacket_t bulk_packet;
           uint8_t dummy_voltage_trend[10] = {0};  // TODO: Implement voltage trend tracking
           uint8_t dummy_mode_changes[10] = {0};   // TODO: Implement mode change tracking
-          
-          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, (uint8_t)record_count,
+
+          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, packed_count,
                                          0, // TODO: Add flash page tracking
                                          dummy_voltage_trend, dummy_mode_changes)) {
             
-            // Send at SF7 (DR3) for high-speed transmission
-            LmHandlerSetTxDatarate(DR_3);  // SF7
+            // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
+            LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
             
             LmHandlerAppData_t bulkData;
             bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
@@ -1879,54 +2063,9 @@ static void OnSystemReset(void)
   /* USER CODE END OnSystemReset_Last */
 }
 
-static void StopJoin(void)
-{
-  /* USER CODE BEGIN StopJoin_1 */
-
-  /* USER CODE END StopJoin_1 */
-
-  UTIL_TIMER_Stop(&TxTimer);
-
-  if (LORAMAC_HANDLER_SUCCESS != LmHandlerStop())
-  {
-    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stop on going ...\r\n");
-  }
-  else
-  {
-    APP_LOG(TS_OFF, VLEVEL_M, "LmHandler Stopped\r\n");
-    if (LORAWAN_DEFAULT_ACTIVATION_TYPE == ACTIVATION_TYPE_ABP)
-    {
-      ActivationType = ACTIVATION_TYPE_OTAA;
-      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to OTAA mode\r\n");
-    }
-    else
-    {
-      ActivationType = ACTIVATION_TYPE_ABP;
-      APP_LOG(TS_OFF, VLEVEL_M, "LmHandler switch to ABP mode\r\n");
-    }
-    LmHandlerConfigure(&LmHandlerParams);
-    LmHandlerJoin(ActivationType, true);
-    UTIL_TIMER_Start(&TxTimer);
-  }
-  UTIL_TIMER_Start(&StopJoinTimer);
-  /* USER CODE BEGIN StopJoin_Last */
-
-  /* USER CODE END StopJoin_Last */
-}
-
-static void OnStopJoinTimerEvent(void *context)
-{
-  /* USER CODE BEGIN OnStopJoinTimerEvent_1 */
-
-  /* USER CODE END OnStopJoinTimerEvent_1 */
-  if (ActivationType == LORAWAN_DEFAULT_ACTIVATION_TYPE)
-  {
-    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaStopJoinEvent), CFG_SEQ_Prio_0);
-  }
-  /* USER CODE BEGIN OnStopJoinTimerEvent_Last */
-
-  /* USER CODE END OnStopJoinTimerEvent_Last */
-}
+/* F24 FIX: StopJoin() and OnStopJoinTimerEvent() deleted. The SOS button EXTI
+ * was dead (PB3 reconfigured to analog for solar), and the OTAA<->ABP flip
+ * plus unconditional rejoin would be dangerous if ever triggered in flight. */
 
 static void StoreContext(void)
 {

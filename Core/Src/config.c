@@ -221,7 +221,8 @@ ConfigStatus_t Config_LoadDefaults(void)
     g_config.bulk_battery_min_mv = 5000;       // 5.0V for bulk transfer
     g_config.gps_temperature_lockout = -55;    // -55°C GPS lockout
     g_config.power_mode_hysteresis = 10;       // 10% hysteresis
-    g_config.solar_charging_threshold = 6000;  // 6.0V solar charging
+    /* F19 FIX: solar_charging_threshold default removed (field deleted -
+     * 6000 mV could never trip on the ~1.1 V two-wafer panel; zero consumers) */
     
     // GPS settings
     g_config.gps_timeout_normal = 60;          // 60 second timeout

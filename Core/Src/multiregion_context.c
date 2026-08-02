@@ -14,6 +14,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "multiregion_context.h"
 #include "multiregion_h3.h"
+#include "mission_state.h"
 #include "flash_if.h"
 #include "sys_app.h"
 #include "sys_sensors.h"
@@ -922,6 +923,16 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     // Trigger join (LmHandlerJoin returns void)
     LmHandlerJoin(ACTIVATION_TYPE_OTAA, true);
     
+    /* F4/T1 (ADR-0006/0008): joins are COMMISSIONING-ONLY. This wait loop has
+     * no timeout by design ("infinite retry until success") — acceptable on the
+     * bench with a human present, fatal in flight. The mission gate at the top
+     * of the provisioning path (and here, as defense in depth) makes the loop
+     * unreachable after the one-way door closes. */
+    if (!MissionState_IsCommissioning()) {
+        SEGGER_RTT_WriteString(0, "JoinRegion: BLOCKED - joins are commissioning-only (ADR-0006)\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+
     // Wait for join to complete - infinite retry until success
     uint32_t start_time = HAL_GetTick();
     uint32_t last_join_attempt = HAL_GetTick();
@@ -978,6 +989,12 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
  */
 bool MultiRegion_PreJoinAllRegions(void)
 {
+    /* F4/T3 (ADR-0008): the entire pre-join ceremony is commissioning-only */
+    if (!MissionState_IsCommissioning()) {
+        SEGGER_RTT_WriteString(0, "PreJoinAllRegions: BLOCKED - commissioning-only (ADR-0008)\r\n");
+        return false;
+    }
+
     // Set pre-join flag to prevent TX timer from starting during joins
     extern volatile uint8_t g_multiregion_in_prejoin;
     g_multiregion_in_prejoin = 1;
@@ -1008,8 +1025,7 @@ bool MultiRegion_PreJoinAllRegions(void)
     }
     HAL_Delay(5000);
     
-    // ========== EU868 (DISABLED - uncomment to enable) ==========
-    /*
+    // ========== EU868 (F4 FIX: re-enabled — global floater needs all 4 banks) ==========
     SEGGER_RTT_WriteString(0, "\r\n--- Joining EU868 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_EU868) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: EU868 join\r\n");
@@ -1020,10 +1036,8 @@ bool MultiRegion_PreJoinAllRegions(void)
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
-    */
-    
-    // ========== AS923 (DISABLED - uncomment to enable) ==========
-    /*
+
+    // ========== AS923 (F4 FIX: re-enabled) ==========
     SEGGER_RTT_WriteString(0, "\r\n--- Joining AS923 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_AS923) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: AS923 join\r\n");
@@ -1033,10 +1047,8 @@ bool MultiRegion_PreJoinAllRegions(void)
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
-    */
-    
-    // ========== AU915 (DISABLED - uncomment to enable) ==========
-    /*
+
+    // ========== AU915 (F4 FIX: re-enabled) ==========
     SEGGER_RTT_WriteString(0, "\r\n--- Joining AU915 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_AU915) != LORAMAC_HANDLER_SUCCESS) {
         APP_LOG(TS_ON, VLEVEL_H, "FAILED: AU915 join\r\n");
@@ -1046,7 +1058,6 @@ bool MultiRegion_PreJoinAllRegions(void)
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
-    */
     
     // Switch back to US915 as starting region
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
@@ -1061,7 +1072,11 @@ bool MultiRegion_PreJoinAllRegions(void)
     
     // Clear pre-join flag to allow TX timer to start
     g_multiregion_in_prejoin = 0;
-    
+
+    /* T3 (ADR-0008): commissioning ceremony complete — walk through the
+     * one-way door. From here on, joins and GNSS reconfig are impossible. */
+    MissionState_EnterFlight();
+
     return all_success;
 }
 

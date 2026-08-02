@@ -46,10 +46,17 @@ extern "C" {
 #define DEBUG_LPP_TX_INTERVAL      5  // Send LPP every 5th transmission (reduce airtime)
 #endif
 
-/* Status flags bit masks for compact packet */
+/* Status flags bit masks for high-res record flags byte */
 #define GPS_FIX_VALID_MASK    0x01  // Bit 0: GPS fix valid
 #define GPS_SATS_MASK         0x1E  // Bits 1-4: Satellite count (0-15)
 #define POWER_MODE_MASK       0xE0  // Bits 5-7: Power mode (0-7)
+
+/* Status byte (byte 11) bit masks for compact uplink — T2/ADR-0007 */
+#define STATUS_GPS_STALE_MASK      0x01  // Bit 0: GPS position is last-known-good
+#define STATUS_TEMP_STALE_MASK     0x02  // Bit 1: temperature is last-known-good
+#define STATUS_HUM_STALE_MASK      0x04  // Bit 2: humidity is last-known-good
+#define STATUS_RESET_CAUSE_MASK    0x38  // Bits 3-5: condensed reset cause (reset_cause.h)
+#define STATUS_MISSION_STATE_MASK  0xC0  // Bits 6-7: mission state (mission_state.h)
 
 /* Helper macros for status flag extraction */
 #define GET_GPS_FIX_VALID(flags)    (((flags) & GPS_FIX_VALID_MASK) != 0)
@@ -73,11 +80,13 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 
 /**
- * @brief 10-byte compact telemetry packet (SF10 with room for MAC commands)
+ * @brief 11-byte compact telemetry packet (SF10, exact fit at US915 DR0)
  * @note Optimized for maximum range transmission at SF10
  * @note Includes battery voltage (required since DevStatusAns is on-demand only)
  * @note Altitude calculated on ground station from pressure + temperature
- * @note Status byte removed to fit LinkCheckReq MAC command in FOpts (saves 1 byte)
+ * @note F17/T2 (ADR-0007): status byte restored as byte 11 — LinkCheck rides
+ *       FOpts (ADR-0005), so the payload byte is free. Carries stale bits,
+ *       condensed reset cause, and mission state.
  */
 typedef struct __attribute__((packed)) {
     uint16_t timestamp_min;     // Minutes since epoch (2 bytes) - 45 days range
@@ -87,7 +96,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  pressure_10hPa;    // Pressure / 10hPa from 950hPa base (1 byte) - 950-2500 hPa
     uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
     uint8_t  humidity_5pct;     // Humidity / 5% resolution (1 byte) - 0-100% in 20 steps
-} CompactTelemetryPacket_t;  // Total: 10 bytes (leaves room for MAC commands in FOpts)
+    uint8_t  status;            // Status byte (1 byte) - stale bits + reset cause + mission state
+} CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, ADR-0005)
 
 /**
  * @brief High-resolution telemetry record for flash storage

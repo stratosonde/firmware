@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32wlxx_it.h"
+#include "reset_cause.h"  /* F1: breadcrumb register constants */
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -67,19 +68,41 @@ extern DMA_HandleTypeDef hdma_usart1_rx;
 /******************************************************************************/
 /*           Cortex Processor Interruption and Exception Handlers          */
 /******************************************************************************/
+static void Fault_Reset(uint16_t code);  /* F1: defined below */
+
 /**
   * @brief This function handles Non maskable interrupt.
   */
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
+  /* F1 FIX: NMI is also a brick trap on the stock template — breadcrumb + reset */
+  Fault_Reset(0);  /* 0 = NMI (HSE CSS / flash ECC) */
   /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-   while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
+}
+
+/**
+  * F1 FIX (ADR-0001): Fault handlers are breadcrumb-and-reset, never brick traps.
+  * At 40 km a hang is permanent death; the IWDG would eventually fire anyway,
+  * but only after burning hours of LoRaWAN airtime budget and leaving no record
+  * of *why*. Write a breadcrumb to an RTC backup register (survives reset,
+  * read by ResetCause_CaptureBoot at next boot -> RESET_CAUSE_FAULT in the
+  * uplink status byte), then reset immediately.
+  * Keep these handlers minimal: no HAL calls beyond the backup write, no RTT
+  * (the fault may have corrupted anything).
+  */
+
+/** @brief Shared fault epilogue: breadcrumb code, then system reset. */
+static void Fault_Reset(uint16_t code)
+{
+  extern RTC_HandleTypeDef hrtc;
+  /* Enable backup domain write access (PWR clock is always on for STM32WL) */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_RTC_ENABLE();
+  HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
+                      RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
+  NVIC_SystemReset();
+  while (1) { }  /* unreachable unless reset is somehow masked */
 }
 
 /**
@@ -88,13 +111,8 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  Fault_Reset(1);  /* 1 = HardFault */
   /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
 }
 
 /**
@@ -103,13 +121,8 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  Fault_Reset(2);  /* 2 = MemManage */
   /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
 }
 
 /**
@@ -118,13 +131,8 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  Fault_Reset(3);  /* 3 = BusFault */
   /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
 }
 
 /**
@@ -133,13 +141,8 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  Fault_Reset(4);  /* 4 = UsageFault */
   /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
 }
 
 /**
@@ -214,20 +217,6 @@ void TAMP_STAMP_LSECSS_SSRU_IRQHandler(void)
   /* USER CODE BEGIN TAMP_STAMP_LSECSS_SSRU_IRQn 1 */
 
   /* USER CODE END TAMP_STAMP_LSECSS_SSRU_IRQn 1 */
-}
-
-/**
-  * @brief This function handles EXTI Line 3 Interrupt.
-  */
-void EXTI3_IRQHandler(void)
-{
-  /* USER CODE BEGIN EXTI3_IRQn 0 */
-
-  /* USER CODE END EXTI3_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(SOS_Button_Pin);
-  /* USER CODE BEGIN EXTI3_IRQn 1 */
-
-  /* USER CODE END EXTI3_IRQn 1 */
 }
 
 /**

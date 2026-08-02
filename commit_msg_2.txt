@@ -1,0 +1,24 @@
+fix: workorder 2026-07-31 phases 1-6 - data honesty, session integrity, fault survival, T4 flash ring, SF resolver
+
+Implements all 27 findings + 4 themes from archive/stratosonde-fix-workorder-2026-07-31.md
+for a long-duration autonomous flight that cannot be reset. Build clean, 239,096 B flash.
+
+Phase 1-2 (data honesty, ADR-0007): stale bits (GPS/temp/hum) end-to-end, status byte
+restored to uplink, last-known-good sensor cache, reset_cause + mission_state modules,
+payload/ADC/config fixes, brick-trap code deleted (F23/F24/F25/F27).
+
+Phase 3 (session integrity, ADR-0006/0008): rejoin + GPS reconfig are COMMISSIONING-only;
+FLIGHT with no session = RF silence, profile keeps flying (T1 ladder, F4/F5/F22).
+
+Phase 4 (fault survival, ADR-0001): fault handlers breadcrumb + NVIC_SystemReset (F1),
+LSE->LSI RTC failover (F3), GPS UTC -> SysTimeSet epoch time (F12, ADR-0003),
+progress deadman 3h COMMISSIONING-exempt (F13a), I2C 9-clock bus recovery (F20).
+F2 PARTIAL: chunked sleep works, UTIL_TIMER tick redesign deferred.
+
+Phase 5 (T4 flash ring, ADR-0004): headers in separate sectors (v3), erase-before-write,
+torn-write-tolerant reader, F15 off-by-one fixed, F26 comments fixed.
+
+Phase 6: DatarateFromSF() resolves SF7/SF10 per active region (F16).
+
+Docs: ProductionReadinessAssessment.md reconciled to code truth, FixWorkorderPlan.md
+stamped, ADR-0006/0007/0008 added. Bench gates B1-B8 pending before launch.

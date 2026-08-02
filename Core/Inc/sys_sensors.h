@@ -51,11 +51,16 @@ typedef struct
   uint8_t gnss_fix_quality; /*!< GNSS fix quality (0=invalid, 1=GPS, 2=DGPS) */
   float gnss_hdop;        /*!< horizontal dilution of precision */
   bool gnss_valid;        /*!< GNSS data validity flag */
-  float battery_voltage;  /*!< battery voltage in volts */
-  float regulator_voltage; /*!< regulator voltage (VDDA/3.3V rail) in volts */
-  float solar_voltage;    /*!< solar panel voltage in volts */
-  /* USER CODE END sensor_t */
-} sensor_t;
+   float battery_voltage;  /*!< battery voltage in volts */
+   float regulator_voltage; /*!< regulator voltage (VDDA/3.3V rail) in volts */
+   float solar_voltage;    /*!< solar panel voltage in volts */
+   /* T2/ADR-0007 data honesty: a reading carries its own freshness.
+    * 1 = value is last-known-good (or default), NOT a live read. */
+   uint8_t temp_stale;     /*!< temperature is stale (SHT31 read failed) */
+   uint8_t hum_stale;      /*!< humidity is stale (SHT31 read failed) */
+   uint8_t gnss_stale;     /*!< position is last-known-good, not a fresh fix */
+   /* USER CODE END sensor_t */
+ } sensor_t;
 
 /* USER CODE BEGIN ET */
 
@@ -90,7 +95,14 @@ int32_t EnvSensors_Init(void);
   * @brief  Environmental sensor  read.
   * @param  sensor_data sensor data
   */
-int32_t EnvSensors_Read(sensor_t *sensor_data);
+ int32_t EnvSensors_Read(sensor_t *sensor_data);
+
+/**
+  * @brief  Mark GNSS position data as stale/fresh (T2 / ADR-0007).
+  *         Called by the TX path: true on fix timeout (last-known-good in
+  *         use), false on a real fix. Stale at boot until first fix.
+  */
+void EnvSensors_MarkGnssStale(bool stale);
 
 /* USER CODE BEGIN EFP */
 

@@ -13,8 +13,14 @@
 #include <math.h>
 
 /* Private defines -----------------------------------------------------------*/
-#define HEADER_A_ADDR     0x0000  /* First 256 bytes of sector 0 */
-#define HEADER_B_ADDR     0x0100  /* Second 256 bytes of sector 0 */
+/* T4 FIX (ADR-0004): the two ping-pong headers MUST live in DIFFERENT sectors.
+ * Previously A=0x0000 and B=0x0100 were both inside sector 0 — one sector
+ * erase killed both copies, and every header rewrite after the first two was
+ * a non-erased rewrite (NOR flash cannot flip 0->1 without erase), so the
+ * ping-pong was fake. Now: sector 0 = header A, sector 1 = header B,
+ * data starts at sector 2 (FLASH_LOG_DATA_START in flash_log.h). */
+#define HEADER_A_ADDR     0x0000             /* Sector 0 */
+#define HEADER_B_ADDR     W25Q_SECTOR_SIZE   /* Sector 1 */
 #define HEADER_UPDATE_INTERVAL  10  /* Update header every N records */
 
 /* CRC32 polynomial (IEEE 802.3) */
@@ -139,28 +145,34 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlo
         max_count = unsent_count;
     }
     
-    /* Read records in LIFO order (newest first) */
     /* C4 FIX: Read FIFO (oldest unsent first) so MarkRecordsTransmitted
-     * correctly advances last_transmitted_sequence from the old end. */
-    for (i = 0; i < max_count; i++) {
-        sequence_to_read = hlog->last_transmitted_sequence + i; /* Start from oldest unsent */
-        
-        /* Stop if we've reached the newest record */
-        if (sequence_to_read >= hlog->next_sequence) {
-            break;
-        }
-        
+     * correctly advances last_transmitted_sequence from the old end.
+     *
+     * T4 FIX: torn-write tolerance. A power loss mid-record leaves garbage that
+     * fails CRC; previously ANY read error aborted the batch and wedged bulk
+     * transfer forever. Now: skip the corrupt record by advancing the
+     * last_transmitted_sequence watermark past it (it is unrecoverable), and
+     * keep packing the remaining good records. The caller marks only the
+     * records actually sent, so the watermark lands exactly past every
+     * consumed sequence (good + skipped). */
+    sequence_to_read = hlog->last_transmitted_sequence;
+    while ((*actual_count) < max_count && sequence_to_read < hlog->next_sequence) {
         /* Convert sequence to LIFO offset for FlashLog_ReadRecord */
         uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
-        
-        status = FlashLog_ReadRecord(hlog, &records[i], offset);
+
+        status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);
         if (status != FLASH_LOG_OK) {
-            return status; /* Stop on error */
+            /* Corrupt/torn record: skip it permanently, advance watermark */
+            hlog->last_transmitted_sequence = sequence_to_read + 1;
+            sequence_to_read++;
+            continue;
         }
-        
+
         (*actual_count)++;
+        sequence_to_read++;
     }
-    
+    (void)i;
+
     return FLASH_LOG_OK;
 }
 
@@ -176,10 +188,13 @@ FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *h
     
     /* Update last transmitted sequence to mark these records as sent */
     uint32_t new_last_transmitted = hlog->last_transmitted_sequence + count;
-    
-    /* Don't exceed the latest sequence number */
-    if (new_last_transmitted >= hlog->next_sequence) {
-        new_last_transmitted = hlog->next_sequence - 1;
+
+    /* F15 FIX: off-by-one. "All caught up" means last_transmitted ==
+     * next_sequence; clamping to next_sequence-1 left one phantom unsent
+     * record forever (GetUnsentCount never reached 0) and wedged bulk
+     * transfer on the last record. Clamp to next_sequence itself. */
+    if (new_last_transmitted > hlog->next_sequence) {
+        new_last_transmitted = hlog->next_sequence;
     }
     
     hlog->last_transmitted_sequence = new_last_transmitted;
@@ -252,8 +267,16 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     /* Toggle between header A and B for wear leveling */
     hlog->active_header = (hlog->active_header == 0) ? 1 : 0;
     write_addr = (hlog->active_header == 0) ? HEADER_A_ADDR : HEADER_B_ADDR;
-    
-    /* Write to flash (assumes header area is erased or using page program */
+
+    /* T4 FIX (ADR-0004): erase-before-write invariant. Each header lives in its
+     * own sector, so erasing it can only destroy the STALE copy — the other
+     * (current) header survives in its own sector. Without this erase, NOR
+     * flash rewrites silently corrupt (bits only flip 1->0). */
+    status = W25Q_EraseSector(hlog->hw25q, write_addr);
+    if (status != W25Q_OK) {
+        return FLASH_LOG_ERROR_FLASH;
+    }
+
     status = W25Q_Write(hlog->hw25q, write_addr, (const uint8_t *)&header, sizeof(header));
     if (status != W25Q_OK) {
         return FLASH_LOG_ERROR_FLASH;
@@ -359,9 +382,10 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         hlog->record_count = 0;
         hlog->oldest_addr = FLASH_LOG_DATA_START;
         hlog->active_header = 0;
-        
-        /* Erase header sector to start fresh */
-        W25Q_EraseSector(hw25q, 0);
+
+        /* Erase BOTH header sectors to start fresh (T4: separate sectors) */
+        W25Q_EraseSector(hw25q, HEADER_A_ADDR);
+        W25Q_EraseSector(hw25q, HEADER_B_ADDR);
         
         /* Write initial header */
         status = FlashLog_WriteHeader(hlog);

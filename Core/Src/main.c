@@ -38,6 +38,8 @@
 #include "flash_log.h"
 #include "payload_format.h"
 #include "config.h"
+#include "reset_cause.h"
+#include "mission_state.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
 /* USER CODE END Includes */
 
@@ -99,91 +101,9 @@ void leds_boot_seq(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/**
- * @brief ULTRA-MINIMAL STOP2 test - only configure critical custom PCB pins
- * @note  This matches the ST example philosophy: don't reconfigure everything!
- * @note  MCU will enter STOP2 and never wake up (for testing only)
- * @note  Expected: < 2 µA in STOP2 mode
- */
-void TEST_UltraMinimal_STOP2(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  
-  /* Enable GPIO clocks only */
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  
-  /* === CUSTOM PCB CRITICAL PINS ONLY === */
-  /* Don't touch anything else - leave in reset state! */
-  
-  /* GPS Power OFF: PB5 (EN) + PB10 (Power) */
-  GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5 | GPIO_PIN_10, GPIO_PIN_RESET);
-  
-  /* GPS UART: PB6/PB7 to INPUT (no parasitic power to GPS) */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
-  /* Flash CS: PB9 HIGH (deselect) */
-  GPIO_InitStruct.Pin = GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
-  
-  /* LED: PA0 LOW (OFF) */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-  
-  /* RF Switch: PA4/PA5 LOW (OFF) */
-  GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_5;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4 | GPIO_PIN_5, GPIO_PIN_RESET);
-  
-  /* NOTE: PB0 (TCXO) left alone - radio subsystem manages it */
-  /* NOTE: All other pins left in reset state (usually INPUT/ANALOG) */
-  
-  /* === CRITICAL: Turn OFF the TCXO (32MHz oscillator) === */
-  /* The TCXO draws ~1-2mA when powered on! */
-  /* On Wio-E5, PB0 controls TCXO power, managed by SUBGHZ peripheral */
-  __HAL_RCC_SUBGHZSPI_CLK_ENABLE();  // Enable SUBGHZ clock briefly
-  
-  /* Initialize SUBGHZ peripheral minimally */
-  MX_SUBGHZ_Init();
-  
-  /* Disable TCXO via SUBGHZ peripheral */
-  //SUBGRF_SetTcxoMode(TCXO_CTRL_NONE, 0);  // Turn off TCXO (sets PB0 LOW)
-  
-  /* Put radio in deep sleep mode (cold start) */
-  SleepParams_t sleepParams = {0};
-  sleepParams.Fields.WarmStart = 0;  // Cold start = deeper sleep
-  SUBGRF_SetSleep(sleepParams);
-  
-  __HAL_RCC_SUBGHZSPI_CLK_DISABLE();  // Disable SUBGHZ clock
-  
-  /* Disable debugger for true low power */
-  HAL_DBGMCU_DisableDBGStopMode();
-  HAL_DBGMCU_DisableDBGSleepMode();
-  
-  /* Enter STOP2 forever */
-  HAL_SuspendTick();
-  __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
-  
-  while(1) {
-    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
-  }
-}
+/* F23 FIX: TEST_UltraMinimal_STOP2() deleted. It entered STOP2 with no wake
+ * source ("will BRICK") and was one uncomment away from the boot path.
+ * A function that bricks the device must not exist in a flight binary. */
 
 void system_sleep(void)
 {
@@ -236,14 +156,13 @@ int main(void)
   /* Configure the system clock */
   SystemClock_Config();
 
+  /* F13b: Capture condensed reset cause (RCC->CSR + fault breadcrumb) once,
+   * early, then clear flags so the next boot reads clean. Surfaced in the
+   * uplink status byte (ADR-0007). */
+  ResetCause_CaptureBoot();
+
   /* USER CODE BEGIN SysInit */
-  
-  /* ***** TEMPORARY: ULTRA-MINIMAL STOP2 TEST - COMMENT OUT FOR NORMAL OPERATION ***** */
-  
-  //This will BRICK wio E5 as it doesn't wake
-  //TEST_UltraMinimal_STOP2();  // MCU enters STOP2 and never wakes - measure current
-  /* ***** END TEMPORARY TEST ***** */
-  
+
   /* NOTE: IWDG watchdog will be initialized and enabled below */
   SEGGER_RTT_WriteString(0, "IWDG watchdog will be initialized (32.76s timeout)\r\n");
   
@@ -257,7 +176,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_LoRaWAN_Init();
+  MX_LoRaWAN_Init();  /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
   MX_IWDG_Init();
@@ -348,6 +267,12 @@ int main(void)
     MX_LoRaWAN_Process();
 
     /* USER CODE BEGIN 3 */
+    /* F13a (ADR-0001): progress deadman — if no work cycle has started for
+     * 3x the worst-case interval in FLIGHT, breadcrumb + reset. No-op in
+     * COMMISSIONING. Defined in lora_app.c. */
+    extern void Deadman_Check(void);
+    Deadman_Check();
+
     /* Refresh watchdog to prevent reset (must be called within 32.76 seconds) */
     HAL_IWDG_Refresh(&hiwdg);
   }
@@ -385,7 +310,20 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler();
+    /* F3 FIX (ADR-0001): a dead/frozen LSE crystal must not be a reboot loop.
+     * Fail over to LSI for the RTC clock and keep flying — timers drift by
+     * ~1% instead of the mission ending. The event is observable via the
+     * low-power/fault telemetry path at next uplink. */
+    RCC_OscInitStruct.LSEState = RCC_LSE_OFF;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    /* Switch RTC clock source LSE -> LSI */
+    RCC_PeriphCLKInitTypeDef rtcClk = {0};
+    rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+    rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+    HAL_RCCEx_PeriphCLKConfig(&rtcClk);
   }
 
   /** Configure the SYSCLKSource, HCLK, PCLK1 and PCLK2 clocks dividers
@@ -754,11 +692,9 @@ static void MX_GPIO_Init(void)
   /* NOTE: PB10 and PB5 (GPS power/enable pins) are now managed by GNSS driver */
   /* Removed conflicting GPIO initialization to prevent pin toggling during sleep */
 
-  /*Configure GPIO pin : SOS_Button_Pin */
-  GPIO_InitStruct.Pin = SOS_Button_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;  /* STOP2 Power Fix: No internal pull-up (~50-100µA savings) */
-  HAL_GPIO_Init(SOS_Button_GPIO_Port, &GPIO_InitStruct);
+  /* F24 FIX: SOS button EXTI3 config removed. PB3 is reconfigured to ANALOG
+   * for solar sensing below, so the EXTI was dead code; the associated
+   * StopJoin OTAA->ABP flip would be dangerous if ever wired. */
 
   /*Configure GPIO pins : PA0 RF_CTRL1_Pin RF_CTRL2_Pin */
   GPIO_InitStruct.Pin = GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin;
@@ -773,10 +709,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* Configure PB4 as analog input for battery voltage measurement (ADC_CHANNEL_3) */

@@ -8,12 +8,15 @@
   * Design Principles:
   *   1. Power-safe: Uses ping-pong headers and append-only writes
   *   2. Self-describing: Each record has magic number and CRC32
-  *   3. LIFO retrieval: Most recent data first for downlink efficiency
+  *   3. FIFO drain: Oldest unsent records are bulk-transmitted first so the
+  *      transmitted watermark advances monotonically (see C4/F15)
   *   4. Expandable: 64-byte records with reserved space for future fields
   *
-  * Memory Layout (2MB W25Q16JV):
-  *   Sector 0 (4KB):    Header A + Header B (ping-pong for power safety)
-  *   Sectors 1-511:     Data records (circular buffer, ~32,000 records)
+  * Memory Layout (2MB W25Q16JV), T4 / ADR-0004:
+  *   Sector 0 (4KB):    Header A (ping-pong copy 1)
+  *   Sector 1 (4KB):    Header B (ping-pong copy 2 — separate sector so one
+  *                      erase can never kill both copies)
+  *   Sectors 2-511:     Data records (circular buffer, ~32,000 records)
   *
   * Power-Failure Recovery:
   *   - On init, read both headers, use valid one with higher sequence
@@ -45,14 +48,17 @@ extern "C" {
 /** @brief Header magic number */
 #define FLASH_LOG_HEADER_MAGIC    0xF1A5DEAD
 
-/** @brief Header version (increment if structure changes) */
-#define FLASH_LOG_HEADER_VERSION  2
+/** @brief Header version (increment if structure changes)
+ *  v3 (T4): headers moved to separate sectors 0/1, data starts at sector 2.
+ *  Old v2 headers fail validation -> clean init (acceptable pre-launch). */
+#define FLASH_LOG_HEADER_VERSION  3
 
 /** @brief Record size in bytes (must be power of 2 for efficiency) */
 #define FLASH_LOG_RECORD_SIZE     64
 
-/** @brief Data area start address (after header sector) */
-#define FLASH_LOG_DATA_START      W25Q_SECTOR_SIZE  /* 0x1000 = 4KB */
+/** @brief Data area start address (after BOTH header sectors — T4: header A
+ *  in sector 0, header B in sector 1, records from sector 2 onward) */
+#define FLASH_LOG_DATA_START      (2 * W25Q_SECTOR_SIZE)  /* 0x2000 = 8KB */
 
 /** @brief Data area end address */
 #define FLASH_LOG_DATA_END        W25Q_FLASH_SIZE
@@ -127,8 +133,8 @@ _Static_assert(sizeof(FlashLog_Record_t) == FLASH_LOG_RECORD_SIZE,
                "FlashLog_Record_t must be exactly 64 bytes");
 
 /**
-  * @brief Flash log header structure (stored in sector 0)
-  * @note  Two copies stored for ping-pong power safety
+ * @brief Flash log header structure (copies in sectors 0 and 1 — T4)
+ * @note  Two copies in SEPARATE sectors for ping-pong power safety
   */
 typedef struct __attribute__((packed)) {
     uint32_t magic;             /**< Header magic: 0xF1A5DEAD */
@@ -278,13 +284,15 @@ FlashLog_StatusTypeDef FlashLog_GetStats(FlashLog_HandleTypeDef *hlog,
 bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog);
 
 /**
-  * @brief  Get unsent records for bulk transmission (LIFO order)
+  * @brief  Get unsent records for bulk transmission
   * @param  hlog: Pointer to flash log handle
   * @param  records: Array to store unsent records
   * @param  max_count: Maximum records to read (typically 6 for 222-byte packet)
   * @param  actual_count: Pointer to store actual number read
   * @retval FlashLog_StatusTypeDef
-  * @note   Returns newest unsent records first (LIFO order)
+  * @note   F26: despite the name, returns OLDEST unsent first (FIFO) so the
+  *         transmitted watermark advances monotonically. Corrupt/torn records
+  *         are skipped (watermark advanced past them) — never wedge (T4).
   */
 FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlog,
                                                      FlashLog_Record_t *records,

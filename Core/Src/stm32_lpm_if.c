@@ -249,21 +249,28 @@ void PWR_EnterStopMode(void)
     /* Check what woke us:
      * - RTC Alarm A (LoRaWAN timer event) → exit chunked sleep
      * - RTC Wakeup Timer only → just IWDG refresh, re-enter STOP2
-     * - Any other source (GPIO, etc.) → exit chunked sleep */
-    uint32_t is_wakeup_timer = __HAL_RTC_WAKEUPTIMER_GET_FLAG(&hrtc, RTC_FLAG_WUTF);
-    uint32_t is_alarm_a = __HAL_RTC_ALARM_GET_FLAG(&hrtc, RTC_FLAG_ALRAF);
+     * - Any other source (GPIO, etc.) → exit chunked sleep
+     *
+     * F2 FIX: EXTI-line latches, not flags. The status-register flags
+     * (WUTF/ALRAF) are ALREADY CLEARED by the time we read them — both IRQ
+     * handlers (RTC_WKUP_IRQHandler and RTC_Alarm_IRQHandler in stm32wlxx_it.c)
+     * run on wake and clear their flags, so the flag test always saw 0 and
+     * EVERY 25 s IWDG wake took the full exit path. The EXTI pending latches
+     * survive the handler, so read those instead:
+     *   EXTI line 19 = RTC Wakeup Timer, EXTI line 17 = RTC Alarm. */
+    uint32_t is_wakeup_timer = (EXTI->PR1 & (1UL << 19)) != 0;
+    uint32_t is_alarm_a      = (EXTI->PR1 & (1UL << 17)) != 0;
 
     if (is_alarm_a)
     {
-      /* LoRaWAN timer event — exit chunked sleep */
-      __HAL_RTC_WAKEUPTIMER_CLEAR_FLAG(&hrtc, RTC_FLAG_WUTF);
+      /* LoRaWAN timer event — exit chunked sleep. WUTF PR already consumed. */
       break;
     }
 
-    if (is_wakeup_timer && !is_alarm_a)
+    if (is_wakeup_timer)
     {
-      /* Only our IWDG refresh timer fired — clear flag, re-enter STOP2 */
-      __HAL_RTC_WAKEUPTIMER_CLEAR_FLAG(&hrtc, RTC_FLAG_WUTF);
+      /* Only our IWDG refresh timer fired — PR consumed by handler,
+       * re-enter STOP2 for the next chunk. */
       continue;
     }
 

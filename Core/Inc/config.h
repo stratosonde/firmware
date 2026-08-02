@@ -86,7 +86,12 @@ typedef struct __attribute__((packed)) {
     uint16_t bulk_battery_min_mv;      // Min battery for bulk transfer (mV) - default 5000
     int8_t   gps_temperature_lockout;  // GPS lockout temperature (°C) - default -55
     uint8_t  power_mode_hysteresis;    // Mode change hysteresis (%) - default 10
-    uint16_t solar_charging_threshold; // Solar charging detection (mV) - default 6000
+    /* F19 FIX: solar_charging_threshold deleted. The 6000 mV default could
+     * never trip on the real ~1.1 V two-wafer panel, and the field had zero
+     * consumers (verified by grep) — a decorative knob. Kept as reserved to
+     * preserve the flash-stored struct layout. Raw solar_mv telemetry flows
+     * regardless; re-derive a threshold from bench data if ever needed. */
+    uint16_t reserved_solar;           // Was solar_charging_threshold (deleted, F19)
     uint8_t  reserved_power;           // Reserved for alignment
     
     /* GPS settings (8 bytes) */

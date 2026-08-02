@@ -106,6 +106,19 @@
 /* GNSS module handle */
 GNSS_HandleTypeDef hgnss;
 
+/* F9/T2 (ADR-0007): last-known-good cache + stale flags.
+ * No fabricated defaults downstream: a failed read serves the cached value
+ * and sets the stale bit; the bit survives the whole pipeline. */
+static float s_last_temp = TEMPERATURE_DEFAULT_VAL;
+static float s_last_hum  = HUMIDITY_DEFAULT_VAL;
+static bool  s_have_th   = false;   /* never had a good SHT31 read */
+static bool  s_gnss_stale = true;   /* stale until first real fix */
+
+void EnvSensors_MarkGnssStale(bool stale)
+{
+  s_gnss_stale = stale;
+}
+
 /* UART handle - declared in main.c but we need to access it here for GNSS */
 extern UART_HandleTypeDef huart1;
 
@@ -135,7 +148,10 @@ IKS01A3_ENV_SENSOR_Capabilities_t EnvCapabilities;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-
+#if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+static void I2C_BusRecover(void);          /* F20: 9-clock + STOP bus recovery */
+static void I2C_NoteResult(bool any_success);
+#endif
 /* USER CODE END PFP */
 
 /* Exported functions --------------------------------------------------------*/
@@ -145,6 +161,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   float HUMIDITY_Value = HUMIDITY_DEFAULT_VAL;
   float TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
   float PRESSURE_Value = PRESSURE_DEFAULT_VAL;
+  bool th_stale = true;  /* F9: stale until a good SHT31 read (also covers SENSOR_ENABLED=0) */
 
   /* GNSS processing removed - module is powered off to prevent LoRaWAN interference */
   /* Re-enable when GNSS power management is coordinated with LoRaWAN timing */
@@ -159,12 +176,24 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   if (SHT31_ReadTempAndHumidity(&hsht31, &sht_temp_scaled, &sht_hum_scaled) == SHT31_OK) {
     TEMPERATURE_Value = sht_temp_scaled / 100.0f;  /* Convert from scaled to float */
     HUMIDITY_Value = sht_hum_scaled / 100.0f;      /* Convert from scaled to float */
+    /* F9 FIX: update last-known-good cache, clear stale */
+    s_last_temp = TEMPERATURE_Value;
+    s_last_hum = HUMIDITY_Value;
+    s_have_th = true;
+    th_stale = false;
     /* Print using integers (no float printf support needed) */
     SEGGER_RTT_printf(0, "SHT31: T=%d.%d°C, H=%d.%d%%\r\n", 
                       sht_temp_scaled / 100, (sht_temp_scaled % 100) / 10,
                       sht_hum_scaled / 100, (sht_hum_scaled % 100) / 10);
   } else {
-    SEGGER_RTT_WriteString(0, "SHT31 read failed, using defaults\r\n");
+    /* F9 FIX: serve last-known-good (never the +18°C fantasy default once we
+     * have a real reading) and mark stale. Fail safe, not fail sunny. */
+    if (s_have_th) {
+      TEMPERATURE_Value = s_last_temp;
+      HUMIDITY_Value = s_last_hum;
+    }
+    th_stale = true;
+    SEGGER_RTT_WriteString(0, "SHT31 read failed, using last-known-good (STALE)\r\n");
   }
   
   /* Read MS5607 sensor */
@@ -179,19 +208,23 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   } else {
     SEGGER_RTT_WriteString(0, "MS5607 read failed, using defaults\r\n");
   }
+
+  /* F20: track consecutive total bus failures; recover the bus after 3 */
+  I2C_NoteResult((!th_stale) || (PRESSURE_Value != PRESSURE_DEFAULT_VAL));
 #else
   SEGGER_RTT_WriteString(0, "Sensors disabled, using default values\r\n");
 #endif
 
-  /* Quick LED flash to show we're running */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
-  HAL_Delay(50);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
+  /* F25 FIX: LED flash + HAL_Delay(50) removed from flight path.
+   * LEDs are COMMISSIONING-only (ADR-0008); blocking delays burn power. */
 
   /* Set sensor data */
   sensor_data->humidity    = HUMIDITY_Value;
   sensor_data->temperature = TEMPERATURE_Value;
   sensor_data->pressure    = PRESSURE_Value;
+  sensor_data->temp_stale  = th_stale ? 1 : 0;
+  sensor_data->hum_stale   = th_stale ? 1 : 0;
+  sensor_data->gnss_stale  = 1;  /* Default stale; cleared below only if GNSS data flows */
   
   /* Read battery voltage from ADC (PB4 with voltage divider) */
   sensor_data->battery_voltage = SYS_GetBatteryVoltage() / 1000.0f;  /* Convert mV to V */
@@ -229,8 +262,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     sensor_data->gnss_fix_quality = hgnss.data.fix_quality;
     sensor_data->gnss_hdop = hgnss.data.hdop;
     sensor_data->gnss_valid = true;
+    sensor_data->gnss_stale = s_gnss_stale ? 1 : 0;  /* T2: honesty from the TX path */
     
-    SEGGER_RTT_printf(0, "GNSS: Valid fix | Sats:%d\r\n", hgnss.data.satellites);
+    SEGGER_RTT_printf(0, "GNSS: Valid fix | Sats:%d%s\r\n", hgnss.data.satellites,
+                      s_gnss_stale ? " (STALE)" : "");
   }
   else
   {
@@ -320,5 +355,62 @@ int32_t EnvSensors_Init(void)
 
 /* Private Functions Definition -----------------------------------------------*/
 /* USER CODE BEGIN PrFD */
+
+#if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
+/* F20 (ADR-0001): a wedged I2C slave (SDA held low mid-transfer) must not
+ * kill the sensor bus for the rest of the flight — there is no power-gate
+ * on the sensors, so the only recovery is bit-banging the slave's state
+ * machine back to idle: 9 SCL clocks to flush the stuck byte, then STOP. */
+#define I2C_RECOVERY_THRESHOLD  3   /* consecutive all-fail reads before recovery */
+
+static uint8_t s_i2c_fail_count = 0;
+
+static void I2C_BusRecover(void)
+{
+  GPIO_InitTypeDef g = {0};
+  HAL_I2C_DeInit(&hi2c2);
+
+  /* Take PA15 (SDA) and PB15 (SCL) as open-drain GPIO outputs */
+  g.Mode  = GPIO_MODE_OUTPUT_OD;
+  g.Pull  = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  g.Pin   = GPIO_PIN_15;
+  HAL_GPIO_Init(GPIOA, &g);   /* SDA */
+  HAL_GPIO_Init(GPIOB, &g);   /* SCL */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  /* 9 SCL clocks: a slave holding SDA low mid-byte releases after <=9 clocks */
+  for (int i = 0; i < 9; i++) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+
+  /* STOP condition: SDA low->high while SCL high */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  /* Re-init peripheral (MspInit restores PA15/PB15 to AF open-drain) */
+  HAL_I2C_Init(&hi2c2);
+  SEGGER_RTT_WriteString(0, "I2C2 bus recovery: 9-clock + STOP, re-init done\r\n");
+}
+
+static void I2C_NoteResult(bool any_success)
+{
+  if (any_success) {
+    s_i2c_fail_count = 0;
+  } else if (++s_i2c_fail_count >= I2C_RECOVERY_THRESHOLD) {
+    s_i2c_fail_count = 0;
+    I2C_BusRecover();
+  }
+}
+#endif  /* SENSOR_ENABLED */
 
 /* USER CODE END PrFD */
