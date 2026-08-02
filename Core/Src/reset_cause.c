@@ -14,6 +14,13 @@ static uint8_t s_reset_cause = RESET_CAUSE_UNKNOWN;
 
 void ResetCause_CaptureBoot(void)
 {
+    /* FW-2: TAMP backup registers are unreadable (read 0) while the RTCAPB
+     * clock is gated. This runs before RTC init (main.c:162 vs RTC init
+     * inside MX_LoRaWAN_Init), so enable access explicitly — otherwise the
+     * F1 fault breadcrumb check always fails and faults degrade to SW. */
+    HAL_PWR_EnableBkUpAccess();
+    __HAL_RCC_RTCAPB_CLK_ENABLE();
+
     /* Fault breadcrumb (F1) outranks everything: the fault handler reset us */
     uint32_t breadcrumb = HAL_RTCEx_BKUPRead(&hrtc, RESET_CAUSE_BKP_FAULT_REG);
     if ((breadcrumb & RESET_CAUSE_FAULT_MASK) == RESET_CAUSE_FAULT_MAGIC) {

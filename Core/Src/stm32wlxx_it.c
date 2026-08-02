@@ -99,6 +99,7 @@ static void Fault_Reset(uint16_t code)
   /* Enable backup domain write access (PWR clock is always on for STM32WL) */
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_RTC_ENABLE();
+  __HAL_RCC_RTCAPB_CLK_ENABLE();  /* FW-2: TAMP regs need RTCAPB, not just RTCEN */
   HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                       RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
   NVIC_SystemReset();
