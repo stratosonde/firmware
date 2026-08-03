@@ -109,7 +109,7 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog)
     return (hlog->next_sequence > hlog->last_transmitted_sequence);
 }
 
-FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlog,
+FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
                                                      FlashLog_Record_t *records,
                                                      uint32_t max_count,
                                                      uint32_t *actual_count)
@@ -158,7 +158,7 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlo
      * consumed sequence (good + skipped). */
     sequence_to_read = hlog->last_transmitted_sequence;
     while ((*actual_count) < max_count && sequence_to_read < hlog->next_sequence) {
-        /* Convert sequence to LIFO offset for FlashLog_ReadRecord */
+        /* Convert sequence to ReadRecord offset (newest-relative) */
         uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
 
         status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);

@@ -294,7 +294,10 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog);
   *         transmitted watermark advances monotonically. Corrupt/torn records
   *         are skipped (watermark advanced past them) — never wedge (T4).
   */
-FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsLIFO(FlashLog_HandleTypeDef *hlog,
+/* FW-19: renamed ...LIFO -> ...FIFO. The name was stale from before the C4
+ * fix — the implementation reads FIFO (oldest unsent first) so that
+ * MarkRecordsTransmitted advances last_transmitted_sequence from the old end. */
+FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
                                                      FlashLog_Record_t *records,
                                                      uint32_t max_count,
                                                      uint32_t *actual_count);

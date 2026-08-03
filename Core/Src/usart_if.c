@@ -147,7 +147,11 @@ void vcom_Trace(uint8_t *p_data, uint16_t size)
   /* USER CODE BEGIN vcom_Trace_1 */
 
   /* USER CODE END vcom_Trace_1 */
-  HAL_UART_Transmit(&huart1, p_data, size, 1000);
+  /* FW-13: UART1 is the GPS UART. All logging is SEGGER RTT; transmitting
+   * here would emit garbage bytes at the GPS (and HAL_BUSY-fail while the
+   * GPS driver owns the peripheral). No-op by design. */
+  (void)p_data;
+  (void)size;
   /* USER CODE BEGIN vcom_Trace_2 */
 
   /* USER CODE END vcom_Trace_2 */
@@ -158,7 +162,9 @@ UTIL_ADV_TRACE_Status_t vcom_Trace_DMA(uint8_t *p_data, uint16_t size)
   /* USER CODE BEGIN vcom_Trace_DMA_1 */
 
   /* USER CODE END vcom_Trace_DMA_1 */
-  HAL_UART_Transmit_DMA(&huart1, p_data, size);
+  /* FW-13: see vcom_Trace() — GPS owns UART1, RTT is the trace path. */
+  (void)p_data;
+  (void)size;
   return UTIL_ADV_TRACE_OK;
   /* USER CODE BEGIN vcom_Trace_DMA_2 */
 

@@ -1685,11 +1685,12 @@ static void SendTxData(void)
       // Check if we have unsent data and haven't exceeded packet limit
       if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
         
-        // Read up to 6 unsent records from flash (LIFO order - newest first)
+        // Read up to 6 unsent records from flash (FIFO order - oldest unsent
+        // first, so MarkRecordsTransmitted advances the watermark correctly)
         FlashLog_Record_t flash_records[6];
         uint32_t record_count;
         
-        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsLIFO(&hflashlog, 
+        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog, 
                                                                             flash_records, 
                                                                             6, 
                                                                             &record_count);
