@@ -191,8 +191,9 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   SEGGER_RTT_WriteString(0, "GNSS_PowerOff: MCU STOP mode re-enabled\r\n");
 
-  /* Both PB10 and PB5 remain HIGH to maintain hot-start capability */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: GPS in standby (~15µA), MCU can now sleep\r\n");
+  /* FW-8: this function does NOT touch PB10/PB5 — they keep whatever state
+   * the caller established (GNSS_EnterStandby() drives both LOW, 0µA). */
+  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: DMA aborted, pins unchanged, MCU can now sleep\r\n");
   
   hgnss->is_powered = false;
 
@@ -1096,7 +1097,12 @@ static bool GNSS_VerifyChecksum(const char *sentence)
   return (calculated == provided);
 }
 /**
-  * @brief  Enter GPS standby mode (low power ~15µA)
+  * @brief  Enter GPS standby mode (FW-8: FULL power-off, 0µA — PCAS12 saves
+  *         ephemeris to GPS internal flash, then BOTH PB10 and PB5 are cut.
+  *         There is no live backup rail; hot-start relies on the saved
+  *         ephemeris in flash, not on retained power. The ~15µA figure in
+  *         older comments described a PB10-HIGH backup mode that is NOT
+  *         what this function does.)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
   */
@@ -1107,8 +1113,11 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
   
-  /* CRITICAL: Send PCAS12 standby command FIRST (while UART active) */
-  /* GPS needs ~100ms to save ephemeris data to flash before power cut */
+  /* CRITICAL: Send PCAS12 standby command FIRST (while UART active).
+   * FW-8: PCAS12 is the standby-entry command — it is what makes the module
+   * persist ephemeris to its internal flash (PCAS00 is the flash-save command
+   * used at commissioning). The 100 ms below covers that internal save before
+   * the full power cut. */
   GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
 
   if (cmd_status == GNSS_OK)
@@ -1120,7 +1129,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     SEGGER_RTT_WriteString(0, "[GPS STANDBY] WARNING - PCAS12 TX failed!\r\n");
   }
 
-  /* Wait 100ms for GPS to save ephemeris to internal flash before power cut */
+  /* Wait 100ms for the PCAS12-triggered ephemeris save before power cut */
   HAL_Delay(100);
   
   /* Abort DMA first - stop receiving data */
@@ -1150,7 +1159,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
   SEGGER_RTT_WriteString(0, "[GPS STANDBY] Software buffers cleared\r\n");
   
-  /* HOT-START STANDBY: Configure pins for minimal power while retaining ephemeris */
+  /* Configure UART pins for minimal power (full power-off follows below) */
   if (hgnss->huart != NULL)
   {
     HAL_UART_DeInit(hgnss->huart);
@@ -1181,7 +1190,8 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
 
   /* FULL POWER-OFF MODE: Both PB10=LOW and PB5=LOW after PCAS12 */
   /* GPS has saved ephemeris to internal flash (via PCAS12 command) */
-  /* Power consumption: 0µA during sleep, but GPS retains ephemeris data internally */
+  /* Power consumption: 0µA during sleep; hot-start on wake uses the
+   * flash-persisted ephemeris — no live backup rail exists. */
   
   /* Cut all power to GPS module */
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW (no power)
@@ -1193,7 +1203,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   SEGGER_RTT_WriteString(0, "[GPS STANDBY] MCU STOP mode re-enabled\r\n");
 
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS in hot-start standby (~15µA)\r\n");
+  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS fully off (0µA), ephemeris in flash\r\n");
   
   hgnss->is_powered = false;
   return GNSS_OK;

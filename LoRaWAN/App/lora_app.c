@@ -1239,10 +1239,11 @@ static void SendTxData(void)
 
   SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
 
-  /* ========== GPS HOT-START MODE ENABLED ========== */
-  /* GPS uses hot-start standby mode: PB10=HIGH (backup power ~15µA) */
-  /* Between TX cycles: PB5=LOW (standby), UART1 deinitialized, MCU can sleep */
-  /* During TX: PB5=HIGH (active), UART1 active, achieves fix in ~1-5 seconds */
+  /* ========== GPS POWER-CYCLING MODE ========== */
+  /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
+   * is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
+   * flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
+   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected. */
   // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
   
   /* Declare ttf_ms at function scope so it's available for telemetry */
@@ -1419,9 +1420,9 @@ static void SendTxData(void)
       SEGGER_RTT_WriteString(0, "GPS: Fix acquired and stored as last known position\r\n");
     }
     
-    /* Put GPS back to standby to save power and allow MCU to sleep */
+    /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
     GNSS_EnterStandby(&hgnss);
-    SEGGER_RTT_WriteString(0, "GPS entered standby mode (~15µA), MCU can now sleep\r\n");
+    SEGGER_RTT_WriteString(0, "GPS fully powered off (0µA), MCU can now sleep\r\n");
     
     /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 

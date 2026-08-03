@@ -190,8 +190,11 @@ void PWR_EnterStopMode(void)
   /* Set all unused/inactive pins to ANALOG mode to minimize leakage */
 
   /* GPS pins are managed by GNSS driver - DO NOT override here! */
-  /* GNSS_EnterStandby() sets: PB6=OUTPUT-LOW, PB7=ANALOG, PB5=LOW, PB10=HIGH */
-  /* PB10 must stay HIGH for hot-start mode (~15µA backup power) */
+  /* FW-8: GNSS_EnterStandby() actually sets PB6=OUTPUT-LOW, PB7=ANALOG,
+   * PB5=LOW, **PB10=LOW** — full power-off (0µA), NOT hot-start backup mode.
+   * Hot-start retention relies on ephemeris saved to GPS internal flash via
+   * PCAS12, not on a live backup rail. Bench gate pending: if TTF is not
+   * hot-start-fast, restoring PB10-HIGH standby is a separate measured fix. */
   
   /* External flash MOSI pin to ANALOG if on PA10 */
   GPIO_InitStruct.Pin = GPIO_PIN_10;  // PA10
