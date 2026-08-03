@@ -58,6 +58,7 @@ typedef struct
     * 1 = value is last-known-good (or default), NOT a live read. */
    uint8_t temp_stale;     /*!< temperature is stale (SHT31 read failed) */
    uint8_t hum_stale;      /*!< humidity is stale (SHT31 read failed) */
+   uint8_t press_stale;    /*!< FW-7: pressure is stale (MS5607 read failed) */
    uint8_t gnss_stale;     /*!< position is last-known-good, not a fresh fix */
    /* USER CODE END sensor_t */
  } sensor_t;

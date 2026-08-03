@@ -9,15 +9,16 @@
 **A reading carries its own honesty.** Fresh vs stale is marked at the point of read and survives the entire pipeline — sensor read → flash record → uplink. Stale data still flows (last-known-good behavior) but nothing downstream can mistake it for live.
 
 ### Rules
-1. Stale bits for **GPS position, temperature, humidity**: set where the read fails/times out, cleared on a good read. No fabricated defaults anywhere in the pipeline.
+1. Stale bits for **GPS position, temperature, humidity, pressure** (FW-7 added pressure): set where the read fails/times out, cleared on a good read. No fabricated defaults anywhere in the pipeline.
 2. Fail safe, not fail sunny: **stale/unknown temperature is treated as COLD** by the GPS lockout (GPS held). A gap is honest; a fantasy default is not.
 3. Failed record conversion ⇒ skip that record, continue with the next. Never pack a failed conversion.
 4. **Status byte restored to the compact uplink as byte 11** (ADR-0005 freed it: LinkCheck rides FOpts). Layout:
    - b0 GPS stale, b1 temp stale, b2 humidity stale
-   - b3–b5 reset cause, condensed from `RCC->CSR` (POR / BOR / IWDG / SW / pin / fault-breadcrumb)
+   - b3–b4 reset cause, condensed 2-bit from `RCC->CSR` (POR/BOR+low-power / IWDG / SW+pin / fault-breadcrumb) — **amended by FW-7** (was b3–b5 3-bit)
+   - b5 pressure stale (**FW-7**: MS5607 read failed; value is last-known-good or the 1000.0 hPa pre-first-read default)
    - b6–b7 mission state (COMMISSIONING / ASCENT / FLOAT / reserved — see ADR-0008)
 5. Detailed fault breadcrumbs (PC, CFSR/HFSR) are too big for this byte: log to flash and/or a rare diagnostic uplink; the status byte only signals *that* a fault reset occurred.
-6. Flash side: the high-res record's flags byte (`PackStatusFlags`) is extended with the stale bits (second flags byte if needed).
+6. Flash side: `FlashLog_Record_t.flags` carries the stale bits (FW-7: b0 press, b1 temp, b2 hum, b3 gnss) — the archive keeps each reading's own freshness.
 
 ## Consequences
 - `EncodeCompactBinaryPacket` grows to 11 bytes (exact fit at US915 DR0).

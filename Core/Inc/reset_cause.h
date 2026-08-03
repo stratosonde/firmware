@@ -3,8 +3,8 @@
   * @file    reset_cause.h
   * @brief   Reset cause capture and condensation (F13b / ADR-0007)
   ******************************************************************************
-  * Reads RCC->CSR once at boot, condenses to a 3-bit code for the uplink
-  * status byte, then clears the flags (RMVF) so the next boot reads clean.
+ * Reads RCC->CSR once at boot, condenses to a 2-bit code for the uplink
+ * status byte, then clears the flags (RMVF) so the next boot reads clean.
   ******************************************************************************
   */
 
@@ -17,16 +17,15 @@ extern "C" {
 
 #include <stdint.h>
 
-/** @brief Condensed reset cause codes (3 bits, status byte b3-b5) */
+/* FW-7: 2-bit condensation (status byte b3-b4; b5 is now press_stale).
+ * Buckets: IWDG and FAULT are flight-actionable and stay distinct;
+ * PIN folds into SW (both are manual/service resets, irrelevant in flight);
+ * LOWPOWER folds into POR_BOR (power-domain resets). */
 typedef enum {
-    RESET_CAUSE_POR_BOR   = 0,  /* POR/BOR (indistinguishable on STM32WL: BORRSTF covers both) */
-    RESET_CAUSE_RESERVED1 = 1,
-    RESET_CAUSE_IWDG      = 2,  /* Independent watchdog reset */
-    RESET_CAUSE_SW        = 3,  /* Software reset (NVIC_SystemReset) */
-    RESET_CAUSE_PIN       = 4,  /* External pin reset */
-    RESET_CAUSE_FAULT     = 5,  /* Fault handler breadcrumb present (see F1) */
-    RESET_CAUSE_LOWPOWER  = 6,  /* Low-power reset */
-    RESET_CAUSE_UNKNOWN   = 7
+    RESET_CAUSE_POR_BOR   = 0,  /* POR/BOR (+ low-power reset folded in) */
+    RESET_CAUSE_IWDG      = 1,  /* Independent watchdog reset */
+    RESET_CAUSE_SW        = 2,  /* Software reset / external pin reset */
+    RESET_CAUSE_FAULT     = 3,  /* Fault handler breadcrumb present (see F1) */
 } ResetCause_t;
 
 /** @brief RTC backup register holding the fault breadcrumb (F1) */
@@ -44,7 +43,7 @@ void ResetCause_CaptureBoot(void);
 
 /**
  * @brief Get the condensed reset cause captured at boot.
- * @retval 3-bit ResetCause_t code
+ * @retval 2-bit ResetCause_t code
  */
 uint8_t ResetCause_Get(void);
 

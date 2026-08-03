@@ -55,7 +55,8 @@ extern "C" {
 #define STATUS_GPS_STALE_MASK      0x01  // Bit 0: GPS position is last-known-good
 #define STATUS_TEMP_STALE_MASK     0x02  // Bit 1: temperature is last-known-good
 #define STATUS_HUM_STALE_MASK      0x04  // Bit 2: humidity is last-known-good
-#define STATUS_RESET_CAUSE_MASK    0x38  // Bits 3-5: condensed reset cause (reset_cause.h)
+#define STATUS_RESET_CAUSE_MASK    0x18  // Bits 3-4: condensed reset cause (reset_cause.h, FW-7: 2-bit)
+#define STATUS_PRESS_STALE_MASK    0x20  // Bit 5: FW-7 pressure is last-known-good
 #define STATUS_MISSION_STATE_MASK  0xC0  // Bits 6-7: mission state (mission_state.h)
 
 /* Helper macros for status flag extraction */

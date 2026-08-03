@@ -458,6 +458,12 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     
     /* Battery */
     record.battery_mv = (uint16_t)(sensor_data->battery_voltage * 1000.0f);
+
+    /* FW-7 (ADR-0007): archive carries the reading's own freshness */
+    record.flags = (sensor_data->press_stale ? 0x01 : 0)
+                 | (sensor_data->temp_stale  ? 0x02 : 0)
+                 | (sensor_data->hum_stale   ? 0x04 : 0)
+                 | (sensor_data->gnss_stale  ? 0x08 : 0);
     
     /* Calculate CRC32 (all fields except crc32) */
     record.crc32 = FlashLog_CRC32((const uint8_t *)&record, 

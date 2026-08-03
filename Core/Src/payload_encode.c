@@ -101,11 +101,13 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     /* F17/T2 (ADR-0007): status byte restored as byte 11. LinkCheck rides
      * FOpts (ADR-0005), so the payload byte is free again.
      * b0 GPS stale, b1 temp stale, b2 humidity stale,
-     * b3-b5 condensed reset cause, b6-b7 mission state. */
+     * b3-b4 condensed reset cause (FW-7: 2-bit), b5 pressure stale (FW-7),
+     * b6-b7 mission state. */
     packet->status = (sensors->gnss_stale ? STATUS_GPS_STALE_MASK : 0)
                    | (sensors->temp_stale ? STATUS_TEMP_STALE_MASK : 0)
                    | (sensors->hum_stale  ? STATUS_HUM_STALE_MASK : 0)
-                   | ((ResetCause_Get() & 0x07) << 3)
+                   | ((ResetCause_Get() & 0x03) << 3)
+                   | (sensors->press_stale ? STATUS_PRESS_STALE_MASK : 0)
                    | ((MissionState_GetStatusBits() & 0x03) << 6);
     
     // Debug logging with safe integer conversions

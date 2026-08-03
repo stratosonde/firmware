@@ -117,7 +117,7 @@ typedef struct __attribute__((packed)) {
     
     /* Power and status (4 bytes) */
     uint16_t battery_mv;        /**< Battery voltage in millivolts */
-    uint8_t flags;              /**< Status flags (reserved) */
+    uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale */
     uint8_t reserved3;          /**< Reserved for future use */
     
     /* Reserved for expansion (14 bytes) */

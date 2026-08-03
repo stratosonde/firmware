@@ -10,7 +10,7 @@
 
 extern RTC_HandleTypeDef hrtc;
 
-static uint8_t s_reset_cause = RESET_CAUSE_UNKNOWN;
+static uint8_t s_reset_cause = RESET_CAUSE_POR_BOR;  /* FW-7: unknown -> benign bucket */
 
 void ResetCause_CaptureBoot(void)
 {
@@ -32,13 +32,13 @@ void ResetCause_CaptureBoot(void)
     } else if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)) {
         s_reset_cause = RESET_CAUSE_SW;
     } else if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)) {
-        s_reset_cause = RESET_CAUSE_PIN;
+        s_reset_cause = RESET_CAUSE_SW;      /* FW-7: PIN folds into SW bucket */
     } else if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST)) {
-        s_reset_cause = RESET_CAUSE_LOWPOWER;
+        s_reset_cause = RESET_CAUSE_POR_BOR; /* FW-7: low-power folds into POR bucket */
     } else if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST)) {
         s_reset_cause = RESET_CAUSE_POR_BOR;
     } else {
-        s_reset_cause = RESET_CAUSE_UNKNOWN;
+        s_reset_cause = RESET_CAUSE_POR_BOR; /* unknown -> safest benign bucket */
     }
 
     /* Clear all reset flags so the next boot reads clean */

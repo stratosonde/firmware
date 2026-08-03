@@ -67,7 +67,7 @@ Single build. No `#ifdef FLIGHT_BUILD`. All gating by runtime mission state.
 **Phase 2 — Data honesty (T2 / ADR-0007)**
 7. Sensor last-known-good cache + stale bits (F9); lockout treats stale temp as COLD
 8. GPS stale bit through flash record + uplink (F8)
-9. Status byte restored as byte 11 (F17): b0 GPS stale, b1 temp stale, b2 humidity stale, b3–b5 reset cause (from `RCC->CSR`), b6–b7 mission state (F13b)
+9. Status byte restored as byte 11 (F17): b0 GPS stale, b1 temp stale, b2 humidity stale, b3–b5 reset cause (from `RCC->CSR`), b6–b7 mission state (F13b) — **FW-7 amended**: reset cause condensed to 2-bit b3–b4 (POR/BOR+LP / IWDG / SW+PIN / FAULT), b5 = pressure stale
 
 **Phase 3 — Mission state + session integrity (T3+T1 / ADR-0006/0008)**
 10. Minimal state machine; door anchored to Tier-1 bank; ambiguity → FLIGHT

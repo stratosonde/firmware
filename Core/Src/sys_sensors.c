@@ -109,9 +109,11 @@ GNSS_HandleTypeDef hgnss;
 /* F9/T2 (ADR-0007): last-known-good cache + stale flags.
  * No fabricated defaults downstream: a failed read serves the cached value
  * and sets the stale bit; the bit survives the whole pipeline. */
-static float s_last_temp = TEMPERATURE_DEFAULT_VAL;
-static float s_last_hum  = HUMIDITY_DEFAULT_VAL;
-static bool  s_have_th   = false;   /* never had a good SHT31 read */
+static float s_last_temp  = TEMPERATURE_DEFAULT_VAL;
+static float s_last_hum   = HUMIDITY_DEFAULT_VAL;
+static bool  s_have_th    = false;   /* never had a good SHT31 read */
+static float s_last_press = PRESSURE_DEFAULT_VAL;
+static bool  s_have_press = false;   /* FW-7: never had a good MS5607 read */
 static bool  s_gnss_stale = true;   /* stale until first real fix */
 
 void EnvSensors_MarkGnssStale(bool stale)
@@ -162,6 +164,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   float TEMPERATURE_Value = TEMPERATURE_DEFAULT_VAL;
   float PRESSURE_Value = PRESSURE_DEFAULT_VAL;
   bool th_stale = true;  /* F9: stale until a good SHT31 read (also covers SENSOR_ENABLED=0) */
+  bool press_stale = true;  /* FW-7: stale until a good MS5607 read */
 
   /* GNSS processing removed - module is powered off to prevent LoRaWAN interference */
   /* Re-enable when GNSS power management is coordinated with LoRaWAN timing */
@@ -199,6 +202,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   /* Read MS5607 sensor */
   if (MS5607_ReadPressureAndTemperature(&hms5607, &ms_temp, &ms_press) == MS5607_OK) {
     PRESSURE_Value = ms_press;
+    /* FW-7: update last-known-good cache, clear stale (mirrors F9 SHT31 pattern) */
+    s_last_press = PRESSURE_Value;
+    s_have_press = true;
+    press_stale = false;
     /* Use MS5607 temperature as backup/verification */
     int press_int = (int)(ms_press * 10);
     int temp_int = (int)(ms_temp * 10);
@@ -206,11 +213,21 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
                       press_int / 10, press_int % 10,
                       temp_int / 10, temp_int % 10);
   } else {
-    SEGGER_RTT_WriteString(0, "MS5607 read failed, using defaults\r\n");
+    /* FW-7: serve last-known-good (never the 1000.0 hPa sea-level default once
+     * we have a real reading) and mark stale. A failed read must never
+     * transmit 1000.0 hPa as real float-altitude science data. */
+    if (s_have_press) {
+      PRESSURE_Value = s_last_press;
+    }
+    press_stale = true;
+    SEGGER_RTT_WriteString(0, "MS5607 read failed, using last-known-good (STALE)\r\n");
   }
 
-  /* F20: track consecutive total bus failures; recover the bus after 3 */
-  I2C_NoteResult((!th_stale) || (PRESSURE_Value != PRESSURE_DEFAULT_VAL));
+  /* F20: track consecutive total bus failures; recover the bus after 3.
+   * FW-7: track a real read-success boolean — the old sentinel compare
+   * (PRESSURE_Value != PRESSURE_DEFAULT_VAL) mis-counted a legitimate
+   * 1000.0 hPa reading as a bus failure. */
+  I2C_NoteResult((!th_stale) || (!press_stale));
 #else
   SEGGER_RTT_WriteString(0, "Sensors disabled, using default values\r\n");
 #endif
@@ -224,6 +241,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   sensor_data->pressure    = PRESSURE_Value;
   sensor_data->temp_stale  = th_stale ? 1 : 0;
   sensor_data->hum_stale   = th_stale ? 1 : 0;
+  sensor_data->press_stale = press_stale ? 1 : 0;
   sensor_data->gnss_stale  = 1;  /* Default stale; cleared below only if GNSS data flows */
   
   /* Read battery voltage from ADC (PB4 with voltage divider) */
