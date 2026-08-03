@@ -1011,35 +1011,47 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     // Trigger join (LmHandlerJoin returns void)
     LmHandlerJoin(ACTIVATION_TYPE_OTAA, true);
     
-    /* F4/T1 (ADR-0006/0008): joins are COMMISSIONING-ONLY. This wait loop has
-     * no timeout by design ("infinite retry until success") — acceptable on the
-     * bench with a human present, fatal in flight. The mission gate at the top
-     * of the provisioning path (and here, as defense in depth) makes the loop
-     * unreachable after the one-way door closes. */
+    /* F4/T1 (ADR-0006/0008): joins are COMMISSIONING-ONLY. The mission gate at
+     * the top of the provisioning path (and here, as defense in depth) makes
+     * the wait loop unreachable after the one-way door closes. */
     if (!MissionState_IsCommissioning()) {
         SEGGER_RTT_WriteString(0, "JoinRegion: BLOCKED - joins are commissioning-only (ADR-0006)\r\n");
         return LORAMAC_HANDLER_ERROR;
     }
 
-    // Wait for join to complete - infinite retry until success
+    /* R30/D6: the wait loop is now BOUNDED. "Infinite retry until success" was
+     * acceptable only if the commissioning gate could never fail; a bounded
+     * loop is safe under every circumstance (gate bypass, state corruption,
+     * bench unit left out of gateway range overnight). On timeout the region
+     * is marked failed and PreJoinAllRegions moves on to the next bank. */
+    #define JOIN_TIMEOUT_MS   (5UL * 60UL * 1000UL)  /* 5 min per region, then give up */
     uint32_t start_time = HAL_GetTick();
     uint32_t last_join_attempt = HAL_GetTick();
     uint32_t retry_interval = 30000;  // Retry every 30 seconds
-    
-    SEGGER_RTT_printf(0, "Waiting for %s join (infinite retry)...\r\n", RegionToString(region));
-    
+
+    SEGGER_RTT_printf(0, "Waiting for %s join (max %lus)...\r\n",
+                      RegionToString(region), (unsigned long)(JOIN_TIMEOUT_MS / 1000UL));
+
     // Wait for join to complete by checking callback flag
     while (!g_multiregion_join_success) {
+        // R30: bounded wait — give up on this region after JOIN_TIMEOUT_MS
+        if ((HAL_GetTick() - start_time) > JOIN_TIMEOUT_MS) {
+            SEGGER_RTT_printf(0, "%s join TIMEOUT after %lus - skipping region\r\n",
+                              RegionToString(region),
+                              (unsigned long)((HAL_GetTick() - start_time) / 1000UL));
+            return LORAMAC_HANDLER_ERROR;
+        }
+
         // CRITICAL: Process MAC events to handle join accept
         LmHandlerProcess();
-        
+
         // Check if we need to retry join (every 30 seconds)
         if ((HAL_GetTick() - last_join_attempt) > retry_interval) {
             SEGGER_RTT_printf(0, "Retrying %s join...\r\n", RegionToString(region));
             LmHandlerJoin(ACTIVATION_TYPE_OTAA, true);
             last_join_attempt = HAL_GetTick();
         }
-        
+
         // C5 FIX: Refresh watchdog during join wait to prevent reset.
         // Join can take 5-30+ seconds (RX windows + retries), which can
         // exceed the ~33s IWDG timeout and cause an unexpected reset.
@@ -1048,11 +1060,11 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
         if (hiwdg.Instance != NULL) {
           HAL_IWDG_Refresh(&hiwdg);
         }
-        
+
         // Delay to prevent tight loop (250ms is sufficient for MAC processing)
         HAL_Delay(250);
     }
-    
+
     // Join successful
     uint32_t join_time = (HAL_GetTick() - start_time) / 1000;
     SEGGER_RTT_printf(0, "%s join SUCCESS! (took %lus)\r\n", RegionToString(region), join_time);
@@ -1100,7 +1112,8 @@ bool MultiRegion_PreJoinAllRegions(void)
     HAL_Delay(100);
     
     bool all_success = true;
-    
+    uint8_t join_success_count = 0;  /* R30/D6: flight entry requires >= 1 */
+
     // ========== US915 (ENABLED) ==========
     SEGGER_RTT_WriteString(0, "\r\n--- Joining US915 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
@@ -1108,11 +1121,12 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: US915 joined\r\n");
+        join_success_count++;
         // Display session keys for copying to Chirpstack
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
-    
+
     // ========== EU868 (F4 FIX: re-enabled — global floater needs all 4 banks) ==========
     SEGGER_RTT_WriteString(0, "\r\n--- Joining EU868 ---\r\n");
     if (MultiRegion_JoinRegion(LORAMAC_REGION_EU868) != LORAMAC_HANDLER_SUCCESS) {
@@ -1120,6 +1134,7 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: EU868 joined\r\n");
+        join_success_count++;
         // Display session keys for copying to Chirpstack
         MultiRegion_DisplaySessionKeys();
     }
@@ -1132,6 +1147,7 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AS923 joined\r\n");
+        join_success_count++;
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
@@ -1143,27 +1159,37 @@ bool MultiRegion_PreJoinAllRegions(void)
         all_success = false;
     } else {
         APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AU915 joined\r\n");
+        join_success_count++;
         MultiRegion_DisplaySessionKeys();
     }
     HAL_Delay(5000);
-    
+
     // Switch back to US915 as starting region
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
-    
+
     APP_LOG(TS_ON, VLEVEL_H, "\r\n========================================\r\n");
     if (all_success) {
         APP_LOG(TS_ON, VLEVEL_H, "=== ALL PRE-JOINS SUCCESSFUL ===\r\n");
     } else {
-        APP_LOG(TS_ON, VLEVEL_H, "=== SOME PRE-JOINS FAILED ===\r\n");
+        APP_LOG(TS_ON, VLEVEL_H, "=== SOME PRE-JOINS FAILED (%d/4 joined) ===\r\n", join_success_count);
     }
     APP_LOG(TS_ON, VLEVEL_H, "========================================\r\n\r\n");
-    
+
     // Clear pre-join flag to allow TX timer to start
     g_multiregion_in_prejoin = 0;
 
-    /* T3 (ADR-0008): commissioning ceremony complete — walk through the
-     * one-way door. From here on, joins and GNSS reconfig are impossible. */
-    MissionState_EnterFlight();
+    /* T3 (ADR-0008) + R30/D6: walk through the one-way door ONLY if at least
+     * one region bank was actually provisioned. Entering FLIGHT with zero
+     * joined banks means permanent RF silence (joins become impossible) — a
+     * balloon that can log but never phone home. With zero successes, stay in
+     * COMMISSIONING so the operator can fix the gateway/credentials and power
+     * cycle to retry the ceremony. */
+    if (join_success_count > 0) {
+        MissionState_EnterFlight();
+    } else {
+        SEGGER_RTT_WriteString(0, "PRE-JOIN: 0/4 regions joined - STAYING IN COMMISSIONING (power cycle to retry)\r\n");
+        APP_LOG(TS_ON, VLEVEL_H, "PRE-JOIN: no banks provisioned - flight entry BLOCKED (R30/D6)\r\n");
+    }
 
     return all_success;
 }

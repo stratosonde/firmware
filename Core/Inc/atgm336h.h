@@ -161,17 +161,23 @@ typedef struct
 #define NMEA_VTG                    "$GPVTG"
 #define NMEA_GLL                    "$GPGLL"
 
-/* ATGM336H PCAS Configuration Commands */
+/* ATGM336H PCAS Configuration Commands
+ * R23: checksums recomputed (XOR of chars between '$' and '*'). Three were
+ * wrong and silently rejected by the module: PCAS02 (*2B->*2E),
+ * PCAS04,7 (*1A->*1E), PCAS12 (*1C->*1E).
+ * R24: GNSS_CMD_FIX_MODE (PCAS11,2) DELETED — PCAS11 is a single dynamic-model
+ * setting, last write wins; sending ,2 (pedestrian) after ,5 (airborne<1g)
+ * silently re-enabled the 18 km CoCom limit. Its broken checksum was the only
+ * thing keeping the unit airborne-capable. */
 #define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // GGA + RMC + GSV + VTG
 #define GNSS_CMD_CONSTELLATION   "$PCAS04,5*1C\r\n"                // Constellation: GPS+GLONASS (was mislabeled as high-alt mode)
 #define GNSS_CMD_AIRBORNE_MODE   "$PCAS11,5*18\r\n"                // Airborne dynamic model — defeats 18km CoCom limit (CRITICAL!)
-#define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2B\r\n"             // 1 Hz update rate
-#define GNSS_CMD_SATELLITE_SYS   "$PCAS04,7*1A\r\n"                // GPS + BeiDou + GLONASS (all constellations)
-#define GNSS_CMD_FIX_MODE        "$PCAS11,2*1E\r\n"                // Auto 2D/3D fix
+#define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2E\r\n"             // 1 Hz update rate (R23: checksum fixed)
+#define GNSS_CMD_SATELLITE_SYS   "$PCAS04,7*1E\r\n"                // GPS + BeiDou + GLONASS (all constellations) (R23: checksum fixed)
 #define GNSS_CMD_SAVE_CONFIG     "$PCAS00*01\r\n"                  // Save configuration to flash
 
 /*  ATGM336H Power Management Commands - CASIC Protocol */
-#define GNSS_CMD_STANDBY         "$PCAS12,0*1C\r\n"               // Enter standby mode (~15µA), timeout=0 for permanent standby
+#define GNSS_CMD_STANDBY         "$PCAS12,0*1E\r\n"               // Enter standby mode (~15µA), timeout=0 for permanent standby (R23: checksum fixed)
 #define GNSS_WAKE_CHAR           "a"                               // Any char wakes from standby
 
 /* Exported macro ------------------------------------------------------------*/

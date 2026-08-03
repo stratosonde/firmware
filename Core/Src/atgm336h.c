@@ -254,13 +254,9 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
-  /* Send fix mode configuration (Auto 2D/3D) */
-  SEGGER_RTT_WriteString(0, "Sending: Fix mode (Auto 2D/3D)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_FIX_MODE) != GNSS_OK)
-  {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send fix mode\r\n");
-  }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  /* R24: PCAS11,2 ("fix mode") send DELETED. PCAS11 is one dynamic-model
+   * setting — a second write overwrites the airborne model set above and
+   * re-enables the 18 km CoCom limit. Airborne must be the LAST PCAS11 write. */
   
   /* Save all configuration to GPS internal flash (PCAS00) */
   SEGGER_RTT_WriteString(0, "Sending: Save configuration to flash...\r\n");
@@ -514,9 +510,15 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
-  /* Get current DMA head position (hardware write position) */
+  /* Get current DMA head position (hardware write position).
+   * F-011: when the DMA counter reads 0 (buffer exactly full), the raw
+   * subtraction yields head == GNSS_DMA_BUFFER_SIZE, which dma_tail (always
+   * 0..SIZE-1) can never equal — the consume loop below never terminates.
+   * Wrap the head into [0, SIZE-1]; head == tail then correctly means
+   * "no new bytes" (one byte of buffer capacity is sacrificed, as is
+   * standard for lock-free circular buffers). */
   uint16_t dma_remaining = __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx);
-  hgnss->dma_head = GNSS_DMA_BUFFER_SIZE - dma_remaining;
+  hgnss->dma_head = (uint16_t)((GNSS_DMA_BUFFER_SIZE - dma_remaining) % GNSS_DMA_BUFFER_SIZE);
 
   /* GPS status monitoring - print summary every 10 seconds */
   static uint32_t last_debug_time = 0;

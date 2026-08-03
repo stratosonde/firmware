@@ -51,6 +51,7 @@ extern "C" {
 
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
+void Error_Handler_Fatal(uint16_t code);  /* F-001: breadcrumb + reset for unrecoverable faults */
 void MX_DMA_Init(void);
 void MX_SUBGHZ_Init(void);
 void MX_ADC_Init(void);

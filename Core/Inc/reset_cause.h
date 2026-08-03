@@ -17,6 +17,8 @@ extern "C" {
 
 #include <stdint.h>
 
+#include "backup_regs.h"
+
 /* FW-7: 2-bit condensation (status byte b3-b4; b5 is now press_stale).
  * Buckets: IWDG and FAULT are flight-actionable and stay distinct;
  * PIN folds into SW (both are manual/service resets, irrelevant in flight);
@@ -28,8 +30,9 @@ typedef enum {
     RESET_CAUSE_FAULT     = 3,  /* Fault handler breadcrumb present (see F1) */
 } ResetCause_t;
 
-/** @brief RTC backup register holding the fault breadcrumb (F1) */
-#define RESET_CAUSE_BKP_FAULT_REG   RTC_BKP_DR1
+/** @brief RTC backup register holding the fault breadcrumb (F1).
+  *        R01/R02: moved DR1 -> DR4; DR0-DR2 belong to timer_if SysTime. */
+#define RESET_CAUSE_BKP_FAULT_REG   BKP_REG_RESET_CAUSE_FAULT
 /** @brief Breadcrumb magic: upper 16 bits of the breadcrumb register */
 #define RESET_CAUSE_FAULT_MAGIC     0xF17B0000UL
 #define RESET_CAUSE_FAULT_MASK      0xFFFF0000UL

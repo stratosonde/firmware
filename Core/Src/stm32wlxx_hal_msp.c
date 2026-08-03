@@ -236,8 +236,13 @@ void HAL_RTC_MspInit(RTC_HandleTypeDef* hrtc)
 
   /** Initializes the peripherals clocks
   */
+    /* R08: honor the RTC clock source SystemClock_Config() actually selected.
+     * After a dead-LSE failover this is RCC_RTCCLKSOURCE_LSI; forcing LSE here
+     * would reset the backup domain (wiping every backup register) and
+     * re-select the dead oscillator. */
+    extern uint32_t g_rtc_clock_source;
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_RTC;
-    PeriphClkInitStruct.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
+    PeriphClkInitStruct.RTCClockSelection = g_rtc_clock_source;
 
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {

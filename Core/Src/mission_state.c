@@ -3,20 +3,22 @@
   * @file    mission_state.c
   * @brief   Minimal one-way mission state machine (T3 / ADR-0008)
   ******************************************************************************
-  * State persists in RTC backup register DR0 (survives reset, not power loss
+  * State persists in RTC backup register DR3 (survives reset, not power loss
   * without VBAT backup — hence the door anchor, not the register, decides).
+  * R01/R02: DR0-DR2 are owned by timer_if SysTime — see backup_regs.h.
   ******************************************************************************
   */
 
 #include "main.h"
 #include "mission_state.h"
 #include "multiregion_context.h"
+#include "backup_regs.h"
 #include "SEGGER_RTT.h"
 
 extern RTC_HandleTypeDef hrtc;
 
-/* DR0 layout: upper 16 bits = magic, lower 16 bits = MissionState_t */
-#define MISSION_STATE_BKP_REG   RTC_BKP_DR0
+/* DR3 layout: upper 16 bits = magic, lower 16 bits = MissionState_t */
+#define MISSION_STATE_BKP_REG   BKP_REG_MISSION_STATE
 #define MISSION_STATE_MAGIC     0xA55A0000UL
 #define MISSION_STATE_MASK      0xFFFF0000UL
 
@@ -39,14 +41,14 @@ void MissionState_Init(void)
     s_inited = true;
 
     uint32_t raw = HAL_RTCEx_BKUPRead(&hrtc, MISSION_STATE_BKP_REG);
-    bool dr0_valid = ((raw & MISSION_STATE_MASK) == MISSION_STATE_MAGIC) &&
+    bool bkp_valid = ((raw & MISSION_STATE_MASK) == MISSION_STATE_MAGIC) &&
                      ((raw & 0xFFFFUL) <= (uint32_t)MISSION_FLOAT);
     MissionState_t persisted = (MissionState_t)(raw & 0xFFFFUL);
 
     /* Door anchor (ADR-0006): the session bank decides, not the lone flag.
      * FW-1: the bank is now the Tier-1 credential store — IsRegionJoined()
      * only returns true when a CRC-valid Tier-1 copy supplied the context,
-     * so this anchors to Tier-1 presence even if the DR0 record is corrupt. */
+     * so this anchors to Tier-1 presence even if the DR3 record is corrupt. */
     bool bank_commissioned =
         MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ||
         MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868) ||
@@ -54,10 +56,10 @@ void MissionState_Init(void)
         MultiRegion_IsRegionJoined(LORAMAC_REGION_AU915);
 
     if (bank_commissioned) {
-        /* Bank shows commissioning complete -> FLIGHT, even if DR0 is corrupt */
-        s_state = (dr0_valid && persisted != MISSION_COMMISSIONING)
+        /* Bank shows commissioning complete -> FLIGHT, even if DR3 is corrupt */
+        s_state = (bkp_valid && persisted != MISSION_COMMISSIONING)
                   ? persisted : MISSION_ASCENT;
-    } else if (dr0_valid && persisted != MISSION_COMMISSIONING) {
+    } else if (bkp_valid && persisted != MISSION_COMMISSIONING) {
         /* Bank virgin but state record says flight: ambiguity -> FLIGHT */
         s_state = persisted;
     } else {
@@ -71,11 +73,11 @@ void MissionState_Init(void)
 
     MissionState_Persist();
 
-    SEGGER_RTT_printf(0, "MissionState: %s (bank %s, DR0 %s)\r\n",
+    SEGGER_RTT_printf(0, "MissionState: %s (bank %s, DR3 %s)\r\n",
                       s_state == MISSION_COMMISSIONING ? "COMMISSIONING" :
                       s_state == MISSION_ASCENT ? "FLIGHT-ASCENT" : "FLIGHT-FLOAT",
                       bank_commissioned ? "commissioned" : "virgin",
-                      dr0_valid ? "valid" : "invalid");
+                      bkp_valid ? "valid" : "invalid");
 }
 
 MissionState_t MissionState_Get(void)

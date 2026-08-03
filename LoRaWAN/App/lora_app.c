@@ -1041,7 +1041,10 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   *         Deadman_Check breadcrumbs and resets. COMMISSIONING is exempt:
   *         on the bench a human can sit idle for hours legitimately.
   */
-#define DEADMAN_BKP_REG     RTC_BKP_DR2
+/* R01/R02: DR2 collided with timer_if SysTime MSBTICKS — moved to DR5.
+ * Allocation map lives in backup_regs.h. */
+#include "backup_regs.h"
+#define DEADMAN_BKP_REG     BKP_REG_DEADMAN
 #define DEADMAN_TIMEOUT_S   (3U * 3600U)   /* 3x worst-case cycle (SURVIVAL=1h) */
 
 static void Deadman_MarkProgress(void)

@@ -50,7 +50,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+/* F-001 fatal fault codes (breadcrumb low 16 bits). 1-5 = CPU fault handlers
+ * (stm32wlxx_it.c), 6 = deadman (lora_app.c); 16+ = boot-time fatal errors. */
+#define FAULT_CODE_CLOCK_CONFIG    16U
+#define FAULT_CODE_PAYLOAD_FORMAT  17U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -232,8 +235,10 @@ int main(void)
   // Validate payload format sizes at compile time
   SEGGER_RTT_WriteString(0, "Validating payload format sizes...\r\n");
   if (!PayloadFormat_ValidateSizes()) {
+    /* F-001: a size/layout mismatch is a BUILD bug — every uplink would be
+     * malformed. Breadcrumb + reset so the failure is observable, not silent. */
     SEGGER_RTT_WriteString(0, "ERROR: Payload format size validation failed!\r\n");
-    Error_Handler();
+    Error_Handler_Fatal(FAULT_CODE_PAYLOAD_FORMAT);
   }
   
   // Initialize configuration system
@@ -285,6 +290,13 @@ int main(void)
   /* USER CODE END 3 */
 }
 
+/* R08: RTC clock source actually in use. SystemClock_Config() may fail over
+ * LSE -> LSI when the crystal is dead; the CubeMX-generated HAL_RTC_MspInit()
+ * would otherwise force LSE again via HAL_RCCEx_PeriphCLKConfig(), which
+ * resets the backup domain (wiping ALL backup registers) and re-selects the
+ * dead oscillator. HAL_RTC_MspInit() honors this variable instead. */
+uint32_t g_rtc_clock_source = RCC_RTCCLKSOURCE_LSE;
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -323,13 +335,18 @@ void SystemClock_Config(void)
     RCC_OscInitStruct.LSEState = RCC_LSE_OFF;
     if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
     {
-      Error_Handler();
+      /* F-001: neither LSE nor LSI can be started — no clock tree at all.
+       * Continuing is meaningless; breadcrumb + reset. */
+      Error_Handler_Fatal(FAULT_CODE_CLOCK_CONFIG);
     }
-    /* Switch RTC clock source LSE -> LSI */
+    /* Switch RTC clock source LSE -> LSI (R08: recorded so HAL_RTC_MspInit
+     * does not force LSE again and wipe the backup domain) */
     RCC_PeriphCLKInitTypeDef rtcClk = {0};
     rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
     rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
     HAL_RCCEx_PeriphCLKConfig(&rtcClk);
+    g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
+    SEGGER_RTT_WriteString(0, "WARNING: LSE failed - RTC on LSI (~1% drift)\r\n");
   }
 
   /** Configure the SYSCLKSource, HCLK, PCLK1 and PCLK2 clocks dividers
@@ -345,7 +362,8 @@ void SystemClock_Config(void)
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
-    Error_Handler();
+    /* F-001: CPU/bus clocks not running at the configured rates — fatal. */
+    Error_Handler_Fatal(FAULT_CODE_CLOCK_CONFIG);
   }
 }
 
@@ -748,6 +766,24 @@ void Error_Handler(void)
    * For truly unrecoverable errors, callers should use NVIC_SystemReset() directly. */
   SEGGER_RTT_WriteString(0, "ERROR_HANDLER: Non-fatal error, continuing...\r\n");
   /* USER CODE END Error_Handler_Debug */
+}
+
+/* F-001 (ADR-0001): fatal/recoverable split. Error_Handler() is for
+ * degrade-and-continue faults; Error_Handler_Fatal() is for faults where
+ * continuing produces a silently dead or lying unit (no clock tree, malformed
+ * uplink format). It leaves a fault breadcrumb (surfaced as RESET_CAUSE_FAULT
+ * in the next boot's status byte) and resets — a reset gives the IWDG/deadman
+ * architecture a chance; a hang or a zombie does not.
+ * Codes: 1-5 = CPU fault handlers (stm32wlxx_it.c), 6 = deadman (lora_app.c),
+ * 16+ = boot-time fatal errors below. */
+void Error_Handler_Fatal(uint16_t code)
+{
+  SEGGER_RTT_printf(0, "FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_RTCAPB_CLK_ENABLE();
+  HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
+                      RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
+  NVIC_SystemReset();
 }
 #ifdef USE_FULL_ASSERT
 /**
