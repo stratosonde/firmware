@@ -218,54 +218,39 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
 }
 
 /**
- * @brief Encode bulk telemetry packet from flash records (LIFO order)
+ * @brief Encode bulk telemetry packet from flash records (FIFO order)
+ * @note  FW-20: v2 layout (198 B) — the v1 222 B layout's flash_page_addr /
+ *        voltage_trend / mode_changes placeholders are gone; records carry
+ *        their own timestamp + sequence identity.
  */
 bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                                  const HighResTelemetryRecord_t *records,
-                                 uint8_t record_count,
-                                 uint32_t flash_page_addr,
-                                 const uint8_t *voltage_trend,
-                                 const uint8_t *mode_changes)
+                                 uint8_t record_count)
 {
     if (!packet || !records || record_count == 0) {
         return false;
     }
     
-    SEGGER_RTT_printf(0, "Encoding 222-byte bulk packet with %d records...\r\n", record_count);
+    SEGGER_RTT_printf(0, "Encoding 198-byte bulk packet with %d records...\r\n", record_count);
     
     // Clear packet structure
     memset(packet, 0, sizeof(BulkTelemetryPacket_t));
     
     // Set packet header
-    packet->packet_type = 0x01;  // Version 1 bulk format
+    packet->packet_type = 0x02;  // FW-20: v2 FIFO bulk, no placeholder fields
     packet->record_count = (record_count > 6) ? 6 : record_count;  // Max 6 records
-    packet->flash_page_addr = flash_page_addr;
     
     // Copy high-resolution records (up to 6)
     for (uint8_t i = 0; i < packet->record_count && i < 6; i++) {
         memcpy(&packet->records[i], &records[i], sizeof(HighResTelemetryRecord_t));
     }
     
-    // Add voltage trend if provided
-    if (voltage_trend != NULL) {
-        memcpy(packet->voltage_trend, voltage_trend, 10);
-    } else {
-        memset(packet->voltage_trend, 0, 10);
-    }
-    
-    // Add mode changes if provided  
-    if (mode_changes != NULL) {
-        memcpy(packet->mode_changes, mode_changes, 10);
-    } else {
-        memset(packet->mode_changes, 0, 10);
-    }
-    
     // Calculate CRC32 for packet integrity (exclude CRC32 field itself)
     packet->crc32 = CalculateCRC32((const uint8_t*)packet, sizeof(BulkTelemetryPacket_t) - 4);
     
-    SEGGER_RTT_printf(0, "Bulk packet: Type=%d Records=%d FlashAddr=0x%08lX CRC32=0x%08lX\r\n",
+    SEGGER_RTT_printf(0, "Bulk packet: Type=%d Records=%d CRC32=0x%08lX\r\n",
                       packet->packet_type, packet->record_count, 
-                      packet->flash_page_addr, packet->crc32);
+                      packet->crc32);
     
     return true;
 }
@@ -361,14 +346,14 @@ bool PayloadFormat_ValidateSizes(void)
         valid = false;
     }
     
-    if (sizeof(BulkTelemetryPacket_t) != 222) {
-        SEGGER_RTT_printf(0, "ERROR: BulkTelemetryPacket_t size = %d bytes (expected 222)\r\n",
+    if (sizeof(BulkTelemetryPacket_t) != 198) {
+        SEGGER_RTT_printf(0, "ERROR: BulkTelemetryPacket_t size = %d bytes (expected 198)\r\n",
                           sizeof(BulkTelemetryPacket_t));
         valid = false;
     }
     
     if (valid) {
-        SEGGER_RTT_WriteString(0, "Payload format sizes validated: 11/32/222 bytes\r\n");
+        SEGGER_RTT_WriteString(0, "Payload format sizes validated: 11/32/198 bytes\r\n");
     }
     
     return valid;

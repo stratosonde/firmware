@@ -1720,14 +1720,11 @@ static void SendTxData(void)
             break;
           }
 
-          // Encode bulk packet
+          // Encode bulk packet (FW-20: v2 198 B layout — the always-zero
+          // flash_page/voltage_trend/mode_changes placeholders are gone)
           BulkTelemetryPacket_t bulk_packet;
-          uint8_t dummy_voltage_trend[10] = {0};  // TODO: Implement voltage trend tracking
-          uint8_t dummy_mode_changes[10] = {0};   // TODO: Implement mode change tracking
 
-          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, packed_count,
-                                         0, // TODO: Add flash page tracking
-                                         dummy_voltage_trend, dummy_mode_changes)) {
+          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, packed_count)) {
             
             // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
             LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region

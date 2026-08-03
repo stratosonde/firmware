@@ -13,7 +13,7 @@ The Stratosonde firmware transmits data using multiple LoRaWAN packet formats op
 | **2** | CayenneLPP | Variable | Human-readable debug format | Development only |
 | **3** | GNSS Detail | Variable | Satellite tracking data | Development only |
 | **10** | Compact Binary | 10 bytes | Production telemetry (SF10) | **PRODUCTION** |
-| **11** | Bulk Binary | 222 bytes | Historical data transfer (SF7) | **PRODUCTION** |
+| **11** | Bulk Binary | 198 bytes (v2) | Historical data transfer (SF7) | **PRODUCTION** |
 
 ### Debug Packet Control
 
@@ -204,17 +204,22 @@ print(f"Altitude: {altitude:.1f} m")  # Should be ~1078m (Calgary elevation)
 ## PORT 11: Bulk Binary Packet (PRODUCTION)
 
 ### Description
-222-byte packet for efficient bulk transfer of historical data at SF7 (DR2). Contains up to 6 high-resolution records plus metadata. Transmitted when link quality is good (margin ≥15dB, gateways ≥2) and battery is sufficient (≥5.0V).
+198-byte packet (v2, FW-20) for efficient bulk transfer of historical data at SF7 (DR2). Contains up to 6 high-resolution records. Transmitted when link quality is good (margin ≥15dB, gateways ≥2) and battery is sufficient (≥5.0V). Records are FIFO order (oldest unsent first).
 
-### Packet Structure (222 bytes)
+> **FW-20 layout change:** the v1 222-byte layout carried three permanently-zero
+> placeholder fields (Flash Page Addr 4 B, Voltage Trend 10 B, Mode Changes 10 B
+> = 24 B of SF7 airtime per packet). v2 (packet_type 0x02) deletes them and
+> shrinks the packet to 198 B. Ground decoders must branch on `payload[0]`:
+> `0x01` = legacy 222 B v1 (decode below only for archival logs), `0x02` = v2.
 
-#### Header (6 bytes)
+### Packet Structure v2 (198 bytes)
+
+#### Header (2 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 0 | Packet Type | uint8 | 1 | Format version (0x01 = v1) |
+| 0 | Packet Type | uint8 | 1 | Format version (0x02 = v2 FIFO, no placeholders) |
 | 1 | Record Count | uint8 | 1 | Number of records (1-6) |
-| 2 | Flash Page Addr | uint32 BE | 4 | Source flash address (LIFO tracking) |
 
 #### High-Resolution Records (192 bytes = 6 × 32 bytes)
 
@@ -246,13 +251,15 @@ Each record is 32 bytes:
 | 1-4 | 0x1E | Satellite Count | Satellite count 0-15 (duplicates byte 26) |
 | 5-7 | 0xE0 | Power Mode | Operating mode 0-7 (duplicates byte 28) |
 
-#### Metadata (24 bytes)
+#### Trailer (4 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 198 | Voltage Trend | uint8[10] | 10 | Recent battery samples |
-| 208 | Mode Changes | uint8[10] | 10 | Power mode history |
-| 218 | CRC32 | uint32 BE | 4 | Packet integrity check |
+| 194 | CRC32 | uint32 BE | 4 | Packet integrity check (over bytes 0-193) |
+
+> v1 records started at offset 6; in v2 they start at offset 2 (`2 + i*32`).
+> v1's `flash_page_addr`/`voltage_trend`/`mode_changes` fields are gone —
+> record identity comes from each record's timestamp + sequence.
 
 ### Power Mode Enum
 
@@ -273,28 +280,37 @@ from typing import List, Dict
 
 def decode_bulk_packet(payload: bytes) -> dict:
     """
-    Decode 222-byte bulk telemetry packet from LoRaWAN Port 11
+    Decode bulk telemetry packet from LoRaWAN Port 11 (v2 198 B; v1 legacy 222 B)
     
     Args:
-        payload: 222-byte packet from LoRaWAN
+        payload: bulk packet from LoRaWAN (branch on payload[0]: 0x01 v1, 0x02 v2)
         
     Returns:
         dict with header, records array, metadata, and CRC validation
     """
-    if len(payload) != 222:
-        raise ValueError(f"Expected 222 bytes, got {len(payload)}")
+    # FW-20: v2 is 198 B (packet_type 0x02); v1 legacy is 222 B (0x01)
+    version = payload[0]
+    if version == 0x02:
+        assert len(payload) == 198, f"Expected 198 bytes (v2), got {len(payload)}"
+        header_len = 2
+    elif version == 0x01:
+        assert len(payload) == 222, f"Expected 222 bytes (v1), got {len(payload)}"
+        header_len = 6
+    else:
+        raise ValueError(f"Unknown bulk packet version 0x{version:02X}")
     
     result = {}
     
-    # Parse header (6 bytes)
-    result['packet_type'] = payload[0]
+    # Parse header
+    result['packet_type'] = version
     result['record_count'] = payload[1]
-    result['flash_page_addr'] = struct.unpack('>I', payload[2:6])[0]
+    if version == 0x01:
+        result['flash_page_addr'] = struct.unpack('>I', payload[2:6])[0]
     
     # Parse records (up to 6, each 32 bytes)
     result['records'] = []
     for i in range(min(result['record_count'], 6)):
-        offset = 6 + (i * 32)
+        offset = header_len + (i * 32)
         record_data = payload[offset:offset+32]
         
         # Unpack record
@@ -330,13 +346,15 @@ def decode_bulk_packet(payload: bytes) -> dict:
         
         result['records'].append(record)
     
-    # Parse metadata
-    result['voltage_trend'] = list(payload[198:208])
-    result['mode_changes'] = list(payload[208:218])
-    result['crc32'] = struct.unpack('>I', payload[218:222])[0]
-    
-    # Verify packet CRC
-    calc_packet_crc = calculate_crc32(payload[0:218])
+    # Parse trailer + verify packet CRC
+    if version == 0x01:
+        result['voltage_trend'] = list(payload[198:208])
+        result['mode_changes'] = list(payload[208:218])
+        result['crc32'] = struct.unpack('>I', payload[218:222])[0]
+        calc_packet_crc = calculate_crc32(payload[0:218])
+    else:
+        result['crc32'] = struct.unpack('>I', payload[194:198])[0]
+        calc_packet_crc = calculate_crc32(payload[0:194])
     result['crc32_valid'] = (calc_packet_crc == result['crc32'])
     
     return result
@@ -367,34 +385,33 @@ def calculate_crc32(data: bytes) -> int:
 
 # Example usage
 if __name__ == "__main__":
-    # Create example packet (header + 1 record)
-    example = bytearray(222)
+    # Create example v2 packet (header + 1 record, FW-20 layout)
+    example = bytearray(198)
     
     # Header
-    example[0] = 0x01  # Packet type
+    example[0] = 0x02  # Packet type (v2 FIFO, no placeholders)
     example[1] = 0x01  # 1 record
-    struct.pack_into('>I', example, 2, 0x00000000)  # Flash address
     
-    # Record 1 (32 bytes at offset 6)
-    struct.pack_into('>I', example, 6, 1737848000)  # Timestamp
-    struct.pack_into('>i', example, 10, 4768932)  # Lat binary
-    struct.pack_into('>i', example, 14, -10633288)  # Lon binary
-    struct.pack_into('>H', example, 18, 1078)  # Altitude
-    struct.pack_into('>h', example, 20, 179)  # Temp: 17.9°C
-    struct.pack_into('>H', example, 22, 301)  # Humidity: 30.1%
-    struct.pack_into('>H', example, 24, 8864)  # Pressure: 886.4 hPa
-    struct.pack_into('>H', example, 26, 5606)  # Battery: 5606 mV
-    struct.pack_into('>H', example, 28, 1189)  # Solar: 1189 mV
-    struct.pack_into('>h', example, 30, 0)  # Slope: 0 mV/h
-    example[32] = 9  # Satellites
-    example[33] = 16  # HDOP: 1.6
-    example[34] = 1  # Power mode: NORMAL
-    example[35] = 0x13  # Flags: GPS valid, 9 sats
-    # CRC would be calculated here
+    # Record 1 (32 bytes at offset 2)
+    struct.pack_into('>I', example, 2, 1737848000)  # Timestamp
+    struct.pack_into('>i', example, 6, 4768932)  # Lat binary
+    struct.pack_into('>i', example, 10, -10633288)  # Lon binary
+    struct.pack_into('>H', example, 14, 1078)  # Altitude
+    struct.pack_into('>h', example, 16, 179)  # Temp: 17.9°C
+    struct.pack_into('>H', example, 18, 301)  # Humidity: 30.1%
+    struct.pack_into('>H', example, 20, 8864)  # Pressure: 886.4 hPa
+    struct.pack_into('>H', example, 22, 5606)  # Battery: 5606 mV
+    struct.pack_into('>H', example, 24, 1189)  # Solar: 1189 mV
+    struct.pack_into('>h', example, 26, 0)  # Slope: 0 mV/h
+    example[28] = 9  # Satellites
+    example[29] = 16  # HDOP: 1.6
+    example[30] = 1  # Power mode: NORMAL
+    example[31] = 0x13  # Flags: GPS valid, 9 sats
+    # Record CRC16 would be calculated here (bytes 32:34)
     
     # Packet CRC
-    crc32 = calculate_crc32(bytes(example[0:218]))
-    struct.pack_into('>I', example, 218, crc32)
+    crc32 = calculate_crc32(bytes(example[0:194]))
+    struct.pack_into('>I', example, 194, crc32)
     
     # Decode
     decoded = decode_bulk_packet(bytes(example))
@@ -459,7 +476,7 @@ Typical size: 40-60 bytes (8-12 satellites with speed data)
 
 3. **Bulk transfer trigger** (Port 11):
    - Activated when: margin ≥15dB AND gateways ≥2 AND battery ≥5.0V
-   - Sends 222-byte bulk packets at SF7 (DR3)
+   - Sends 198-byte bulk packets at SF7 (DR3) (v2, FW-20)
    - Up to 20 packets per session
    - Clears flash backlog
 
@@ -484,8 +501,8 @@ CONDITIONS MET: Triggering bulk transfer mode!
 
 Bulk transfer mode: packet 1/20
 Retrieved 1 unsent records from flash
-Encoding 222-byte bulk packet with 1 records...
-Bulk packet: Type=1 Records=1 FlashAddr=0x00000000 CRC32=0xAB9C...
+Encoding 198-byte bulk packet with 1 records...
+Bulk packet: Type=2 Records=1 CRC32=0xAB9C...
 ```
 
 ---

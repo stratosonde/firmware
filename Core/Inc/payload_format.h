@@ -8,7 +8,7 @@
   * This module defines efficient binary packet formats for LoRaWAN transmission:
   * - CompactTelemetryPacket_t: 10-byte packet for SF10 (maximum range w/ LinkCheck)
   * - HighResTelemetryRecord_t: 32-byte record for flash storage  
-  * - BulkTelemetryPacket_t: 222-byte packet for SF7 bulk transfer
+  * - BulkTelemetryPacket_t: 198-byte packet for SF7 bulk transfer (FW-20)
   *
   ******************************************************************************
   */
@@ -31,7 +31,7 @@ extern "C" {
 #define LORAWAN_LPP_PORT          2   // CayenneLPP (development/debug)
 #define LORAWAN_GNSS_DETAIL_PORT  3   // GNSS satellite detail (development/debug) 
 #define LORAWAN_COMPACT_PORT      10  // 10-byte compact binary (SF10 probe) - PRODUCTION
-#define LORAWAN_BULK_PORT         11  // 222-byte bulk binary (SF7 bulk) - PRODUCTION
+#define LORAWAN_BULK_PORT         11  // 198-byte bulk binary (SF7 bulk) - PRODUCTION
 
 /* Compile-time control flags for debug packet formats */
 #ifndef ENABLE_DEBUG_LPP
@@ -124,26 +124,29 @@ typedef struct __attribute__((packed)) {
 } HighResTelemetryRecord_t;   // Total: 32 bytes
 
 /**
- * @brief 222-byte bulk telemetry packet for SF7 transmission
+ * @brief 198-byte bulk telemetry packet for SF7 transmission
  * @note Packs multiple high-resolution records for efficient bulk transfer
- * @note LIFO order (newest records first)
+ * @note Records are FIFO order (oldest unsent first) since the C4 fix
+ *
+ * FW-20: packet_type bumped 0x01 -> 0x02 and the packet shrunk 222 -> 198 B.
+ * The old v1 layout carried three permanently-zero placeholders
+ * (flash_page_addr 4B, voltage_trend 10B, mode_changes 10B = 24 B of
+ * SF7 airtime per packet with zero consumers) and pretended to be LIFO.
+ * Record identity comes from each HighResTelemetryRecord_t's own
+ * timestamp + sequence; if voltage-trend or mode-history telemetry is
+ * ever wanted, implement it as a v3 packet with real producers.
  */
 typedef struct __attribute__((packed)) {
-    uint8_t  packet_type;           // 1 byte - Format version/type identifier
+    uint8_t  packet_type;           // 1 byte - 0x02 = FIFO bulk, no placeholders
     uint8_t  record_count;          // 1 byte - Number of records in this packet
-    uint32_t flash_page_addr;       // 4 bytes - Source flash page (for LIFO tracking)
-    
+
     // High-resolution records (32 bytes each)
-    // 222 - 6 header = 216 bytes available
-    // 216 ÷ 32 = 6 complete records per packet
+    // 198 - 6 header/crc = 192 bytes = 6 complete records per packet
     HighResTelemetryRecord_t records[6];  // 6 × 32 = 192 bytes
-    
-    // Metadata/padding (222 - 198 = 24 bytes remaining)
-    uint8_t  voltage_trend[10];       // 10 bytes - recent voltage samples
-    uint8_t  mode_changes[10];        // 10 bytes - power mode history  
+
     uint32_t crc32;                   // 4 bytes - Packet integrity
-    
-} BulkTelemetryPacket_t;  // Total: 222 bytes (SF7/US915 maximum)
+
+} BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222)
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
@@ -180,21 +183,17 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
                                   OperatingMode_t power_mode);
 
 /**
- * @brief Encode bulk telemetry packet from flash records (LIFO order)
+ * @brief Encode bulk telemetry packet from flash records (FIFO order)
  * @param packet: Destination bulk packet
  * @param records: Array of high-resolution records (up to 6)
  * @param record_count: Number of records to include
- * @param flash_page_addr: Source flash page address
- * @param voltage_trend: Recent voltage samples (10 bytes)
- * @param mode_changes: Power mode history (10 bytes)
  * @retval bool: true if encoding successful
+ * @note  FW-20: flash_page_addr/voltage_trend/mode_changes parameters
+ *        removed — they were always-zero placeholders (v1 222 B layout).
  */
 bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                                  const HighResTelemetryRecord_t *records,
-                                 uint8_t record_count,
-                                 uint32_t flash_page_addr,
-                                 const uint8_t *voltage_trend,
-                                 const uint8_t *mode_changes);
+                                 uint8_t record_count);
 
 /**
  * @brief Decode compact telemetry packet (for ground station)
