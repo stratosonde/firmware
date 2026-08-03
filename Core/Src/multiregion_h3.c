@@ -22,7 +22,11 @@
 #include <stdlib.h>
 
 /* Private defines -----------------------------------------------------------*/
-#define H3_MAX_DISTANCE_KM  500.0f  // Maximum distance to consider for nearest neighbor
+/* Maximum distance to consider for nearest neighbor. findNearestRegions()
+ * reports ~120 km per ring at res 3 (corrected from a ~45%-low figure of
+ * 65 km/ring), and this module searches at most 3 rings, so the largest
+ * reported distance is ~360 km — comfortably under this gate. */
+#define H3_MAX_DISTANCE_KM  500.0f
 
 /* Private variables ---------------------------------------------------------*/
 // Removed static currentRegion - now using MultiRegion_GetActiveRegion() from multiregion_context.c
@@ -55,7 +59,9 @@ LoRaMacRegion_t H3Region_ToLoRaMacRegion(RegionId h3Region)
     if (strcmp(name, "IN865") == 0) return LORAMAC_REGION_IN865;
     if (strcmp(name, "RU864") == 0) return LORAMAC_REGION_RU864;
     if (strcmp(name, "EU433") == 0) return LORAMAC_REGION_EU433;
-    // CD900-1A not currently mapped to standard LoRaMac region
+    /* RESTRICTED (ID 15, repurposed from the CD900-1A test plan slot) is
+     * handled upstream in lora_app.c, which blocks transmission before this
+     * mapping is consulted; it intentionally has no LoRaMac region. */
     
     // Unknown region - keep current
     APP_LOG(TS_ON, VLEVEL_M, "H3: Unknown region '%s', keeping current\r\n", name);

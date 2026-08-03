@@ -1441,6 +1441,10 @@ static void SendTxData(void)
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
       
       /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
+       * NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
+       * field in the packed table could never emit 255; ID 15 was repurposed from
+       * the CD900-1A test plan slot. This macro comparison keeps working because
+       * both sides use the same h3lite.h definition.
        * REGION_UNKNOWN means open ocean or uncovered H3 cells — keep current region and
        * transmit normally (standard convention over international waters). Previously this
        * also blocked UNKNOWN, causing the balloon to go silent over every ocean crossing. */
