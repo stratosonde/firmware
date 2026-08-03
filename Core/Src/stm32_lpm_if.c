@@ -35,6 +35,7 @@
 /* External variables ---------------------------------------------------------*/
 /* USER CODE BEGIN EV */
 extern I2C_HandleTypeDef hi2c2;
+extern W25Q_HandleTypeDef hw25q;  /* defined in main.c */
 extern SPI_HandleTypeDef hspi2;
 extern UART_HandleTypeDef huart1;
 extern SUBGHZ_HandleTypeDef hsubghz;
@@ -125,13 +126,13 @@ void PWR_EnterStopMode(void)
   /* LoRaWAN stack manages radio sleep - we don't touch it */
   
   /* === CRITICAL: Put External Flash into Deep Power-Down === */
-  /* W25Q16JV draws 1-3mA in standby, <1µA in deep power-down */
-  /* This is the PRIMARY fix for 2-4mA sleep current! */
-  //if (hw25q_ptr != NULL && hw25q_ptr->initialized) {
-  //  W25Q_PowerDown(hw25q_ptr);  /* Send 0xB9 command - flash enters deep sleep */
-  //}
-  /* NOTE: If you haven't initialized flash yet, this won't execute */
-  /* To use: Set hw25q_ptr = &your_flash_handle after W25Q_Init() */
+  /* FW-14: this was commented out (dead hw25q_ptr plumbing). hw25q is a
+   * global in main.c, so wire it directly. Deep power-down (0xB9) takes the
+   * flash from ~1-3mA standby to <1uA; the first transaction after wake
+   * re-releases it (see PWR_ExitStopMode). */
+  if (hw25q.initialized) {
+    W25Q_PowerDown(&hw25q);
+  }
   
   /* === I2C2 Power Optimization: DeInit and set pins to ANALOG === */
   /* Prevents ~0.6-1.0mA leakage through external 10kΩ pullups (PA15=SDA, PB15=SCL) */
@@ -326,6 +327,17 @@ void PWR_ExitStopMode(void)
   /* Re-initialize SPI2 - external flash needs this */
   HAL_SPI_DeInit(&hspi2);
   HAL_SPI_Init(&hspi2);
+
+  /* FW-14: wake the flash from deep power-down. tRES1 = 3us max per
+   * datasheet; W25Q_ReleasePowerDown already delays 1ms. */
+  if (hw25q.initialized) {
+    W25Q_ReleasePowerDown(&hw25q);
+  }
+
+  /* FW-15: restore VREFBUF (internal voltage reference) on wake. The
+   * ratiometric VDDA path in SYS_GetBatteryLevel reads VREFINT after every
+   * STOP2 wake; leaving it disabled here silently degrades battery reads. */
+  HAL_SYSCFG_EnableVREFBUF();
   
   /* Re-initialize UART1 only if GPS is powered */
   /* Prevents parasitic power when GPS is off */
