@@ -37,6 +37,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
 static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header);
 static uint32_t FlashLog_GetRecordAddress(FlashLog_HandleTypeDef *hlog, uint32_t record_index);
 static FlashLog_StatusTypeDef FlashLog_EraseSectorIfNeeded(FlashLog_HandleTypeDef *hlog, uint32_t addr);
+static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog);
 
 /* CRC32 Implementation ------------------------------------------------------*/
 
@@ -394,9 +395,58 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         }
     }
     
+    /* FW-12 (ADR-0004): the header checkpoints every HEADER_UPDATE_INTERVAL
+     * records; recover the uncheckpointed tail before trusting the frontier. */
+    if (valid_a || valid_b) {
+        status = FlashLog_FrontierScan(hlog);
+        if (status != FLASH_LOG_OK) {
+            return status;
+        }
+    }
+
     hlog->next_sequence = hlog->record_count;
     hlog->initialized = true;
     
+    return FLASH_LOG_OK;
+}
+
+/**
+  * @brief  FW-12 (ADR-0004): frontier scan. The header is only persisted every
+  *         HEADER_UPDATE_INTERVAL records, so up to that many records can be
+  *         written-but-uncheckpointed when power is cut. Trusting the stale
+  *         header blindly would reuse those sequence numbers and wedge
+  *         MarkRecordsTransmitted. Scan forward from the header write_addr
+  *         across the possible uncheckpointed window (wrap-aware); a record
+  *         whose magic+CRC verifies extends the recovered frontier.
+  * @note   Erase-ahead means the next-record slot reads 0xFF (magic check
+  *         fails fast); a CRC failure here is a torn record at the true
+  *         frontier, not an error.
+  */
+static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog)
+{
+    FlashLog_Record_t probe;
+
+    if (hlog->record_count == 0) {
+        return FLASH_LOG_OK;
+    }
+
+    for (uint32_t i = 0; i < HEADER_UPDATE_INTERVAL; i++) {
+        if (W25Q_Read(hlog->hw25q, hlog->write_addr,
+                      (uint8_t *)&probe, sizeof(probe)) != W25Q_OK) {
+            return FLASH_LOG_ERROR_FLASH;  /* real hardware error */
+        }
+        if (!FlashLog_VerifyRecord(&probe)) {
+            break;  /* erased or torn slot: frontier found */
+        }
+        hlog->write_addr += FLASH_LOG_RECORD_SIZE;
+        if (hlog->write_addr >= FLASH_LOG_DATA_END) {
+            hlog->write_addr = FLASH_LOG_DATA_START;
+        }
+        hlog->record_count++;
+        if (hlog->record_count > FLASH_LOG_MAX_RECORDS) {
+            hlog->oldest_addr = hlog->write_addr;
+        }
+    }
     return FLASH_LOG_OK;
 }
 
