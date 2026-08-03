@@ -21,6 +21,22 @@ Date:              2026-08-03
 
 ---
 
+## 0. Fix-status addendum (2026-08-03, commit `db4330d`, pushed to origin/master)
+
+**Gate 1 — all six flight blockers (§10 items ①–⑥) are implemented and build-verified.** Build: `text 180740 + data 924 + bss 22888`; binary 181,664 B = 177.4 KiB (~71 % of the 256 KB flash; pages 120–127 / top 16 KB remain reserved for session banks). Items below carry **FIXED (code) @ db4330d** markers. Per the process note (§9 item 6): these are *code* fixes verified by compilation and source inspection — the **bench gates (hardware verification: GPS-fix register dumps, LSE kill, NDTR fault injection, join-timeout soak) are still PENDING**, and readiness-matrix rows must not be flipped to FIXED until those artifacts exist.
+
+Residuals / deviations from the recommended fixes, honestly noted:
+- **R23:** checksums corrected in place (PCAS02 `*2E`, PCAS04 `*1E`, PCAS12 `*1E`) rather than switching to runtime `snprintf` + `GNSS_CalculateChecksum()` construction; the Appendix-A script is not yet wired as a pre-commit guard. Runtime construction remains the preferred hardening.
+- **F-001:** minimal split landed — `Error_Handler()` still degrades-and-continues (ADR-0001); new `Error_Handler_Fatal(uint16_t code)` breadcrumbs DR4 (`0xF17B0000|code`) and resets. Fatal call sites: LSE+LSI double clock failure, `HAL_RCC_ClockConfig` failure, `PayloadFormat_ValidateSizes` failure (codes 16, 17). **The two false-success prints (`main.c:198-202`) are NOT yet fixed** and W25Q/h3lite/FlashLog init failures intentionally remain recoverable (R29's "make W25Q fatal" deferred).
+- **R30/D6:** landed as a 5-minute per-join timeout (`JOIN_TIMEOUT_MS`) + `join_success_count` gating `MissionState_EnterFlight()`. D6's finer points — 3-attempts/~120 s bound, wiring `MultiRegion_InitializeRegionFromChirpstack()` to an RTT command, `LoRaWAN_Init()` acting on the return value — are **not** implemented.
+- **F-011:** the minimum fix (modulo head wrap) landed; the preferred absolute producer/consumer counters remain open with R27/F-012.
+- **R01/R02:** implemented exactly as specified (`Core/Inc/backup_regs.h`: DR0–DR2 reserved for ST SysTime; mission state→DR3, fault breadcrumb→DR4, deadman→DR5).
+- **R08:** implemented exactly as specified (`g_rtc_clock_source` file-scope, set in `SystemClock_Config`, honored in `HAL_RTC_MspInit`).
+- **R24:** implemented exactly as specified (`GNSS_CMD_FIX_MODE` deleted with the "last write wins; only `,5`" warning comment).
+
+---
+
+
 ## 1. Cross-reference map (overlap between the two reviews)
 
 | F item | R item(s) | Relationship |
@@ -58,17 +74,19 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 
 ## 3. P0 findings — must fix before any flight
 
-### R01 — Deadman corrupts RTC time base → reset loop in FLIGHT — **CONFIRMED (P0)**
+### R01 — Deadman corrupts RTC time base → reset loop in FLIGHT — **CONFIRMED (P0)** — **FIXED (code) @ db4330d**
 
 **Evidence at HEAD.** `lora_app.c:1044` `#define DEADMAN_BKP_REG RTC_BKP_DR2`; `timer_if.c:100` `#define RTC_BKP_MSBTICKS RTC_BKP_DR2`. Same TAMP register. `Deadman_MarkProgress()` (`lora_app.c:1047-1052`) writes RTC *seconds* into DR2; `TIMER_IF_GetTime()` (`timer_if.c:400-422`) reads DR2 as the upper 32 bits of a 1024 Hz tick count: `ticks = (MSB<<32) + lsb; seconds = ticks >> 10`. `TIMER_IF_Init()` (`timer_if.c:201`) writes MSBticks=0 every boot, so the first `Deadman_Check()` seeds DR2 with plausible seconds (e.g. 1000); the next `TIMER_IF_GetTime()` computes ≈ `(1000 mod 1024) << 22` ≈ 4.2×10⁹ s; `now - last > DEADMAN_TIMEOUT_S (10800)` → `NVIC_SystemReset()` (`lora_app.c:1068-1073`) → loop forever. Invisible in COMMISSIONING (`lora_app.c:1065` early return). Collateral: flash record timestamps, voltage-slope `now_timestamp`, compact `timestamp_min`, and `SysTimeGet()` inside LoRaMac are all poisoned after the first deadman write.
 
 **Fix.** One change with R02: move the deadman to a free backup register (DR3+; STM32WLE5 has 32 TAMP backup registers — confirm count) behind a single `backup_regs.h` ownership header. Do not route through TIMER_IF helpers — the register itself is the conflict.
 
-**Tests.** Force `MISSION_ASCENT` on bench; log `TIMER_IF_GetTime()` across the first `Deadman_MarkProgress()`; confirm no reset loop and sane timestamps.
+**Tests.** Force `MISSION_ASCENT` on bench; log `TIMER_IF_GetTime()` across the first `Deadman_MarkProgress()`; confirm no reset loop and sane timestamps. **[BENCH GATE PENDING]**
+
+**Fix landed @ db4330d.** Deadman moved to DR5 (`BKP_REG_DEADMAN`) via the new `Core/Inc/backup_regs.h` ownership map; DR0–DR2 now exclusively reserved for ST SysTime. One commit with R02 as specified.
 
 ---
 
-### R02 — All three ST-reserved backup registers are double-booked — **CONFIRMED (P0)**
+### R02 — All three ST-reserved backup registers are double-booked — **CONFIRMED (P0)** — **FIXED (code) @ db4330d**
 
 **Evidence at HEAD.**
 
@@ -82,11 +100,13 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 
 **Fix.** Single `Core/Inc/backup_regs.h` owning the map: DR0–DR2 reserved for ST SysTime/timer; `BKP_MISSION_STATE=DR3`, `BKP_RESET_CAUSE=DR4`, `BKP_DEADMAN=DR5`. One commit with R01. Compile-time conflict next time instead of silent corruption.
 
-**Tests.** Dump DR0–DR5 across a GPS fix and across reset; mission-state magic and fault breadcrumb survive; `SysTimeGet()` monotonic.
+**Tests.** Dump DR0–DR5 across a GPS fix and across reset; mission-state magic and fault breadcrumb survive; `SysTimeGet()` monotonic. **[BENCH GATE PENDING]**
+
+**Fix landed @ db4330d.** Exactly as specified: `Core/Inc/backup_regs.h` owns the map (DR0–DR2 reserved ST SysTime; `BKP_REG_MISSION_STATE`=DR3, `BKP_REG_RESET_CAUSE_FAULT`=DR4, `BKP_REG_DEADMAN`=DR5); `mission_state.c` (incl. log strings), `reset_cause.h`, and `lora_app.c` all reference the shared symbols.
 
 ---
 
-### R23 — Four of eight hardcoded NMEA checksums are wrong — **CONFIRMED (P0)**
+### R23 — Four of eight hardcoded NMEA checksums are wrong — **CONFIRMED (P0)** — **FIXED (code) @ db4330d** *(with deviation)*
 
 **Evidence at HEAD.** Re-computed by script against `Core/Inc/atgm336h.h:165-174`:
 
@@ -101,23 +121,29 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 
 **Fix.** Build sentences at runtime with the existing `GNSS_CalculateChecksum()` (`atgm336h.c:798`): `snprintf(buf, "$%s*%02X\r\n", body, cs)`. Add the review's Appendix-A script as a host test/pre-commit guard. **Must land in the same change as R24.**
 
+**Fix landed @ db4330d (deviation).** Landed in the same commit as R24. Checksums corrected **in place** (`PCAS02,1000 *2E`; `PCAS04,7 *1E`; `PCAS12,0 *1E`; the `PCAS11,2` row is moot — the command was deleted with R24) rather than switching to runtime construction. Runtime `snprintf` construction and the pre-commit checksum guard remain **open** as hardening. Bench confirmation that tri-constellation/1 Hz now apply requires a live ATGM336H. **[BENCH GATE PENDING]**
+
 ---
 
-### R24 — `$PCAS11,2` is pedestrian mode and overwrites airborne mode — **CONFIRMED (P0)**
+### R24 — `$PCAS11,2` is pedestrian mode and overwrites airborne mode — **CONFIRMED (P0)** — **FIXED (code) @ db4330d**
 
 **Evidence at HEAD.** `GNSS_Configure()` (`atgm336h.c:208-276`) sends `GNSS_CMD_AIRBORNE_MODE` (`$PCAS11,5`, checksum OK, applied) at step 3 and `GNSS_CMD_FIX_MODE` (`$PCAS11,2`) at step 6. PCAS11 is the navigation dynamic model — a single setting, last write wins; `,2` = pedestrian (CASIC table: 0 portable, 1 stationary, 2 pedestrian, 3 automotive, 4 sea, 5 airborne<1g). There is no "Auto 2D/3D" selector on PCAS11; the header comment (`atgm336h.h:170`) is fabricated. The only thing preserving airborne mode today is R23's broken checksum on step 6. Fixing R23 alone re-imposes the 18 km CoCom ceiling and ends the flight at the tropopause.
 
 **Fix (same commit as R23).** Delete `GNSS_CMD_FIX_MODE` and its send block; comment at the PCAS11 definition: *"single value, last write wins; only `,5` is valid for this mission; never send any other PCAS11 value."* Add a grep guard. Then fix checksums.
 
+**Fix landed @ db4330d.** Exactly as specified: `GNSS_CMD_FIX_MODE` and its send block deleted (grep-verified, no references remain); the recommended "last write wins / only `,5`" warning comment is in place at the PCAS11 definition. Grep guard not yet wired into CI. **[BENCH GATE PENDING — confirm airborne mode sticks on hardware]**
+
 ---
 
-### F-011 — GNSS DMA head can equal buffer size → non-terminating consumer loop — **CONFIRMED (P0, timing-rare)**
+### F-011 — GNSS DMA head can equal buffer size → non-terminating consumer loop — **CONFIRMED (P0, timing-rare)** — **FIXED (code) @ db4330d** *(minimum fix)*
 
 **Evidence at HEAD.** `atgm336h.c:518-519`: `dma_head = GNSS_DMA_BUFFER_SIZE - __HAL_DMA_GET_COUNTER(...)`. When NDTR==0 (readable in the window between transfer-complete and hardware reload in circular mode), `dma_head = 512`. The consumer loop (`:565-601`) advances `dma_tail = (tail+1) % 512`, so tail ∈ [0,511] and can **never** equal 512 → `while (dma_tail != dma_head)` never exits. The acquisition loop's `HAL_IWDG_Refresh` is outside this inner loop, so the hang becomes an IWDG reset ~32.8 s later. Rare (one unlucky NDTR sample) but per-flight probable over thousands of calls.
 
 **Fix.** Minimum: `hgnss->dma_head = (GNSS_DMA_BUFFER_SIZE - dma_remaining) % GNSS_DMA_BUFFER_SIZE;`. Preferred (with R27): absolute producer/consumer counters from half/full callbacks.
 
-**Tests.** Host-test the ring arithmetic for NDTR ∈ {512, 1, 0}; fault-inject NDTR=0 on bench.
+**Tests.** Host-test the ring arithmetic for NDTR ∈ {512, 1, 0}; fault-inject NDTR=0 on bench. **[BENCH/HOST GATE PENDING]**
+
+**Fix landed @ db4330d.** Minimum fix applied: `hgnss->dma_head = (uint16_t)((GNSS_DMA_BUFFER_SIZE - dma_remaining) % GNSS_DMA_BUFFER_SIZE);` — head now stays in [0,511] so the consumer loop always terminates. The preferred absolute producer/consumer counters remain open with R27/F-012.
 
 ---
 
@@ -125,7 +151,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 
 | ID | Disposition | Sev | Evidence at HEAD | Fix / notes |
 |---|---|---|---|---|
-| F-001 | **CONFIRMED** | Critical | `main.c` `Error_Handler()` logs and returns ("Degrade-and-continue… ADR-0001"); ~20 init call sites continue after failure (e.g. `main.c:198-202` prints "H3Lite initialized successfully" even when init failed; `main.c:206-230` proceeds to `FlashLog_Init` after W25Q failure). Mitigations exist: IWDG armed early (FW-5), deadman, breadcrumbing fault handlers. R08 shows a case (dead LSE) where continue-after-error flies with a stopped RTC. | Split fatal vs recoverable: `_Noreturn Fatal_Reset(reason)` (breadcrumb → safe outputs → bounded log flush → `NVIC_SystemReset`) for clock/flash/radio/bus init; explicit degraded mode for optional sensors. Fix the two false-success prints regardless. |
+| F-001 | **CONFIRMED — FIXED (code) @ db4330d (minimal split; residual open)** | Critical | `main.c` `Error_Handler()` logs and returns ("Degrade-and-continue… ADR-0001"); ~20 init call sites continue after failure (e.g. `main.c:198-202` prints "H3Lite initialized successfully" even when init failed; `main.c:206-230` proceeds to `FlashLog_Init` after W25Q failure). Mitigations exist: IWDG armed early (FW-5), deadman, breadcrumbing fault handlers. R08 shows a case (dead LSE) where continue-after-error flies with a stopped RTC. | Split fatal vs recoverable: `_Noreturn Fatal_Reset(reason)` (breadcrumb → safe outputs → bounded log flush → `NVIC_SystemReset`) for clock/flash/radio/bus init; explicit degraded mode for optional sensors. Fix the two false-success prints regardless. |
 | F-002 | **CONFIRMED** | High→Low | `config.c:114-116`: `Config_Save()` returns `CONFIG_ERROR_PARAM` when `!g_config_initialized`; `Config_Init()` calls it at `:63` before the flag is set at `:70`. First-boot defaults are never persisted; the recovery path repeats every boot. Benign (defaults in RAM are valid; no flash wear — the save aborts before erase) but exactly the reported defect. | Private `Config_WriteInternal()` not gated on the public flag; set the flag after load-valid or defaults-committed. |
 | F-003 | **CONFIRMED (latent)** | High→Low | `config.c:166-169, 334-338`: zeroes `crc32` then hashes `sizeof-4`; but `crc32` is at offset 8 (`config.h:67-72`), so the last 4 bytes (`reserved[12..15]`) are unprotected. Both sides agree today → validation passes; activates on any struct tail change. | Hash the full zeroed-copy struct; bump `CONFIG_VERSION`; add `_Static_assert` on size. |
 | F-004 | **PARTIAL** | Critical→Med | Durable path is correct: bulk records are marked only in `OnTxData` on `LORAMAC_EVENT_INFO_STATUS_OK` (`lora_app.c:1907-1916`); `LmHandlerSend` failure leaves the watermark alone (`:1766-1769`). But: (a) the debug `PacketQueue` pops before send and ignores the status (`:1931-1941`) — compiled out by default; (b) a failed probe send drops the packet with no retry (`:1665-1668`) — acceptable for a probe, undocumented; (c) the delivery semantic is "radio TX completed" for unconfirmed uplinks — records can be marked delivered with no gateway reception (see N-04). | Document the delivery semantic; peek/submit/commit for the debug queue; optionally retry probe once on `PAYLOAD_LENGTH_ERROR` (see R04 option c). |
@@ -135,7 +161,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 | F-008 | **CONFIRMED** | High | `flash_log.c:429-431`: `FlashLog_FrontierScan` returns immediately when `record_count == 0`. Fresh init writes a valid count-0 header (`:392`); records 1–9 written before the first 10-record checkpoint are then orphaned by power loss (write_addr reused, records overwritten). | Delete the early return — the scan is bounded (≤10 probes) and safe from `DATA_START`. Test: power loss after each of records 1–9. |
 | F-009 | **CONFIRMED (latent)** | Critical→Med | `flash_log.c:665-692`: `FlashLog_EraseAll` resets write/oldest/count/next_sequence but **not** `last_transmitted_sequence` → new records appear already-delivered; bulk transfer permanently disabled. Also 512 sector erases × ≤400 ms with no IWDG refresh ≫ 32.76 s watchdog. Currently **uncalled** (grep-verified) → latent. | Reset the full logical state incl. watermark; IWDG refresh per sector; wire to a commissioning-only command or delete. (= R14/F-022.) |
 | F-010 | **CONFIRMED** | High→Med | `flash_log.c:491`: `record.sequence = hlog->next_sequence++` executes before the flash write (`:523`); a failed write consumes a sequence number → gap. Self-heals (FIFO read CRC-skips the gap, advancing the watermark) but violates the contiguity assumption and wastes a probe cycle. | Increment only after write success (+ optional read-back). |
-| F-011 | **CONFIRMED** | Critical | See §3. | `% buffer_size` minimum fix; absolute counters preferred. |
+| F-011 | **CONFIRMED — FIXED (code) @ db4330d (minimum fix)** | Critical | See §3. | `% buffer_size` minimum fix; absolute counters preferred. |
 | F-012 | **CONFIRMED** | High | = R27. `atgm336h.c:828-846`: half/full callbacks only set a flag; no wrap/epoch counting; `head==tail` cannot distinguish "empty" from "one full lap behind". 512 B buffer = 533 ms at 9600 baud; R26 shows the stream is at/over capacity. Silent NMEA loss; checksum catches splices silently (no counter). | Track producer/consumer totals; on `producer-consumer > 512` declare overrun, resync at next `$`, count it, surface in status byte (ADR-0007). |
 | F-013 | **CONFIRMED** | Critical (protocol) | = R05. `payload_encode.c:432-442`: `(pressure-950)/10`, negatives clamped to 0 → 900/500/200/100/50/10 hPa all encode 0; the doc decodes 0 as 950 hPa (R42). Primary altitude proxy dead for the whole flight. | See Decision D2. |
 | F-014 | **CONFIRMED** | Critical→Med | = R16. `adc_if.c:276`: `HAL_ADC_PollForConversion(&hadc, HAL_MAX_DELAY)`; a stalled ADC blocks until IWDG reset; same failure after reboot = reset loop. Also ~10 full ADC init/calibrate cycles per `EnvSensors_Read` (each channel read = `MX_ADC_Init`+calibrate+config+start+poll+stop+DeInit; `SYS_GetBatteryVoltage` internally re-reads VREFINT), and `EnvSensors_Read` runs twice per cycle. | Bounded timeout (10 ms) + `ADC_STATUS_TIMEOUT`; never encode 0 as valid voltage; consolidate acquisition (A-001). |
@@ -151,7 +177,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 | F-024 | **CONFIRMED** | High→Med | `payload_encode.c:167,279`: `(uint16_t)sensors->altitudeGps` — −500 m → 65036 m on the wire. Also `sys_sensors.h:46-47`: `altitudeGps int16_t` overflows at 32.77 km (mission goes to 40 km per `main.c` comments); `altitudeBar int16_t m*10` overflows at 3.28 km (R06). | Signed wire field or documented offset+saturation; widen GPS altitude to int32 in the flash record (14 reserved bytes exist) with a record-version bump. See Decision D5. |
 | F-025 | **CONFIRMED** | High→Med | = R19. `payload_encode.c:288`: `highres_record->solar_voltage = 0` ("Not stored in FlashLog_Record_t yet"); `:289,296` stamp **today's** slope and power mode onto historical records. | Add `solar_mv`, `voltage_slope`, `power_mode` to `FlashLog_Record_t` (reserved space exists) or drop the fields from the wire record. Decision D5. |
 | F-026 | **PARTIAL** | High | EU868/AS923 mappings verified correct against in-tree tables; **AU915 wrong** (= R03, confirmed: `DataratesAU915={12,11,10,9,8,7…}` → SF10=DR_2, SF7=DR_5; code returns DR_0/DR_3). AS923-2..4 not compiled. | Table-driven SF→DR resolver searching the region's own `Datarates*[]`; runtime `PHY_MAX_PAYLOAD` guard before send. |
-| F-027 | **CONFIRMED** | High | = R30. `multiregion_context.c:1032-1054`: unbounded join wait, IWDG refreshed, spins forever; sequential US915→EU868→AS923→AU915 means commissioning can never complete at any single location; `MissionState_EnterFlight()` (`:1166`) unreachable; `all_success` discarded by caller (`lora_app.c:484`); `MultiRegion_InitializeRegionFromChirpstack()` has **no callers**. | Decision D6. |
+| F-027 | **CONFIRMED — FIXED (code) @ db4330d (partial D6)** | High | = R30. `multiregion_context.c:1032-1054`: unbounded join wait, IWDG refreshed, spins forever; sequential US915→EU868→AS923→AU915 means commissioning can never complete at any single location; `MissionState_EnterFlight()` (`:1166`) unreachable; `all_success` discarded by caller (`lora_app.c:484`); `MultiRegion_InitializeRegionFromChirpstack()` has **no callers**. | Decision D6. |
 | F-028 | **BY-DESIGN (decision needed)** | Medium | `mission_state.c:68-70`: reboot in ASCENT restarts the 3 h timer (`s_ascent_start_tick = HAL_GetTick()`), commented "intentional and documented" (FW-3 constraint). Repeated resets indefinitely defer FLOAT cadence — safe direction (more uplinks), but F-028's concern is real. | Decision D8: persist cumulative ascent elapsed (a backup register is free after R02) vs accept restart. |
 | F-029 | **CONFIRMED** | High→Med | `stm32_lpm_if.c:300-363`: `PWR_ExitStopMode` re-inits DMA, I2C2, SPI2, W25Q release, VREFBUF, UART1 with **zero status checks**; a failed re-init is used blind until the next fault. Compounded by R07 (this runs every 25 s). | Subsystem capability mask + bounded recovery; fatal deps → recorded reset; optional → degraded state. |
 | F-030 | **CONFIRMED** | Medium | `sys_sensors.c:303`: `EnvSensors_Read` always `return 0`. Staleness flags exist and are good (FW-7/F9), but the top-level return hides total acquisition failure; both call sites ignore it anyway. | Per-sensor status bitmask return; distinguish fresh/stale/invalid/never-acquired. |
@@ -160,7 +186,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 
 ## 5. R-findings matrix (R01…R44)
 
-### P0 (covered in §3): R01, R02, R23, R24 — all CONFIRMED.
+### P0 (covered in §3): R01, R02, R23, R24 — all CONFIRMED — all FIXED (code) @ db4330d.
 
 ### P1
 
@@ -171,7 +197,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 | R05 | **CONFIRMED** | `payload_encode.c:432-442` — see F-013. `ConvertPressureToCompact(75.0f)==0`. | **Decision D2.** Regenerate decoder + `PayloadFormats.md` in the same change (R40–R42). Also revisit `humidity_5pct` (too coarse for UT/LS science). |
 | R06 | **CONFIRMED** | `lora_app.c:1127` `sensor_t sensor_data;` (uninitialized); `EnvSensors_Read` (`sys_sensors.c:160-305`) never assigns `altitudeBar` (grep-verified tree-wide); `flash_log.c:503` writes it into a CRC-covered record → indeterminate data archived as authentic (ADR-0007 violation, UB). Width: `altitudeGps int16_t` overflows 32.77 km; `altitudeBar int16_t m*10` overflows 3.28 km. | `= {0}` at both call sites (necessary, not sufficient); **Decision D5** on field fate; widen/saturate with flag. |
 | R07 | **CONFIRMED** | `stm32_lpm_if.c:275-276` reads `EXTI->PR1` bits 19/17. CMSIS `stm32wle5xx.h` defines `EXTI_PR1_PIF0…PIF16` then jumps to `PIF21/PIF22` — lines 17–20 are direct lines with **no pending bit**; and the wakeup timer is line **20** (`stm32wlxx_hal_rtc_ex.h` `RTC_EXTI_LINE_WAKEUPTIMER_EVENT = EXTI_IMR1_IM20`), not 19. Both tests always false → full `PWR_ExitStopMode()` peripheral re-init every 25 s (~12× per 5-min cycle): DMA, I2C, SPI, W25Q release, VREFBUF wait (R17), vcom, LED (R09). The F2 comment claims this exact symptom was fixed. | Latch wake source in `HAL_RTCEx_WakeUpTimerEventCallback` / the Alarm-A callback (timer_if USER block); test the latches; keep the 150-chunk bound. Bench: scope a GPIO in `PWR_ExitStopMode`. |
-| R08 | **CONFIRMED** | `main.c:317-333` LSE→LSI failover sets `RCC_RTCCLKSOURCE_LSI`; later `HAL_RTC_MspInit` (`stm32wlxx_hal_msp.c:239-245`) unconditionally requests LSE; `HAL_RCCEx_PeriphCLKConfig` forces a **backup-domain reset** when the source differs (wiping mission state, reset cause, deadman, SysTime) and selects the dead LSE → `HAL_RTC_Init` times out → `Error_Handler()` no-ops → flying with a stopped RTC. Worse than no failover. Readiness-matrix F3 row says FIXED (bench gate B3 PENDING). | File-scope `g_rtc_clock_source` set in `SystemClock_Config`, honored in `HAL_RTC_MspInit`. Bench: kill LSE, confirm RTC runs on LSI and backup regs survive. |
+| R08 | **CONFIRMED — FIXED (code) @ db4330d** | `main.c:317-333` LSE→LSI failover sets `RCC_RTCCLKSOURCE_LSI`; later `HAL_RTC_MspInit` (`stm32wlxx_hal_msp.c:239-245`) unconditionally requests LSE; `HAL_RCCEx_PeriphCLKConfig` forces a **backup-domain reset** when the source differs (wiping mission state, reset cause, deadman, SysTime) and selects the dead LSE → `HAL_RTC_Init` times out → `Error_Handler()` no-ops → flying with a stopped RTC. Worse than no failover. Readiness-matrix F3 row says FIXED (bench gate B3 PENDING). | File-scope `g_rtc_clock_source` set in `SystemClock_Config`, honored in `HAL_RTC_MspInit`. Bench: kill LSE, confirm RTC runs on LSI and backup regs survive. |
 | R09 | **CONFIRMED** | `stm32_lpm_if.c:122,306`: PA0 LED driven LOW on sleep entry, HIGH on every wake — in flight, contra F25/ADR-0008 (LEDs commissioning-only). On for the whole GPS window (see R25), whole TX cycle, and every 25 s chunk wake (R07). | Gate on `MissionState_IsCommissioning()`; drive PA0 analog/low in flight sleep. Measure current delta over one work cycle. |
 | R10 | **CONFIRMED** | `lora_app.c:1136,1160`: `SelectModeFromPredictions` receives **normalized** voltage; the absolute floor `:815` (`< 4300 → SURVIVAL`) is defeated by up to +2700 mV of compensation at −66 °C — a real 3.6 V pack at −60 °C normalizes to ~4.4 V and never trips. Also: comp table non-monotonic (`{-40,700}` then `{-50,400}`, `:676-677`); normalization ignores `temp_stale` (`:1136`); no hysteresis (`:1161` direct assignment; `power_mode_hysteresis` config dead — R36); `slope < -5 → REDUCED` (GPS off) regardless of state of charge (`:833`). | Raw voltage to the absolute floor, normalized to slope/prediction (signature takes both); fix/re-derive the −50 °C entry + build-time monotonicity check; gate normalization on `!temp_stale`; add hysteresis + SoC term. Table-test the mode function across the temp/voltage grid. |
 | R25 | **CONFIRMED (structural); bench-gate for magnitude** | `atgm336h.c:1197-1198`: `GNSS_EnterStandby` drives **both** PB10 and PB5 low → no backup rail → cold start every cycle (~30–35 s, MCU held awake by `UTIL_LPM_SetStopMode(...DISABLE)`). The PCAS12 "persists ephemeris" rationale is doubly unfounded: the checksum is wrong (R23) so it never arrives, and PCAS12 is a standby-entry command, not an ephemeris save. Comments at `atgm336h.c:1100-1105,1116-1120`, `stm32_lpm_if.c:194-198`, `lora_app.c:1243-1246` all repeat the claim. Likely the largest single power-budget item. | **Measure first** (highest-value bench test): log `ttf_ms` over 20 cycles; repeat with PB10 held HIGH / only PB5 cut; measure standby current. Then fix comments, fix or drop PCAS12, re-tune `gps_timeout_*`. |
@@ -179,7 +205,7 @@ F-items with no R counterpart: F-002, F-008, F-010, F-011, F-016–F-021, F-023,
 | R27 | **CONFIRMED** | = F-012. | See F-012. |
 | R28 | **CONFIRMED** | `ms5607.c:234-237`: proceeds when `!IsInitialized` ("DIAGNOSTIC MODE"); `:315-318`: logs on `d1==0||d2==0||d1<1000||d2<1000` then **continues**; `d1==0` → `p = (-off)>>15` → large negative pressure returned as `MS5607_OK` → `sys_sensors.c:203-208` caches it as last-known-good and clears the stale flag — poisons the FW-7 mechanism at its design failure mode. (SHT31 CRC-8 checks are correct — accepted from the review; no plausibility gate there either.) | Return `MS5607_ERROR` on both branches; plausibility gate before cache accept (`1–1200 hPa`, `−90…+85 °C`); same gate for SHT31. |
 | R29 | **CONFIRMED** | `w25q16jv.c:91-152`: `W25Q_Init` verifies JEDEC ID but never reads SR1 block-protect bits (`0x7C`) or SR2 SRL. With BP set: WriteEnable succeeds, PageProgram is ignored by the device, BUSY never asserts, `W25Q_WaitReady` returns OK immediately, no read-back exists anywhere → `FlashLog_WriteRecord` returns OK forever while storing nothing. Also: only 3 `initialized` references in the file — public entry points check `hw25q==NULL` but not `hw25q->initialized`; `main.c:214-230` calls the no-op `Error_Handler` on W25Q failure then runs `FlashLog_Init` on an unconfigured handle. | Read SR1 in init; clear or distinct-error on BP; log SR1/SR2; post-init write/read-back self-test reported at boot; `if (!hw25q->initialized) return W25Q_ERROR_INIT;` on public entries; make W25Q-init failure fatal (F-001 split). |
-| R30 | **CONFIRMED** | = F-027. | **Decision D6.** |
+| R30 | **CONFIRMED — FIXED (code) @ db4330d (partial D6)** | = F-027. Landed: 5-min per-join `JOIN_TIMEOUT_MS` bound (skip to next region on timeout) + `join_success_count` gating `MissionState_EnterFlight()` (zero joins → stays in COMMISSIONING, power-cycle to retry). Not landed: 3-attempts/~120 s bound, `MultiRegion_InitializeRegionFromChirpstack()` wiring, `LoRaWAN_Init()` acting on the return value. | **Decision D6.** |
 
 ### P2
 
@@ -300,7 +326,7 @@ Bound each region's join (e.g. 3 attempts / ~120 s), mark unprovisioned, continu
 
 ## 10. Merged work order
 
-**Gate 1 — flight blockers (P0):** ① R01+R02 (backup_regs.h) ② R24→R23 (one change) ③ F-011 (one-line minimum) ④ R30/D6 (else launch-ready state is unreachable) ⑤ R08 (LSE failover honored by MspInit) ⑥ F-001 minimal split (fatal init paths → `Fatal_Reset`; fixes R08's boot-loop interaction and the false-success prints).
+**Gate 1 — flight blockers (P0): ✅ DONE @ db4330d (build-verified; bench gates pending — see §0).** ① ✅ R01+R02 (`Core/Inc/backup_regs.h`) ② ✅ R24→R23 (one commit; checksums fixed in place — runtime construction still open) ③ ✅ F-011 (minimum modulo fix; absolute counters open with R27) ④ ✅ R30/D6 (join bound + flight-entry gating; D6 finer points open) ⑤ ✅ R08 (`g_rtc_clock_source` honored by `HAL_RTC_MspInit`) ⑥ ✅ F-001 minimal split (`Error_Handler_Fatal(code)` → DR4 breadcrumb → reset; **false-success prints still open**).
 
 **Gate 2 — power budget:** ⑦ R25/D7 (measure TTF first — likely dominates everything) ⑧ R26 (GSV off) ⑨ R07 (wake-source latches) ⑩ R09 (LED gating) ⑪ R17, R39, R16/F-014+A-001 (spin/wake/ADC cost).
 
