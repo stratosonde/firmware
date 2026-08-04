@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    mission_state.c
-  * @brief   Minimal one-way mission state machine (T3 / ADR-0008)
+  * @brief   Minimal one-way mission state machine (T3 / DDR-0008)
   ******************************************************************************
   * State persists in RTC backup register DR3 (survives reset, not power loss
   * without VBAT backup — hence the door anchor, not the register, decides).
@@ -45,7 +45,7 @@ void MissionState_Init(void)
                      ((raw & 0xFFFFUL) <= (uint32_t)MISSION_FLOAT);
     MissionState_t persisted = (MissionState_t)(raw & 0xFFFFUL);
 
-    /* Door anchor (ADR-0006): the session bank decides, not the lone flag.
+    /* Door anchor (DDR-0006): the session bank decides, not the lone flag.
      * FW-1: the bank is now the Tier-1 credential store — IsRegionJoined()
      * only returns true when a CRC-valid Tier-1 copy supplied the context,
      * so this anchors to Tier-1 presence even if the DR3 record is corrupt. */
@@ -103,7 +103,7 @@ void MissionState_EnterFlight(void)
 
 void MissionState_Update(void)
 {
-    /* ASCENT -> FLOAT by timer (ADR-0008: cannot be fooled by any sensor) */
+    /* ASCENT -> FLOAT by timer (DDR-0008: cannot be fooled by any sensor) */
     if (s_state == MISSION_ASCENT &&
         (HAL_GetTick() - s_ascent_start_tick) >= MISSION_ASCENT_DURATION_MS) {
         s_state = MISSION_FLOAT;

@@ -48,7 +48,7 @@
 #include "config.h"
 #include "mission_state.h"
 #include "reset_cause.h"      /* F13a: deadman breadcrumb register */
-#include "stm32_systime.h"    /* F12: SysTimeSet (ADR-0003) */
+#include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0003) */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -422,7 +422,7 @@ void LoRaWAN_Init(void)
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
 
-  /* T3 (ADR-0008): decide mission state now that the session bank is loaded —
+  /* T3 (DDR-0008): decide mission state now that the session bank is loaded —
    * the bank, not a lone flag, anchors the one-way door. Idempotent. */
   MissionState_Init();
   
@@ -440,7 +440,7 @@ void LoRaWAN_Init(void)
     }
   }
   
-  /* F22 FIX (ADR-0008): GNSS reconfiguration is COMMISSIONING-ONLY.
+  /* F22 FIX (DDR-0008): GNSS reconfiguration is COMMISSIONING-ONLY.
    * PCAS03/04/05/11 are saved to the GNSS module's internal flash via PCAS00 —
    * writing that flash on every boot wears it for zero benefit. */
   if (MissionState_IsCommissioning()) {
@@ -485,11 +485,11 @@ void LoRaWAN_Init(void)
 
       APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
     } else {
-      /* T1 ladder (ADR-0006), rung 3: FLIGHT with a virgin session bank means
+      /* T1 ladder (DDR-0006), rung 3: FLIGHT with a virgin session bank means
        * RF silence. Keep flying the profile — GPS, flash logging, timers —
        * but never attempt a join. */
       APP_LOG(TS_ON, VLEVEL_H, "FLIGHT: no valid session bank - RF silence, logging only\r\n");
-      SEGGER_RTT_WriteString(0, "FLIGHT MODE with no saved session: RF SILENCE (ADR-0006)\r\n");
+      SEGGER_RTT_WriteString(0, "FLIGHT MODE with no saved session: RF SILENCE (DDR-0006)\r\n");
     }
   }
 
@@ -1035,7 +1035,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 }
 
 /**
-  * @brief  F13a (ADR-0001): progress deadman. SendTxData is the only place a
+  * @brief  F13a (DDR-0001): progress deadman. SendTxData is the only place a
   *         full work cycle provably begins — mark RTC seconds here. If the
   *         sequencer/timer wedges (no cycle for 3x the worst-case interval),
   *         Deadman_Check breadcrumbs and resets. COMMISSIONING is exempt:
@@ -1077,7 +1077,7 @@ void Deadman_Check(void)
 }
 
 /**
-  * @brief  F12 (ADR-0003): discipline system time from a good GPS fix so flash
+  * @brief  F12 (DDR-0003): discipline system time from a good GPS fix so flash
   *         records carry absolute UTC epoch seconds instead of boot-relative
   *         time. GPS is the only trustworthy clock source on the balloon.
   *         date = DDMMYY, timestamp = HHMMSS (NMEA RMC).
@@ -1172,7 +1172,7 @@ static void SendTxData(void)
   const SystemConfig_t *config = Config_Get();
   int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
   
-  /* F9/T2 (ADR-0007): stale/unknown temperature is treated as COLD — the GPS
+  /* F9/T2 (DDR-0007): stale/unknown temperature is treated as COLD — the GPS
    * stays locked out. Fail safe, not fail sunny: a temp-sensor glitch must
    * never fire the GPS during the dawn brownout the lockout exists to prevent. */
   if (sensor_data.temp_stale || temperature_c < gps_lockout_temp) {
@@ -1225,7 +1225,7 @@ static void SendTxData(void)
 
   /* ========== END POWER MANAGEMENT ========== */
   
-  /* T1 ladder (ADR-0006): rejoin is a COMMISSIONING-ONLY operation.
+  /* T1 ladder (DDR-0006): rejoin is a COMMISSIONING-ONLY operation.
    * In FLIGHT, an invalid session means RF silence — keep flying the profile
    * (GPS + flash logging below), skip only the transmission. */
   bool rf_silence = false;
@@ -1394,7 +1394,7 @@ static void SendTxData(void)
         /* GPS timeout - use last known position if available */
         if (have_previous_fix)
         {
-          /* F8/T2 (ADR-0007): last-known-good position still flows, but the
+          /* F8/T2 (DDR-0007): last-known-good position still flows, but the
            * GPS-stale bit is set so nothing downstream mistakes it for live. */
           SEGGER_RTT_WriteString(0, "GPS: Timeout - using last known position (STALE)\r\n");
           hgnss.data.latitude = last_valid_lat;
@@ -1419,7 +1419,7 @@ static void SendTxData(void)
       last_valid_alt = hgnss.data.altitude;
       have_previous_fix = true;
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
-      SysTimeSyncFromGnss();            /* F12 (ADR-0003): epoch seconds */
+      SysTimeSyncFromGnss();            /* F12 (DDR-0003): epoch seconds */
       SEGGER_RTT_WriteString(0, "GPS: Fix acquired and stored as last known position\r\n");
     }
     
@@ -1626,7 +1626,7 @@ static void SendTxData(void)
   
   SEGGER_RTT_printf(0, "Adaptive TX: State=%d\r\n", g_tx_state);
 
-  /* T1 (ADR-0006): RF silence skips the entire transmit state machine —
+  /* T1 (DDR-0006): RF silence skips the entire transmit state machine —
    * GPS acquisition and flash logging above have already run. */
   if (rf_silence) {
     g_tx_state = TX_STATE_PROBE_SF10;  /* keep state machine parked */

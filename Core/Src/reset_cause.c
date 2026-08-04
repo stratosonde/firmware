@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    reset_cause.c
-  * @brief   Reset cause capture and condensation (F13b / ADR-0007)
+  * @brief   Reset cause capture and condensation (F13b / DDR-0007)
   ******************************************************************************
   */
 

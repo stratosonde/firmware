@@ -171,19 +171,19 @@
 
 ## PHASE 3 — Session integrity
 
-### 17. FW-1 — ADR-0006 Tier-1/Tier-2 session storage
+### 17. FW-1 — DDR-0006 Tier-1/Tier-2 session storage
 - **Goal:** eliminate the single-page erase→write window that can destroy every region's credentials (dawn brownout → permanent RF silence), and add wear leveling. Corrects the falsely-FIXED T1 matrix row.
 - **Verified evidence:** `Core/Src/multiregion_context.c` — `#define MULTIREGION_FLASH_BASE_ADDR 0x0803F800` (single page 127); `FlashWriteStorage()` does `FLASH_IF_Erase` then `FLASH_IF_Write` of one `MultiRegionStorage_t` (keys **and** counters together) every `FRAME_COUNTER_SAVE_INTERVAL` (10) TXs. Flash map documented in `Core/Inc/config.h` (pages 125/126/127 used); linker reserves 6 KB (`STM32WLE5JCIX_FLASH.ld`: `FLASH … LENGTH = 250K`).
 - **Change:**
   - **Tier 1 (immutable credentials per region: DevAddr, NwkSKey, AppSKey, DevEUI, region params):** written once at commissioning as **three redundant, independently CRC'd copies** in dedicated pages never erased in flight. Commissioning reads back and CRC-verifies all three after writing. Restore repairs a bad copy from a good one.
-  - **Tier 2 (frame counters only):** separate area, ping-pong between two slots with erase-before-write (ADR-0004). Preserve the verified counter-margin scheme (`ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL` on save) exactly.
+  - **Tier 2 (frame counters only):** separate area, ping-pong between two slots with erase-before-write (DDR-0004). Preserve the verified counter-margin scheme (`ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL` on save) exactly.
   - **Degrade ladder (per region):** restore fail → retry redundant copies → keys good/counter bad → counter = last persisted + margin → credentials unrecoverable → RF silence **in that region only**, keep logging, resume on entering a region with a valid session.
   - **Door anchoring:** virgin bank → COMMISSIONING; Tier-1 copies present → FLIGHT even if the DR0 state record is corrupt. Ambiguity resolves to FLIGHT.
   - **Flash map:** extend the reserved region (e.g. pages 120–127 = 16 KB: 3× Tier-1 pages + 2× Tier-2 slots + existing 125/126/127), shrink linker `FLASH` to `240K`, update the map comments in `config.h` and the `.ld`.
 - **Constraints:** depends on item 10/16's ~22 KB saving landing first (current usage 239,096 B vs 240 K boundary). Keep C6 margin logic untouched.
 - **Acceptance:** bench — power-cut during a Tier-2 save × 50 iterations: credentials survive every time; counter resumes ≥ pre-cut value. (Bench gate B5 extended.)
 - **Files:** `Core/Src/multiregion_context.c`, `Core/Inc/multiregion_context.h`, `Core/Inc/config.h`, `STM32WLE5JCIX_FLASH.ld`, `docs/ProductionReadinessAssessment.md`
-- **Commit:** `FW-1: two-tier session storage per ADR-0006 (redundant credentials + ping-pong counters)`
+- **Commit:** `FW-1: two-tier session storage per DDR-0006 (redundant credentials + ping-pong counters)`
 
 ---
 
@@ -204,7 +204,7 @@
 - **Files:** `LoRaWAN/App/lora_app.c` (+ `VoltageSlope_t` definition wherever declared — confirm header when editing), `docs/ProductionReadinessAssessment.md`
 - **Commit:** `FW-6: minimum delta-t for voltage slope computation`
 
-### 20. FW-7 — Pressure data honesty (ADR-0007)
+### 20. FW-7 — Pressure data honesty (DDR-0007)
 - **Goal:** MS5607 gets the same last-known-good + stale-bit treatment SHT31 got in F9; a failed read never transmits 1000.0 hPa (sea level) as real float-altitude science data.
 - **Verified evidence:** `Core/Src/sys_sensors.c` — `PRESSURE_DEFAULT_VAL 1000.0f` substituted on failure with no stale flag; sentinel check `I2C_NoteResult((!th_stale) || (PRESSURE_Value != PRESSURE_DEFAULT_VAL))` also mis-counts a legitimate 1000.0 hPa reading as failure. `FlashLog_Record_t.flags` reserved field exists (`Core/Inc/flash_log.h`); uplink status byte has unused bits.
 - **Change:**
@@ -212,7 +212,7 @@
   2. Track a real `ms_ok` boolean for the read result; replace the sentinel comparison.
   3. Propagate `press_stale` through `sensor_t` → `FlashLog_Record_t.flags` → uplink status byte (next unused bit).
 - **Files:** `Core/Src/sys_sensors.c`, `LoRaWAN/App/lora_app.c`, `Core/Inc/flash_log.h`, `Core/Src/payload_encode.c` (status byte bit), `docs/ProductionReadinessAssessment.md`
-- **Commit:** `FW-7: pressure last-known-good + stale flag (ADR-0007)`
+- **Commit:** `FW-7: pressure last-known-good + stale flag (DDR-0007)`
 
 ### 21. FW-9 — `FindContextSlot()` region-sentinel collision
 - **Goal:** an AS923 (enum 0) lookup can't match an all-zeros empty slot.
@@ -242,7 +242,7 @@
 
 ### 24. FW-12 — Flash-log frontier scan on init
 - **Goal:** an unexpected reset no longer AND-corrupts up to 9 tail records (header persists every `HEADER_UPDATE_INTERVAL`=10, verified `Core/Src/flash_log.c`).
-- **Change:** in `FlashLog_Init`, scan forward from the header's `write_addr` while magic+CRC pass and sequence is contiguous; adopt the true frontier (ADR-0004's sequence-discontinuity detection). Zero record loss.
+- **Change:** in `FlashLog_Init`, scan forward from the header's `write_addr` while magic+CRC pass and sequence is contiguous; adopt the true frontier (DDR-0004's sequence-discontinuity detection). Zero record loss.
 - **Files:** `Core/Src/flash_log.c`, `docs/ProductionReadinessAssessment.md`
 - **Commit:** `FW-12: scan to true write frontier on flash log init` (bench: power-cut mid-write recovery, extends gate B1)
 

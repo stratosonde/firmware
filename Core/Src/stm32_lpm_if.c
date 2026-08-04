@@ -70,7 +70,7 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* IWDG Chunked Sleep Configuration (ADR-0001: Forward Progress Always)
+/* IWDG Chunked Sleep Configuration (DDR-0001: Forward Progress Always)
  * IWDG timeout = (4095 × 256) / 32000 ≈ 32.76 seconds
  * Wake interval must be safely below this to refresh the watchdog.
  * RTC Wakeup Timer: RTCCLK/16 = 32768/16 = 2048 Hz */
@@ -218,7 +218,7 @@ void PWR_EnterStopMode(void)
   LL_PWR_ClearFlag_C1STOP_C1STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
-  /* === IWDG Chunked Sleep (ADR-0001: Forward Progress Always) ===
+  /* === IWDG Chunked Sleep (DDR-0001: Forward Progress Always) ===
    * Problem: IWDG timeout is ~32.76s, but sleep periods can be 5+ minutes.
    *   Without chunked sleep, IWDG resets the MCU during STOP2.
    * Solution: Use RTC Wakeup Timer to wake every 25s, refresh IWDG,

@@ -12,7 +12,7 @@
   *      transmitted watermark advances monotonically (see C4/F15)
   *   4. Expandable: 64-byte records with reserved space for future fields
   *
-  * Memory Layout (2MB W25Q16JV), T4 / ADR-0004:
+  * Memory Layout (2MB W25Q16JV), T4 / DDR-0004:
   *   Sector 0 (4KB):    Header A (ping-pong copy 1)
   *   Sector 1 (4KB):    Header B (ping-pong copy 2 — separate sector so one
   *                      erase can never kill both copies)

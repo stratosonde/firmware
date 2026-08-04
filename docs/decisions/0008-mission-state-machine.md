@@ -1,4 +1,4 @@
-# ADR-0008: Minimal One-Way Mission State Machine
+# DDR-0008: Minimal One-Way Mission State Machine
 
 **Status:** Accepted
 **Date:** 2026-08-01
@@ -14,10 +14,10 @@ Two states, one optional sub-phase, all transitions one-way and never toward hig
 - **No descent behavior.** A storm, pressure excursion, or sensor fault could fake a descent; acting on it could kill the pack on a false trigger. The device keeps flying its float profile.
 
 ### Persistence and the door
-State is persisted; on reboot the door-anchoring rule from ADR-0006 applies: the Tier-1 session bank decides, and **ambiguity resolves to FLIGHT** — a mid-air reboot must never land in commissioning.
+State is persisted; on reboot the door-anchoring rule from DDR-0006 applies: the Tier-1 session bank decides, and **ambiguity resolves to FLIGHT** — a mid-air reboot must never land in commissioning.
 
 ### Telemetry
-Current state rides the status byte (ADR-0007, b6–b7).
+Current state rides the status byte (DDR-0007, b6–b7).
 
 ## Consequences
 - Single build: no `#ifdef FLIGHT_BUILD`; all gating is runtime mission state.

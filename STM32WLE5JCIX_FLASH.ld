@@ -46,7 +46,7 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
  * These are written at runtime and MUST NOT be occupied by code or rodata,
  * otherwise an erase would destroy the firmware image.
  *
- *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/ADR-0006)
+ *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/DDR-0006)
  *   0x0803C800  page 121 - Tier-1 credentials copy B
  *   0x0803D000  page 122 - Tier-1 credentials copy C
  *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)

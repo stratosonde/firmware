@@ -1,4 +1,4 @@
-# ADR-0002: Safe-to-Fly Out of the Box
+# DDR-0002: Safe-to-Fly Out of the Box
 
 **Status:** Accepted  
 **Date:** 2026-07-30  

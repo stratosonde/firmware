@@ -1,4 +1,4 @@
-# ADR-0006: Session Integrity — Two-Tier Storage and the One-Way Commissioning Door
+# DDR-0006: Session Integrity — Two-Tier Storage and the One-Way Commissioning Door
 
 **Status:** Accepted
 **Date:** 2026-08-01
@@ -32,5 +32,5 @@ COMMISSIONING vs FLIGHT is decided by the session bank, not a lone flag: virgin 
 
 ## Consequences
 - `MultiRegionStorage_t` is split: Tier-1 bank (3 copies) and Tier-2 counter area become separate flash structures with separate write policies.
-- All join call sites (`MultiRegion_JoinRegion`, `MultiRegion_PreJoinAllRegions`, and the `LmHandlerJoin` fallback in `SendTxData`) are gated on mission state (ADR-0008).
+- All join call sites (`MultiRegion_JoinRegion`, `MultiRegion_PreJoinAllRegions`, and the `LmHandlerJoin` fallback in `SendTxData`) are gated on mission state (DDR-0008).
 - "Transmit US915 over Europe" becomes unreachable: no valid session for the region under the balloon ⇒ silence.

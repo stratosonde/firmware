@@ -51,7 +51,7 @@ extern "C" {
 #define GPS_SATS_MASK         0x1E  // Bits 1-4: Satellite count (0-15)
 #define POWER_MODE_MASK       0xE0  // Bits 5-7: Power mode (0-7)
 
-/* Status byte (byte 11) bit masks for compact uplink — T2/ADR-0007 */
+/* Status byte (byte 11) bit masks for compact uplink — T2/DDR-0007 */
 #define STATUS_GPS_STALE_MASK      0x01  // Bit 0: GPS position is last-known-good
 #define STATUS_TEMP_STALE_MASK     0x02  // Bit 1: temperature is last-known-good
 #define STATUS_HUM_STALE_MASK      0x04  // Bit 2: humidity is last-known-good
@@ -85,8 +85,8 @@ extern "C" {
  * @note Optimized for maximum range transmission at SF10
  * @note Includes battery voltage (required since DevStatusAns is on-demand only)
  * @note Altitude calculated on ground station from pressure + temperature
- * @note F17/T2 (ADR-0007): status byte restored as byte 11 — LinkCheck rides
- *       FOpts (ADR-0005), so the payload byte is free. Carries stale bits,
+ * @note F17/T2 (DDR-0007): status byte restored as byte 11 — LinkCheck rides
+ *       FOpts (DDR-0005), so the payload byte is free. Carries stale bits,
  *       condensed reset cause, and mission state.
  */
 typedef struct __attribute__((packed)) {
@@ -98,7 +98,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
     uint8_t  humidity_5pct;     // Humidity / 5% resolution (1 byte) - 0-100% in 20 steps
     uint8_t  status;            // Status byte (1 byte) - stale bits + reset cause + mission state
-} CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, ADR-0005)
+} CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, DDR-0005)
 
 /**
  * @brief High-resolution telemetry record for flash storage

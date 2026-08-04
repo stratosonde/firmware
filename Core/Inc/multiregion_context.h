@@ -8,7 +8,7 @@
   * This module provides context save/restore and seamless switching between
   * LoRaWAN regions (US915, EU868, AS923, etc.) without requiring re-joins.
   *
-  * Persistence (FW-1 / ADR-0006, version 2) is two-tier:
+  * Persistence (FW-1 / DDR-0006, version 2) is two-tier:
   *   Tier-1: immutable per-region credentials (DevAddr/DevEUI/session keys),
   *           three redundant CRC'd copies in dedicated pages, written once
   *           at commissioning and never erased in flight.
@@ -56,7 +56,7 @@ extern "C" {
 
 /* Magic number for flash storage validation */
 #define MULTIREGION_MAGIC                0xDEADBEEF
-#define MULTIREGION_VERSION              2  // v2 = two-tier storage (FW-1/ADR-0006)
+#define MULTIREGION_VERSION              2  // v2 = two-tier storage (FW-1/DDR-0006)
 
 /* Exported types ------------------------------------------------------------*/
 

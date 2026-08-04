@@ -1,4 +1,4 @@
-# ADR-0003: RTC is Flywheel, GPS is Master Clock
+# DDR-0003: RTC is Flywheel, GPS is Master Clock
 
 **Status:** Accepted  
 **Date:** 2026-07-30  

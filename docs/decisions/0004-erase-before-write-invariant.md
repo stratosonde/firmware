@@ -1,4 +1,4 @@
-# ADR-0004: Erase-Before-Write Invariant for NOR Flash
+# DDR-0004: Erase-Before-Write Invariant for NOR Flash
 
 **Status:** Accepted  
 **Date:** 2026-07-30  

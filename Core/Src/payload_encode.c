@@ -28,7 +28,7 @@
 
 /* GPS coordinate conversion factors */
 #define GPS_BINARY_TO_DEGREES       (90.0f / 8388607.0f)  // Convert sensor_t binary to degrees
-/* DEGREES_TO_100M_RESOLUTION removed — replaced by full-range int16 scaling (see ADR-0005) */
+/* DEGREES_TO_100M_RESOLUTION removed — replaced by full-range int16 scaling (see DDR-0005) */
 #define LAT_SCALE_FACTOR  (32767.0f / 90.0f)   // Maps ±90° to full int16 range (~300m resolution)
 #define LON_SCALE_FACTOR  (32767.0f / 180.0f)  // Maps ±180° to full int16 range (~550m resolution at equator)
 
@@ -98,8 +98,8 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     // Convert battery voltage (REQUIRED - DevStatusAns is on-demand only)
     packet->battery_volt_50mv = ConvertBatteryVoltageToCompact(sensors->battery_voltage);
 
-    /* F17/T2 (ADR-0007): status byte restored as byte 11. LinkCheck rides
-     * FOpts (ADR-0005), so the payload byte is free again.
+    /* F17/T2 (DDR-0007): status byte restored as byte 11. LinkCheck rides
+     * FOpts (DDR-0005), so the payload byte is free again.
      * b0 GPS stale, b1 temp stale, b2 humidity stale,
      * b3-b4 condensed reset cause (FW-7: 2-bit), b5 pressure stale (FW-7),
      * b6-b7 mission state. */

@@ -54,7 +54,7 @@ typedef struct
    float battery_voltage;  /*!< battery voltage in volts */
    float regulator_voltage; /*!< regulator voltage (VDDA/3.3V rail) in volts */
    float solar_voltage;    /*!< solar panel voltage in volts */
-   /* T2/ADR-0007 data honesty: a reading carries its own freshness.
+   /* T2/DDR-0007 data honesty: a reading carries its own freshness.
     * 1 = value is last-known-good (or default), NOT a live read. */
    uint8_t temp_stale;     /*!< temperature is stale (SHT31 read failed) */
    uint8_t hum_stale;      /*!< humidity is stale (SHT31 read failed) */
@@ -99,7 +99,7 @@ int32_t EnvSensors_Init(void);
  int32_t EnvSensors_Read(sensor_t *sensor_data);
 
 /**
-  * @brief  Mark GNSS position data as stale/fresh (T2 / ADR-0007).
+  * @brief  Mark GNSS position data as stale/fresh (T2 / DDR-0007).
   *         Called by the TX path: true on fix timeout (last-known-good in
   *         use), false on a real fix. Stale at boot until first fix.
   */

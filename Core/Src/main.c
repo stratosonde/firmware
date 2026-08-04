@@ -167,7 +167,7 @@ int main(void)
 
   /* F13b: Capture condensed reset cause (RCC->CSR + fault breadcrumb) once,
    * early, then clear flags so the next boot reads clean. Surfaced in the
-   * uplink status byte (ADR-0007). */
+   * uplink status byte (DDR-0007). */
   ResetCause_CaptureBoot();
 
   /* USER CODE BEGIN SysInit */
@@ -278,7 +278,7 @@ int main(void)
     MX_LoRaWAN_Process();
 
     /* USER CODE BEGIN 3 */
-    /* F13a (ADR-0001): progress deadman — if no work cycle has started for
+    /* F13a (DDR-0001): progress deadman — if no work cycle has started for
      * 3x the worst-case interval in FLIGHT, breadcrumb + reset. No-op in
      * COMMISSIONING. Defined in lora_app.c. */
     extern void Deadman_Check(void);
@@ -328,7 +328,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    /* F3 FIX (ADR-0001): a dead/frozen LSE crystal must not be a reboot loop.
+    /* F3 FIX (DDR-0001): a dead/frozen LSE crystal must not be a reboot loop.
      * Fail over to LSI for the RTC clock and keep flying — timers drift by
      * ~1% instead of the mission ending. The event is observable via the
      * low-power/fault telemetry path at next uplink. */
@@ -760,7 +760,7 @@ static void MX_GPIO_Init(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* Degrade-and-continue: log the error, never halt (ADR-0001).
+  /* Degrade-and-continue: log the error, never halt (DDR-0001).
    * At 40 km altitude, a hang is permanent death.
    * Do NOT disable interrupts — IWDG must remain active.
    * For truly unrecoverable errors, callers should use NVIC_SystemReset() directly. */
@@ -768,7 +768,7 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 
-/* F-001 (ADR-0001): fatal/recoverable split. Error_Handler() is for
+/* F-001 (DDR-0001): fatal/recoverable split. Error_Handler() is for
  * degrade-and-continue faults; Error_Handler_Fatal() is for faults where
  * continuing produces a silently dead or lying unit (no clock tree, malformed
  * uplink format). It leaves a fault breadcrumb (surfaced as RESET_CAUSE_FAULT

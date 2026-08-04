@@ -39,7 +39,7 @@ extern "C" {
   *          erase a neighbouring page and destroy its contents.
   *
   * Internal flash page map (256KB device, 2KB pages):
-  *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/ADR-0006)
+  *   0x0803C000  page 120 - Tier-1 credentials copy A  (FW-1/DDR-0006)
   *   0x0803C800  page 121 - Tier-1 credentials copy B
   *   0x0803D000  page 122 - Tier-1 credentials copy C
   *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)

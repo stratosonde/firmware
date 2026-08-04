@@ -1,4 +1,4 @@
-# ADR-0001: Forward Progress Always
+# DDR-0001: Forward Progress Always
 
 **Status:** Accepted  
 **Date:** 2026-07-30  

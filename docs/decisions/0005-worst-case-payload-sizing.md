@@ -1,4 +1,4 @@
-# ADR-0005: Worst-Case Region Payload Sizing
+# DDR-0005: Worst-Case Region Payload Sizing
 
 **Status:** Accepted  
 **Date:** 2026-07-30  

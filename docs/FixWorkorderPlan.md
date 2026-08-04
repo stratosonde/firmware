@@ -3,7 +3,7 @@
 **Date:** 2026-08-01
 **Source:** `archive/stratosonde-fix-workorder-2026-07-31.md` (workorder, supersedes raw review)
 **Base commit:** `181f997`
-**Status:** Static plan. For live status see `ProductionReadinessAssessment.md`. For design rationale see `docs/adr/0006-0008`.
+**Status:** Static plan. For live status see `ProductionReadinessAssessment.md`. For design rationale see `docs/decisions/0006-0008`.
 
 ---
 
@@ -24,17 +24,17 @@
 | F9 cheerful defaults | `sys_sensors.c:93-95,145-147,167`: SHT31 fail → +18 °C / 50 %RH. Feeds −55 °C lockout (`lora_app.c:1016`) and `NormalizeBatteryVoltage`. |
 | F10 bulk conversion | Partially disagree on mechanism: `ConvertFlashLogToHighRes` (`payload_encode.c:277`) memsets destination first, so failure ships **zeros**, not uninitialized stack. Still a data-honesty violation; same fix (early-out `continue`). |
 | F11 record-before-fix | `lora_app.c`: `EnvSensors_Read` (972) → `FlashLog_WriteRecord` (1053) → GPS fix (1137+) → re-read (1340). Archived record carries previous cycle's position with current timestamp. |
-| F12 no absolute time | `SysTimeSet` only called inside LoRaMac middleware (Class B/DeviceTimeAns), never by app. ADR-0003 accepted but unimplemented. |
+| F12 no absolute time | `SysTimeSet` only called inside LoRaMac middleware (Class B/DeviceTimeAns), never by app. DDR-0003 accepted but unimplemented. |
 | F14 flash ring cluster | All three confirmed: headers @ 0x0000/0x0100 ping-pong in sector 0, no erase (`flash_log.c:16-17,253-257`); `next_sequence = record_count` reuse (`:373`); reader returns at first CRC error (`:157-158`). |
 | F15 off-by-one | `flash_log.c:181-183`: clamps to `next_sequence - 1`. Newest record unmarkable → perpetual retransmit. |
 | F16 hardcoded DR | `lora_app.c:1441` DR_0 probe, `:1520` DR_3 bulk. DR integers region-relative: EU868 DR3 = SF9 (~115 B max) → 222 B bulk always rejected. Fix: express as SF, resolve per region at runtime; verify map against in-tree `Region*.c`. |
-| F17 status byte | `payload_encode.c:99` removal comment present; ADR-0005 mandates 10+1=11 B. Byte free. |
+| F17 status byte | `payload_encode.c:99` removal comment present; DDR-0005 mandates 10+1=11 B. Byte free. |
 | F18 VDDA constant | `adc_if.c:200` `* 3300 / 4096 * 2` while `SYS_GetBatteryLevel` (`:147-168`) already measures true VDDA via VREFINT. **Same bug in `SYS_GetSolarVoltage` (`:228`)** — fold into same ratiometric fix. |
 | F19 solar threshold | Grepped all consumers: `solar_charging_threshold` exists only in `config.c:224` (write) and `config.h:89` (declaration). Zero readers — decorative knob. **Decision: delete it.** Raw `solar_mv` telemetry already flows; re-derive from bench data if ever needed. |
 | F20 no I2C recovery | No bit-bang recovery anywhere; sensors not power-gated. Standard 9-clock SCL recovery. |
 | F22 GPS config every boot | `lora_app.c:426` `GNSS_Configure` runs in `LoRaWAN_Init` every boot, ending with PCAS00 flash-save (`atgm336h.c:264-270`). Comment at `sys_sensors.c:149-150` misleading. |
 | F23/F24/F25 hygiene | `TEST_UltraMinimal_STOP2` at `main.c:108` (one uncomment from boot); SOS EXTI3 then PB3 reconfigured analog (`main.c:757-761` vs `:788-792`) + dead `StopJoin`; LED + `HAL_Delay(50)` in `EnvSensors_Read` (`sys_sensors.c:187-189`). |
-| F26 flash_log.h comment | Header comment describes ping-pong-in-sector-0 — contradicts ADR-0004. Fix in T4 pass. |
+| F26 flash_log.h comment | Header comment describes ping-pong-in-sector-0 — contradicts DDR-0004. Fix in T4 pass. |
 | F27 float printf | No `-u _printf_float` in `.cproject`/build scripts; `snprintf("%.1f…")` at `lora_app.c:1019,1032,1190` prints garbage under newlib-nano. Fix: integer prints (no linker change). |
 | F28 docs lie | `ProductionReadinessAssessment.md` claims P0-5/6 FIXED while joins are commented out. Doc described aspiration, not code. |
 
@@ -45,12 +45,12 @@
 
 ---
 
-## 2. Design decisions (see ADRs)
+## 2. Design decisions (see DDRs)
 
-- **ADR-0006** — Session integrity & one-way commissioning door (T1). Fills the gap: today keys + frame counters share ONE internal-flash page (`MultiRegionStorage_t`), single copy, single CRC — every counter save erases/rewrites the page holding the keys. No redundancy, no tier split, no door anchor.
-- **ADR-0007** — Data honesty: stale bits + restored status byte (T2).
-- **ADR-0008** — Minimal one-way mission state machine (T3).
-- T4 flash ring: ADR-0004 already exists; implement verbatim.
+- **DDR-0006** — Session integrity & one-way commissioning door (T1). Fills the gap: today keys + frame counters share ONE internal-flash page (`MultiRegionStorage_t`), single copy, single CRC — every counter save erases/rewrites the page holding the keys. No redundancy, no tier split, no door anchor.
+- **DDR-0007** — Data honesty: stale bits + restored status byte (T2).
+- **DDR-0008** — Minimal one-way mission state machine (T3).
+- T4 flash ring: DDR-0004 already exists; implement verbatim.
 
 ## 3. Implementation phases
 
@@ -64,12 +64,12 @@ Single build. No `#ifdef FLIGHT_BUILD`. All gating by runtime mission state.
 5. F23/F24/F25 deletions (brick-trap test fn, SOS/StopJoin residue, flight-path LED/delay)
 6. F19 delete `solar_charging_threshold` (zero consumers)
 
-**Phase 2 — Data honesty (T2 / ADR-0007)**
+**Phase 2 — Data honesty (T2 / DDR-0007)**
 7. Sensor last-known-good cache + stale bits (F9); lockout treats stale temp as COLD
 8. GPS stale bit through flash record + uplink (F8)
 9. Status byte restored as byte 11 (F17): b0 GPS stale, b1 temp stale, b2 humidity stale, b3–b5 reset cause (from `RCC->CSR`), b6–b7 mission state (F13b) — **FW-7 amended**: reset cause condensed to 2-bit b3–b4 (POR/BOR+LP / IWDG / SW+PIN / FAULT), b5 = pressure stale
 
-**Phase 3 — Mission state + session integrity (T3+T1 / ADR-0006/0008)**
+**Phase 3 — Mission state + session integrity (T3+T1 / DDR-0006/0008)**
 10. Minimal state machine; door anchored to Tier-1 bank; ambiguity → FLIGHT
 11. Gate ALL join paths (F4 loop + `lora_app.c:1068` rejoin) to COMMISSIONING; restore all-region commissioning joins (F5); flight degrade ladder → per-region RF silence
 12. Gate GNSS_Configure + PCAS00 to COMMISSIONING (F22); fix lying comment
@@ -81,9 +81,9 @@ Single build. No `#ifdef FLIGHT_BUILD`. All gating by runtime mission state.
 16. F2: 25 s UTIL_TIMER tick replaces flag classification (pet IWDG, count; 12 ticks → work cycle; never re-sleep over pending MAC event)
 17. F3: LSECSS failover to LSI (breadcrumb to flash, BDRST, re-init RTC on LSI, restart timer server)
 18. F20: I2C bus recovery (9 SCL pulses → STOP → re-init) after N consecutive failures
-19. F12: GPS UTC → `SysTimeSet` per ADR-0003; flash records carry epoch seconds (uint32)
+19. F12: GPS UTC → `SysTimeSet` per DDR-0003; flash records carry epoch seconds (uint32)
 
-**Phase 5 — Flash ring rewrite (T4 / ADR-0004 verbatim)**
+**Phase 5 — Flash ring rewrite (T4 / DDR-0004 verbatim)**
 20. Headers in own sectors, erase-before-write, erase-ahead, sequence-discontinuity frontier, skip-and-continue reader, F15 clamp fix, F26 comment fix
 
 **Phase 6 — Multi-region radio correctness**
