@@ -305,9 +305,9 @@ Bound each region's join (e.g. 3 attempts / ~120 s), mark unprovisioned, continu
 
 **D8 — Ascent timer persistence (F-028).** Persist cumulative ascent elapsed (backup register free after R02) vs accept restart-on-reset. *Recommendation:* persist — repeated cold-snap resets shouldn't stretch ascent cadence indefinitely; cheap once R02 lands.
 
-**D9 — Wire endianness (N-01).** LE-as-truth + doc/decoder regeneration (no firmware change) vs BE serialization (firmware change). *Recommendation:* LE-as-truth, unless a backend was already built against the BE doc — check first.
+**D9 — Wire endianness (N-01).** LE-as-truth + doc/decoder regeneration (no firmware change) vs BE serialization (firmware change). *Recommendation:* LE-as-truth, unless a backend was already built against the BE doc — check first. **→ DECIDED 2026-08-03: LE-as-truth**, per `LoRaWANApplicationProtocol.md` §3 with its golden-packet release gate (see §12.2).
 
-**D10 — Delivery semantics (N-04/F-004).** Document "delivered = radio TX completed" vs confirmed bulk uplinks. *Recommendation:* document the current semantic; confirmed uplinks for bulk cost too much downlink budget for the value.
+**D10 — Delivery semantics (N-04/F-004).** Document "delivered = radio TX completed" vs confirmed bulk uplinks. *Recommendation:* document the current semantic; confirmed uplinks for bulk cost too much downlink budget for the value. **→ SUPERSEDED 2026-08-03 by DDR-0011** (maintainer accepted): confirmed archive uplinks with at-least-once delivery, stable record identity, and backend dedup (see §12.2).
 
 **D11 — `FlashLog_EraseAll` (F-009/R14/F-022).** Fix (watermark reset + IWDG service) and wire to a commissioning-only command, or delete. *Recommendation:* fix + commissioning-gate — a field-recovery erase capability is worth having.
 
@@ -336,6 +336,8 @@ Bound each region's join (e.g. 3 attempts / ~120 s), mark unprovisioned, continu
 
 **Gate 5 — docs & matrix:** ㉙ R44 sweep + `PayloadFormats.md` regeneration (from the final structs, after Gate 3) ㉚ readiness-matrix corrections with verification artifacts ㉛ A-003/A-005/A-006 consolidation.
 
+**Gate 6 — expansion architecture** (ordered after Gate 3 ⑬, per the package's own implementation order): ㉜ settle DDR-0009…0012 open decisions (§12.4) ㉝ Qwiic rail/session state machine + controller claim ㉞ transport parser with fuzz + deadline tests ㉟ first-class application record persistence with stable record IDs ㊱ best-effort spool with strict quota + eviction ㊲ FPort 12/13 serializers + backend decoders ㊳ confirmed-heartbeat → SF7 archive-opportunity state machine (lands with the Gate 3 delivery-semantics rework — D10/DDR-0011) ㊴ ESP32 camera + passive sensor reference applications.
+
 ---
 
 ## 11. What was NOT verified this pass
@@ -344,3 +346,34 @@ Bound each region's join (e.g. 3 attempts / ~120 s), mark unprovisioned, continu
 - `flash_if.c`, `usart_if.c`, `radio_board_if.c` (RF switch/TCXO across STOP2 — flagged by the R-review as worth a dedicated look), sequencer/timer utilities, CayenneLpp.c.
 - Build reproduction, host tests, and all hardware/bench gates (TTF, LSE kill, BP-bit injection, current measurements).
 - `sht31.c` CRC correctness accepted from the R-review (`sht31.c:205-214`) without re-reading.
+
+---
+
+## 12. Suggested architecture package — impact map (2026-08-03, second addendum)
+
+A draft architecture package (4 decision records + 3 protocol specs + developer guide + index, dated 2026-08-03) was reviewed against this document and imported: **DDR-0009…DDR-0012** (`docs/decisions/`, status **Proposed**), `docs/QwiicTransportProtocol.md`, `docs/ApplicationServicesProtocol.md`, `docs/LoRaWANApplicationProtocol.md`, `docs/ApplicationPayloadDeveloperGuide.md`, with `docs/QwiicApplicationArchitecture.md` as the package index.
+
+### 12.1 Findings the package confirms (independent cross-validation)
+
+| Package location | Confirms |
+|---|---|
+| `LoRaWANApplicationProtocol.md` §3, §14 | N-01 (LE wire vs BE docs) — and sets the release gate: golden packet from real firmware → capture FRMPayload → independent decode → firmware/docs/backend agree |
+| §14 "Current code requests LinkCheckReq on the SF10 heartbeat" | R04, A-007 |
+| §6.1 "pressure conversion collapses below 950 hPa"; 16-bit minute wrap | R05/F-013 and F-015/N-03 — heartbeat v2 keeps the 11 B budget but must carry stratospheric-useful pressure + unambiguous mission time (D2/D4 direction) |
+| §14 "flash delivery marking after radio TX callback" | N-04/F-004 |
+| §14 "queue handling and count-based record marking require transactional repair" | F-005/R21/F-006 |
+| §7.1 "timestamp alone is not sufficient" | **New requirement:** stable archive record identity (persistent 32-bit record ID, or mission ID + monotonic sequence) — extends D3/D5/A-005 |
+
+### 12.2 Decisions the package makes (maintainer accepted 2026-08-03)
+
+- **D9 (endianness) → DECIDED: LE-as-truth.** Firmware little-endian is wire truth; `PayloadFormats.md` + reference decoder regenerate against a golden packet captured from real firmware before any "stable wire protocol" declaration. Explicit serialization replaces raw struct casts in the next incompatible payload version.
+- **D10 (delivery semantics) → SUPERSEDED by DDR-0011.** The earlier recommendation ("document delivered = radio TX completed") is rejected. Adopted instead: confirmed long-range heartbeat as opportunity probe → high-throughput archive probe with `LinkCheckReq` → archive burst gated on ACK + `LinkCheckAns` margin/gateway thresholds → immediate fallback on weak evidence. First-class archive delivery is **at-least-once**: no record is committed delivered on `LmHandlerSend()` success or TX completion; duplicates are expected and the backend deduplicates by stable record identity. This enlarges Gate 3/4 scope: F-004/N-04/F-005/R21/F-006 become a confirmed-delivery rework, not documentation.
+- **D2/D4 direction endorsed:** heartbeat v2 within the 11-byte long-range budget; stratospheric-useful pressure; unambiguous mission-time reconstruction.
+
+### 12.3 New scope (no conflicts with any open finding)
+
+DDR-0009/0010/0012 and the two Qwiic protocol specs define the expansion architecture: Stratosonde remains mission orchestrator; exactly one I2C controller per powered Qwiic session (claim window → external controller with Stratosonde as target at `0x42`, else Stratosonde as controller + descriptor discovery at `0x50`); first-class vs best-effort data classes; FPort 12 (extension science archive) and FPort 13 (best-effort fragments). Nothing in the package contradicts DDR-0001…0008 or any confirmed finding.
+
+### 12.4 Open decisions tracked (from the package index)
+
+Service I2C address `0x42`; descriptor EEPROM address `0x50`; rail current/capacitance limits; claim-window and hard-session durations; producer/schema ID assignment; FPort 12/13 confirmation with the backend; heartbeat v2 pressure/time encoding; durable first-class variable-record flash format; exact confirmed-uplink/LinkCheck delivery evidence; best-effort spool quota/eviction/partial policy. Tracked as a GitHub issue; the DDRs remain **Proposed** until settled.
