@@ -53,4 +53,15 @@ Rule (review process note): nothing is marked ✅ DONE without a linked verifica
 
 ## 5. GitHub tracking
 
-Gate and finding work is tracked as GitHub issues (labels `gate:1`…`gate:6`, `bench-gate`, `decision`) — issue numbers to be cross-linked here. Stale 2025-era issues #1–#21 were triaged on 2026-08-03.
+Work is tracked as GitHub issues with labels `gate:1`…`gate:6`, `bench-gate`, `decision`:
+
+| Gate | Issues |
+|---|---|
+| Gate 1 residuals + bench gates | #22 (R23), #23 (F-001 prints), #24 (R30/D6), #25 (F-011 counters), #26 (bench gates) |
+| Gate 2 — power | #27 (R25/D7 TTF), #28 (R26 GSV), #29 (R07 latches), #30 (R09 LED), #31 (R17/R39/R16) |
+| Gate 3 — data integrity | #32 (R03 AU915), #33 (payload rework), #34 (confirmed delivery/DDR-0011), #35 (R06+D5), #36 (R28+R29), #37 (R10), #38 (F-017) |
+| Gate 4 — persistence | #39 (batch — split as picked up) |
+| Gate 5 — docs & matrix | #40 |
+| Gate 6 — expansion | #41 (DDR-0009…0012 open decisions + Qwiic epic) |
+
+Stale 2025-era issues triaged 2026-08-03: #1–#11 and #13–#19 closed as implemented (with evidence comments); #12, #20, #21 left open (bench/measurement tasks, cross-linked to #26/#27).
