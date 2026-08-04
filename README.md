@@ -1,5 +1,14 @@
 # Stratosonde Firmware Documentation
 
+## Project Status
+
+**Start here:** [`docs/ProjectStatus.md`](docs/ProjectStatus.md) — what is done, what is bench-pending, and what is open, with links to the gate work order (Gates 1–6) and GitHub issue tracking.
+
+- Findings & work order: [`docs/CombinedReviewVerification-2026-08-03.md`](docs/CombinedReviewVerification-2026-08-03.md)
+- Row-by-row readiness matrix: [`docs/ProductionReadinessAssessment.md`](docs/ProductionReadinessAssessment.md)
+- Design decision records (DDR-0001…0012): [`docs/decisions/`](docs/decisions/)
+- Qwiic expansion architecture: [`docs/QwiicApplicationArchitecture.md`](docs/QwiicApplicationArchitecture.md)
+
 ## Overview
 
 This repository contains the firmware architecture documentation for the Stratosonde, an ultra-lightweight, solar-powered radiosonde designed for long-duration autonomous operation in the stratosphere. The firmware enables the device to collect atmospheric and positional data, transmit it over LoRaWAN, and operate efficiently on solar power.

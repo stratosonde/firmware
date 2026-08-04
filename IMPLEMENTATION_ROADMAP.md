@@ -1,4 +1,7 @@
 # Stratosonde Firmware Implementation Roadmap
+
+> **⚠ SUPERSEDED 2026-08-03.** This January 2026 roadmap is historical. For current status and the live work order see **`docs/ProjectStatus.md`** (done / bench-pending / open) and **`docs/CombinedReviewVerification-2026-08-03.md`** (gates 1–6).
+
 ## Comprehensive Action Plan Based on Documentation Analysis
 
 **Date:** January 19, 2026  
