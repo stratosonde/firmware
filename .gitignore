@@ -24,8 +24,9 @@ fix_instructions.txt
 Reference/
 datasheets/
 
-# Archive folder (old debug notes)
-archive/
+# Archive folder (old debug notes) — root only; docs/archive/ IS tracked (review ledgers)
+/archive/
+# (docs/archive/ files are tracked intentionally)
 
 # OS files
 .DS_Store

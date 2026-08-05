@@ -1,10 +1,12 @@
 # Stratosonde Firmware — Production Readiness Status Matrix
 
-**Living document.** This file tracks *code truth only* — a row is FIXED only when the fix is in the code, not when the design is agreed. Design rationale lives in `docs/decisions/`; the implementation plan and verification evidence live in `docs/FixWorkorderPlan.md`; the authoritative finding list is `archive/stratosonde-fix-workorder-2026-07-31.md`.
+> **2026-08-04 consolidation.** This is now a **legacy ledger** — kept for its row-by-row detail (F1–F28, FW-1…FW-22, T1–T4, H3-1…H3-9, bench gates B1–B8, flash budget). Living status: **`docs/ProjectStatus.md`**. Work tracking: **GitHub issues only**. The process docs it references moved to `docs/archive/` (`FixWorkorderPlan.md`, `ReviewFixImplementationPlan.md`, `CombinedReviewVerification-2026-08-03.md`).
 
-> **2026-08-03 status-model update.** For the whole-project "done / not done" view see **`docs/ProjectStatus.md`**; for the newer F-001…F-030 / R01…R44 findings see `docs/CombinedReviewVerification-2026-08-03.md`. Three states are now distinguished: **FIXED (code)** = in the code and build-verified; **VERIFIED** = code fix *plus* a linked bench artifact (log/scope capture); **OPEN** = not implemented. A row may not be called VERIFIED without the artifact. Rows below predate this model: "FIXED" means FIXED (code) with bench gates PENDING unless noted.
+**Living document.** This file tracks *code truth only* — a row is FIXED only when the fix is in the code, not when the design is agreed. Design rationale lives in `docs/decisions/`; the implementation plan and verification evidence live in `docs/archive/FixWorkorderPlan.md`; the authoritative finding list is `archive/stratosonde-fix-workorder-2026-07-31.md`.
 
-**Base commit:** `181f997` · **Last reconciled with code:** 2026-08-02 (post `ReviewFixImplementationPlan.md` items 1–11, 14–16; build clean, 191,904 B flash used)
+> **2026-08-03 status-model update.** For the whole-project "done / not done" view see **`docs/ProjectStatus.md`**; for the newer F-001…F-030 / R01…R44 findings see `docs/archive/CombinedReviewVerification-2026-08-03.md`. Three states are now distinguished: **FIXED (code)** = in the code and build-verified; **VERIFIED** = code fix *plus* a linked bench artifact (log/scope capture); **OPEN** = not implemented. A row may not be called VERIFIED without the artifact. Rows below predate this model: "FIXED" means FIXED (code) with bench gates PENDING unless noted.
+
+**Base commit:** `181f997` · **Last reconciled with code:** 2026-08-02 (post `docs/archive/ReviewFixImplementationPlan.md` items 1–11, 14–16; build clean, 191,904 B flash used)
 
 ---
 
@@ -65,7 +67,7 @@
 | T3 | BLOCKER | Mission state machine (COMMISSIONING/FLIGHT) | **FIXED** — door anchored to session bank, one-way transitions, join + GPS-config gated to COMMISSIONING. FW-3: `MissionState_Update()` now called each work cycle (was defined but never called — ASCENT never transitioned to FLOAT) | `mission_state.c`, `lora_app.c:1094` |
 | T4 | BLOCKER | Flash ring rewrite to DDR-0004 | **FIXED** — retires P0-3, F15, F26 (bench gate B1 remains) | `flash_log.c`, `flash_log.h` |
 
-## h3lite Region Engine (ReviewFixImplementationPlan Phase 2)
+## h3lite Region Engine (`docs/archive/ReviewFixImplementationPlan.md` Phase 2)
 
 Submodule `Middlewares/Third_Party/h3lite` @ `8d15d6b` (firmware pointer bumped in `dc9e1a2`). Verification harness: `h3lite/test/{xval_pts.c, t_index.py, t_city.py, t_table.py}`.
 

@@ -1,5 +1,7 @@
 # Stratosonde Firmware — Combined Review Verification (2026-08-03)
 
+> **ARCHIVED 2026-08-04.** This is a point-in-time verification record. Its living content — the §8 open decisions, §10 gate work order, and §12.4 expansion decisions — now lives in **GitHub issues** (labels `gate:1`…`gate:6`, `decision`). Status summary: `docs/ProjectStatus.md`. Newer findings (R45–R51): `docs/archive/stratosonde-firmware-review-2026-08-04.md` → issues #42–#48.
+
 ```text
 Branch:            master
 Commit:            fa2c638307c97087d1403f81257614c24cbba3e1 (HEAD; h3lite-only delta vs 3dc0d321)
