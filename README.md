@@ -27,8 +27,7 @@ Flight firmware for the Stratosonde — an ultra-lightweight, solar-powered radi
 |---|---|
 | `Core/`, `LoRaWAN/` | First-party firmware (~15.6k lines C) |
 | `Drivers/`, `Middlewares/`, `Utilities/` | Vendored ST HAL / LoRaMac / h3lite submodule |
-| `docs/` | Status, decision records, architecture & protocol specs ([index](docs/README.md)) |
-| `docs/archive/` | Point-in-time reviews and superseded process docs |
+| `docs/` | Status, decision records, architecture & protocol specs ([index](docs/README.md)) — historical reviews/ledgers live in git history only |
 
 ## Build
 

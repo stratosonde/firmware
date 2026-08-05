@@ -1,7 +1,7 @@
 # Stratosonde Firmware — Project Status
 
 **The one page that answers "what is done and what is not."**
-Last updated: 2026-08-04 — 2026-08-04 review integrated (R45–R51 → issues #42–#48) · Gate 4 batch split (#39 → #49–#59) · **all work tracking consolidated into GitHub issues**; process docs archived.
+Last updated: 2026-08-04 — 2026-08-04 review integrated (R45–R51 → issues #42–#48) · Gate 4 batch split (#39 → #49–#59) · **all work tracking lives in GitHub issues**; historical ledgers/reviews/audits deleted from the repo (git history retains them; per-finding detail is reproduced in the issue bodies).
 
 ## Status model
 
@@ -20,9 +20,8 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 | What should I work on / what is open | **GitHub issues** — the only work tracker (labels `gate:1`…`gate:6`, `bench-gate`, `decision`, `project-health`) |
 | Done / bench-pending / open summary | This page |
 | Why things are the way they are (design rationale) | `docs/decisions/` — DDR-0001…DDR-0012 |
-| Per-finding verification detail (F-001…F-030, R01…R44, N-01…N-04) | `docs/archive/CombinedReviewVerification-2026-08-03.md` (point-in-time ledger) |
-| Newest review findings (R45–R51) | `docs/archive/stratosonde-firmware-review-2026-08-04.md` → issues #42–#48 |
-| Legacy rows (F1–F28, FW-1…FW-22, T1–T4, H3-1…H3-9, bench B1–B8) | `docs/ProductionReadinessAssessment.md` (legacy ledger) |
+| Per-finding verification detail (F-001…F-030, R01…R51, N-01…N-04) | **GitHub issues** — each open finding's evidence + fix is reproduced in its issue body (#22–#59) |
+| Historical ledgers, reviews, audits (F1–F28, FW-1…FW-22, T1–T4, H3-1…H3-9, bench B1–B8, combined verification ledger) | **Git history only** — deleted from the tree 2026-08-04; last commit containing them is `eaaa1db` |
 | Wire formats | `docs/PayloadFormats.md` — ⚠ known-stale until Gate 3 ⑬ (R40–R42, N-01); `docs/LoRaWANApplicationProtocol.md` is the target spec |
 | Expansion / Qwiic architecture | `docs/QwiicApplicationArchitecture.md` (package index) |
 | Docs index | `docs/README.md` |
@@ -31,13 +30,13 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 
 - **Gate 1 — all six flight blockers** @ `db4330d` (build-verified; bench gates 🟡, see §2):
   R01+R02 backup-register ownership map (`Core/Inc/backup_regs.h`) · R24+R23 `$PCAS11,2` pedestrian-mode deletion + NMEA checksum corrections · F-011 GNSS DMA head-wrap fix · R30/D6 per-region join timeout + flight-entry gating · R08 RTC clock-source failover honored by `HAL_RTC_MspInit` · F-001 fatal/recoverable `Error_Handler` split.
-- **Earlier workorder (2026-08-01/02):** T1 two-tier session storage, T2 data honesty, T3 mission state machine, T4 flash ring rewrite, F1–F28 and FW-1…FW-22 fixes — row-by-row in `ProductionReadinessAssessment.md` (code-fixed; legacy bench gates B1–B8 🟡).
+- **Earlier workorder (2026-08-01/02):** T1 two-tier session storage, T2 data honesty, T3 mission state machine, T4 flash ring rewrite, F1–F28 and FW-1…FW-22 fixes — row-by-row detail in git history (`ProductionReadinessAssessment.md`, last present @ `eaaa1db`); code-fixed, legacy bench gates B1–B8 🟡.
 - **h3lite region engine:** H3-1…H3-7, H3-9 host-verified (H3-8 open → #56).
 
 ## 2. Code done, bench pending 🟡
 
 - **Gate 1 bench gates (#26):** GPS-fix backup-register dump (R01/R02) · LSE kill (R08) · NDTR=0 fault injection (F-011) · join-timeout soak (R30) · airborne-mode persistence on hardware (R24) · tri-constellation/1 Hz apply (R23).
-- **Legacy bench gates:** B1–B8, IWDG option bits, end-to-end energy budget (`ProductionReadinessAssessment.md` §Bench-Verify; legacy bench issues #12, #20, #21).
+- **Legacy bench gates:** B1–B8, IWDG option bits, end-to-end energy budget (detail in git history @ `eaaa1db`; legacy bench issues #12, #20, #21).
 
 ## 3. Open work ⬜ — one line per gate, detail in the issues
 
