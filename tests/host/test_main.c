@@ -24,12 +24,20 @@
 static uint32_t g_fake_rtc_seconds = 0;
 uint32_t TIMER_IF_GetTime(uint16_t *ms) { if (ms) *ms = 0; return g_fake_rtc_seconds; }
 
+/* HAL stubs needing test-side definitions (#57 GNSS parser inclusion) */
+uint16_t g_host_dma_cndtr = 0;
+uint32_t HAL_GetTick(void) { return g_fake_rtc_seconds * 1000U; }
+
 static uint32_t g_fake_epoch = 1754500000U;  /* 2025-08-06-ish UTC */
 SysTime_t SysTimeGet(void) { SysTime_t t = { g_fake_epoch, 0 }; return t; }
 
 /* The unit under test — #included so static helpers (CRC16/32, converters)
  * are reachable. Include paths put tests/host/stubs first. */
 #include "../../Core/Src/payload_encode.c"
+
+/* R31-R34 (#57): the GNSS parser is pure tokenizing + math — include it too.
+ * HAL/UART surfaces are stubbed in tests/host/stubs. */
+#include "../../Core/Src/atgm336h.c"
 
 static int g_failures = 0;
 static int g_checks = 0;
@@ -183,6 +191,46 @@ static void test_highres_record(void)
 
     CHECK(EncodeHighResTelemetryRecord(&rec, &s, 0, 0, MODE_NORMAL));
     CHECK_EQ_I(rec.timestamp, g_fake_epoch);  /* R45 fallback */
+}
+
+static void test_gnss_parser(void)
+{
+    GNSS_HandleTypeDef g;
+    memset(&g, 0, sizeof(g));
+
+    /* R33 (#57): a sentence with NO checksum delimiter is rejected (was:
+     * accepted-and-parsed). A correct one passes; a corrupt one fails. */
+    CHECK(!GNSS_VerifyChecksum("$GNGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,"));
+    CHECK(GNSS_VerifyChecksum("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47"));
+    CHECK(!GNSS_VerifyChecksum("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*48"));
+
+    /* R32 (#57): a REAL fix on the equator/prime meridian (0.0, 0.0) is valid
+     * data, not absence. (Parse-level test: GNSS_ParseGGA does not verify the
+     * checksum itself — the checksum cases above cover GNSS_VerifyChecksum.) */
+    memset(&g, 0, sizeof(g));
+    int rc = GNSS_ParseGGA(&g, "$GNGGA,120000,0000.0000,N,0000.0000,E,1,05,1.0,15.0,M,0.0,M,,*6E");
+    CHECK_EQ_I(rc, 0);                       /* 0,0 fix parses (was: dropped) */
+    CHECK(g.data.latitude == 0.0 && g.data.longitude == 0.0);
+    CHECK_EQ_I(g.data.satellites, 5);
+    CHECK(g.data.valid);
+
+    /* Empty lat/lon fields (no fix) -> -1, coordinates untouched */
+    memset(&g, 0, sizeof(g));
+    g.data.latitude = 12.5; g.data.longitude = -45.25;
+    rc = GNSS_ParseGGA(&g, "$GNGGA,120000,,,,,0,00,99.0,,M,,M,,*51");
+    CHECK_EQ_I(rc, -1);
+    CHECK(g.data.latitude == 12.5 && g.data.longitude == -45.25);
+
+    /* R34 (#57): double conversion precision — 4807.0380 N -> 48.1173 exactly */
+    {
+        double d = GNSS_ConvertToDecimalDegrees(4807.0380);
+        CHECK(d > 48.1172999 && d < 48.1173001);
+    }
+    /* Southern/western hemispheres */
+    memset(&g, 0, sizeof(g));
+    rc = GNSS_ParseGGA(&g, "$GNGGA,120000,4807.0380,S,01131.0000,W,1,08,0.9,545.4,M,46.9,M,,*4C");
+    CHECK(g.data.latitude < -48.11729 && g.data.latitude > -48.11731);
+    CHECK(g.data.longitude < -11.5166 && g.data.longitude > -11.5167);
 }
 
 static void test_bulk_v3(void)
@@ -438,6 +486,7 @@ int main(void)
     test_power_model();
     test_decide_transmit_plan();
     test_nmea_checksum_guard();
+    test_gnss_parser();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {

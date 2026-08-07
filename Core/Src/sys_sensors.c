@@ -287,16 +287,19 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   }
   else
   {
-    /* No valid GPS fix - use default coordinates */
-    sensor_data->latitude = (int32_t)((STSOP_LATTITUDE * MAX_GPS_POS) / 90);
-    sensor_data->longitude = (int32_t)((STSOP_LONGITUDE * MAX_GPS_POS) / 180);
+    /* No valid GPS fix (R20/#57): store ZEROS, not the ST demo coordinates
+     * (43.6186, 7.0514 = Saint-Ouen, France) — a decoder that skipped the
+     * flags byte used to put the balloon in France. satellites means "used in
+     * fix" — 0 without one (constant semantics); in-view count is logged. */
+    sensor_data->latitude = 0;
+    sensor_data->longitude = 0;
     sensor_data->altitudeGps = 0;
-    sensor_data->satellites = hgnss.data.satellites_in_view;  /* Show satellites in view even without fix */
+    sensor_data->satellites = 0;
     sensor_data->gnss_fix_quality = 0;
     sensor_data->gnss_hdop = 99.9f;
     sensor_data->gnss_valid = false;
-    
-    SEGGER_RTT_printf(0, "GNSS: No fix | Sats visible:%d | Using default coords\r\n",
+
+    SEGGER_RTT_printf(0, "GNSS: No fix | Sats visible:%d | Position zeroed\r\n",
                       hgnss.data.satellites_in_view);
   }
 

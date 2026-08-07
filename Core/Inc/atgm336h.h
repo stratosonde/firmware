@@ -112,8 +112,8 @@ typedef struct
   */
 typedef struct
 {
-  float latitude;           // Latitude in decimal degrees (positive = North)
-  float longitude;          // Longitude in decimal degrees (positive = East)
+  double latitude;            // Latitude in decimal degrees (R34/#57: double — 1e-7 deg container, positive = North)
+  double longitude;           // Longitude in decimal degrees (R34/#57: double, positive = East)
   float altitude;           // Altitude in meters above sea level
   float speed;              // Ground speed in km/h
   float course;             // Course in degrees from true north

@@ -28,7 +28,7 @@
 static GNSS_HandleTypeDef *pHgnss = NULL;  // For DMA ISR callback access
 
 /* Private function prototypes -----------------------------------------------*/
-static float GNSS_ConvertToDecimalDegrees(float raw_degrees);
+static double GNSS_ConvertToDecimalDegrees(double raw_degrees);
 static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max_len);
 static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence);
@@ -845,12 +845,14 @@ uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss)
   * @brief  Convert NMEA coordinate format to decimal degrees
   * @param  raw_degrees: Raw coordinate (DDMM.MMMM format)
   * @retval Decimal degrees
+  * @note   R34 (#57): double math end-to-end — the archive container resolves
+  *         1e-7 deg (~1 cm); float conversion quantized to ~1 m.
   */
-static float GNSS_ConvertToDecimalDegrees(float raw_degrees)
+static double GNSS_ConvertToDecimalDegrees(double raw_degrees)
 {
-  int degrees = (int)(raw_degrees / 100.0f);
-  float minutes = raw_degrees - (degrees * 100.0f);
-  return degrees + (minutes / 60.0f);
+  int degrees = (int)(raw_degrees / 100.0);
+  double minutes = raw_degrees - ((double)degrees * 100.0);
+  return degrees + (minutes / 60.0);
 }
 
 /** 
@@ -914,7 +916,8 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
 {
   char token[32];
   int field;
-  float lat_raw = 0, lon_raw = 0;
+  double lat_raw = 0, lon_raw = 0;   /* R34 (#57): double until the store */
+  bool have_lat = false, have_lon = false;  /* R32 (#57): token PRESENCE, not magnitude */
   char lat_dir = 'N', lon_dir = 'E';
 
   for (field = 1; field < 15; field++)
@@ -928,7 +931,7 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
         break;
 
       case 2: /* Latitude */
-        if (strlen(token) > 0) lat_raw = atof(token);
+        if (strlen(token) > 0) { lat_raw = atof(token); have_lat = true; }
         break;
 
       case 3: /* Latitude direction */
@@ -936,7 +939,7 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
         break;
 
       case 4: /* Longitude */
-        if (strlen(token) > 0) lon_raw = atof(token);
+        if (strlen(token) > 0) { lon_raw = atof(token); have_lon = true; }
         break;
 
       case 5: /* Longitude direction */
@@ -961,21 +964,22 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
     }
   }
 
-  /* Convert coordinates to decimal degrees */
-  if (lat_raw > 0)
+  /* Convert coordinates to decimal degrees (R32/#57: presence-tracked — a real
+   * 0.0 coordinate on the equator / prime meridian is valid data, not absence) */
+  if (have_lat)
   {
     hgnss->data.latitude = GNSS_ConvertToDecimalDegrees(lat_raw);
     if (lat_dir == 'S') hgnss->data.latitude = -hgnss->data.latitude;
   }
 
-  if (lon_raw > 0)
+  if (have_lon)
   {
     hgnss->data.longitude = GNSS_ConvertToDecimalDegrees(lon_raw);
     if (lon_dir == 'W') hgnss->data.longitude = -hgnss->data.longitude;
   }
 
   /* Validate coordinates */
-  if (lat_raw == 0 && lon_raw == 0) return -1; /* No fix info yet */
+  if (!have_lat || !have_lon) return -1; /* No fix info yet (empty fields) */
   
   if (!GNSS_ValidateCoordinates(hgnss->data.latitude, hgnss->data.longitude))
   {
@@ -1049,10 +1053,11 @@ static bool GNSS_VerifyChecksum(const char *sentence)
 {
   const char *checksum_ptr = strchr(sentence, '*');
 
-  /* No checksum present - assume valid */
+  /* R33 (#57): no checksum present -> REJECT. Every ATGM336H sentence carries
+   * *XX; a missing one means a DMA-truncated/corrupt sentence, not a valid one. */
   if (checksum_ptr == NULL)
   {
-    return true;
+    return false;
   }
 
   /* Calculate checksum */

@@ -39,6 +39,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdio.h"
 #include "stdlib.h"
+#include "string.h"  /* memset — R31 full GNSS invalidation (#57) */
 #include "SEGGER_RTT.h"
 #include "atgm336h.h"
 #include "multiregion_h3.h"
@@ -973,8 +974,11 @@ static void SendTxData(void)
     } else {
       SEGGER_RTT_WriteString(0, "GPS disabled by power management - skipping acquisition\r\n");
     }
-    hgnss.data.valid = false;
-    hgnss.data.fix_quality = GNSS_FIX_INVALID;
+    /* R31 (#57): FULL invalidation before/without acquisition — clear all of
+     * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
+     * The GGA parser skips empty tokens, so a partial sentence must never meet
+     * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
+    memset(&hgnss.data, 0, sizeof(hgnss.data));
     ttf_ms = 0;  // No GPS acquisition performed
   } else {
   
@@ -1022,8 +1026,10 @@ static void SendTxData(void)
   {
     /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
     /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
-    hgnss.data.valid = false;
-    hgnss.data.fix_quality = GNSS_FIX_INVALID;
+    /* R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
+     * partial sentence must never meet last cycle's sats/hdop/lat/lon.
+     * Last-known-good lives in the last_valid_* statics below. */
+    memset(&hgnss.data, 0, sizeof(hgnss.data));
     SEGGER_RTT_WriteString(0, "GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
     
     gps_start = HAL_GetTick();
