@@ -99,7 +99,11 @@ int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32
     int32_t voltage_change = slope->current_voltage_mv - slope->baseline_voltage_mv;
 
     // Convert to mV/hour
-    int16_t slope_mv_per_hour = (int16_t)((voltage_change * 3600) / time_change_sec);
+    /* F-01 (#62): cast the denominator to int32_t — without it the uint32_t
+     * time_change_sec promotes the WHOLE division to unsigned, wrapping a
+     * negative numerator to a huge positive (a discharging battery read as
+     * charging: -100 mV/h came back as +13298 mV/h). Safe: dt >= 600 above. */
+    int16_t slope_mv_per_hour = (int16_t)((voltage_change * 3600) / (int32_t)time_change_sec);
 
     // Every 2 hours (7200 seconds), shift baseline forward
     if (time_change_sec >= 7200) {

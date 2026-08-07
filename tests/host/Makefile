@@ -5,7 +5,8 @@
 # CI:     .github/workflows/ci.yml runs this on ubuntu-latest (gcc).
 
 CC      ?= gcc
-CFLAGS  ?= -std=c99 -Wall -Wextra -Wno-unused-parameter -g
+# F-01 (#62): -Wsign-conversion catches the mixed-sign division class of bug
+CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
 SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
