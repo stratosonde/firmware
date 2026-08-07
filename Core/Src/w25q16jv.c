@@ -306,7 +306,17 @@ W25Q_StatusTypeDef W25Q_WaitReady(W25Q_HandleTypeDef *hw25q, uint32_t timeout_ms
          * core sleeps until ANY interrupt (SysTick at 1 kHz bounds the stall
          * to ~1 ms, same cadence as before at a fraction of the energy). */
         __WFI();
-        
+
+        /* F-11 (#69): pet the watchdog inside the wait loop. Safe today only
+         * because no path issues CHIP_ERASE (~100 s); with F-10's widened
+         * cold-margin timeouts a long erase would otherwise IWDG-reset. */
+        {
+            extern IWDG_HandleTypeDef hiwdg;
+            if (hiwdg.Instance != NULL) {
+                HAL_IWDG_Refresh(&hiwdg);
+            }
+        }
+
     } while ((HAL_GetTick() - start_tick) < timeout_ms);
     
     return W25Q_ERROR_BUSY;  /* Timeout */

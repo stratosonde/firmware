@@ -81,10 +81,14 @@ extern "C" {
 #define W25Q16JV_JEDEC_ID         0xEF4015  /* Manufacturer EF, Device 4015 */
 
 /* Timing specifications (in ms) */
-#define W25Q_TIMEOUT_PAGE_PROG    5     /* Page program max 3ms, use 5ms */
-#define W25Q_TIMEOUT_SECTOR_ERASE 500   /* Sector erase max 400ms, use 500ms */
-#define W25Q_TIMEOUT_BLOCK_ERASE  2000  /* 64KB block erase max 2000ms */
-#define W25Q_TIMEOUT_CHIP_ERASE   100000 /* Chip erase max 100s (!!) */
+/* F-10 (#69): timeouts widened to >=3x datasheet max for -60C margin. The
+ * cost of a longer timeout is negligible next to a spurious flash failure
+ * at altitude; W25Q_WaitReady now refreshes the IWDG (F-11) so long waits
+ * are watchdog-safe. */
+#define W25Q_TIMEOUT_PAGE_PROG    10    /* Page program max 3ms -> 3x */
+#define W25Q_TIMEOUT_SECTOR_ERASE 1200  /* Sector erase max 400ms -> 3x */
+#define W25Q_TIMEOUT_BLOCK_ERASE  6000  /* 64KB block erase max 2000ms -> 3x */
+#define W25Q_TIMEOUT_CHIP_ERASE   300000 /* Chip erase max 100s (!!) -> 3x */
 #define W25Q_TIMEOUT_GENERAL      100   /* General timeout */
 
 /* Exported types ------------------------------------------------------------*/
