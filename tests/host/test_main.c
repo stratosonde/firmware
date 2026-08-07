@@ -161,6 +161,40 @@ static void test_flashlog_conversion(void)
 }
 
 
+/* R23 (#22): pre-commit guard for the PCAS command bodies. Includes the REAL
+ * atgm336h.h (HAL stubbed) so an accidental edit of a body string fails here.
+ * The XOR is recomputed independently in the test (the review's Appendix-A
+ * script as a host test). */
+#include "atgm336h.h"
+
+static uint8_t guard_xor(const char *body)
+{
+    uint8_t cs = 0;
+    for (const char *p = body; *p; p++) cs ^= (uint8_t)*p;
+    return cs;
+}
+
+static void test_nmea_checksum_guard(void)
+{
+    struct { const char *body; uint8_t cs; const char *full; } vectors[] = {
+        { GNSS_CMD_BODY_NMEA_CONFIG,       0x03, "$PCAS03,1,0,0,0,1,1,0,0*03\r\n" },
+        { GNSS_CMD_BODY_NMEA_CONFIG_DEBUG, 0x02, "$PCAS03,1,0,0,1,1,1,0,0*02\r\n" },
+        { GNSS_CMD_BODY_CONSTELLATION,     0x1C, "$PCAS04,5*1C\r\n" },
+        { GNSS_CMD_BODY_AIRBORNE_MODE,     0x18, "$PCAS11,5*18\r\n" },
+        { GNSS_CMD_BODY_UPDATE_RATE,       0x2E, "$PCAS02,1000*2E\r\n" },
+        { GNSS_CMD_BODY_SATELLITE_SYS,     0x1E, "$PCAS04,7*1E\r\n" },
+        { GNSS_CMD_BODY_SAVE_CONFIG,       0x01, "$PCAS00*01\r\n" },
+        { GNSS_CMD_BODY_STANDBY,           0x1E, "$PCAS12,0*1E\r\n" },
+    };
+    for (unsigned i = 0; i < sizeof(vectors)/sizeof(vectors[0]); i++) {
+        CHECK_EQ_I(guard_xor(vectors[i].body), vectors[i].cs);
+        char full[96];
+        snprintf(full, sizeof(full), "$%s*%02X\r\n", vectors[i].body, guard_xor(vectors[i].body));
+        CHECK(strcmp(full, vectors[i].full) == 0);
+    }
+}
+
+
 /* R47 (#44): decide-half tests. Config_Get stubbed to NULL -> defaults path. */
 #include "transmit_plan.h"
 #include "config.h"
@@ -252,6 +286,7 @@ int main(void)
     test_flashlog_conversion();
     test_power_model();
     test_decide_transmit_plan();
+    test_nmea_checksum_guard();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {

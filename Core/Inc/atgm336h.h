@@ -161,24 +161,24 @@ typedef struct
 #define NMEA_VTG                    "$GPVTG"
 #define NMEA_GLL                    "$GPGLL"
 
-/* ATGM336H PCAS Configuration Commands
- * R23: checksums recomputed (XOR of chars between '$' and '*'). Three were
- * wrong and silently rejected by the module: PCAS02 (*2B->*2E),
- * PCAS04,7 (*1A->*1E), PCAS12 (*1C->*1E).
- * R24: GNSS_CMD_FIX_MODE (PCAS11,2) DELETED — PCAS11 is a single dynamic-model
- * setting, last write wins; sending ,2 (pedestrian) after ,5 (airborne<1g)
- * silently re-enabled the 18 km CoCom limit. Its broken checksum was the only
- * thing keeping the unit airborne-capable. */
-#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,0,1,1,0,0*03\r\n"  // R26 flight mask: GGA+RMC+VTG, GSV OFF (9600 bps can't carry multi-constellation GSV at 1 Hz)
-#define GNSS_CMD_NMEA_CONFIG_DEBUG "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // Commissioning/bench variant with GSV on (satellite-in-view debug)
-#define GNSS_CMD_CONSTELLATION   "$PCAS04,5*1C\r\n"                // Constellation: GPS+GLONASS (was mislabeled as high-alt mode)
-#define GNSS_CMD_AIRBORNE_MODE   "$PCAS11,5*18\r\n"                // Airborne dynamic model — defeats 18km CoCom limit (CRITICAL!)
-#define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2E\r\n"             // 1 Hz update rate (R23: checksum fixed)
-#define GNSS_CMD_SATELLITE_SYS   "$PCAS04,7*1E\r\n"                // GPS + BeiDou + GLONASS (all constellations) (R23: checksum fixed)
-#define GNSS_CMD_SAVE_CONFIG     "$PCAS00*01\r\n"                  // Save configuration to flash
+/* ATGM336H PCAS Configuration Command BODIES (no '$', no '*CS\r\n').
+ * R23 (#22): sentences are built at runtime by GNSS_SendCommandBody() —
+ * snprintf("$%s*%02X\r\n", body, GNSS_CalculateChecksum(body)) — so a
+ * hand-computed checksum can never silently drift from the body again.
+ * (History: three baked checksums were wrong and silently rejected by the
+ * module: PCAS02, PCAS04,7, PCAS12. R24: PCAS11,2 pedestrian DELETED —
+ * PCAS11 is single-setting last-write-wins; ,2 re-enabled the 18km CoCom
+ * limit.) Expected checksums are pinned by the host test suite
+ * (tests/host/test_main.c) as the pre-commit guard. */
+#define GNSS_CMD_BODY_NMEA_CONFIG       "PCAS03,1,0,0,0,1,1,0,0"  // R26 flight mask: GGA+RMC+VTG, GSV OFF (*03)
+#define GNSS_CMD_BODY_NMEA_CONFIG_DEBUG "PCAS03,1,0,0,1,1,1,0,0"  // Commissioning/bench variant, GSV on (*02)
+#define GNSS_CMD_BODY_CONSTELLATION     "PCAS04,5"                // GPS+GLONASS (*1C)
+#define GNSS_CMD_BODY_AIRBORNE_MODE     "PCAS11,5"                // Airborne dynamic model — defeats 18km CoCom limit (*18)
+#define GNSS_CMD_BODY_UPDATE_RATE       "PCAS02,1000"             // 1 Hz (*2E)
+#define GNSS_CMD_BODY_SATELLITE_SYS     "PCAS04,7"                // GPS+BeiDou+GLONASS (*1E)
+#define GNSS_CMD_BODY_SAVE_CONFIG       "PCAS00"                  // Save configuration to flash (*01)
+#define GNSS_CMD_BODY_STANDBY           "PCAS12,0"                // Standby ~15µA, permanent (*1E)
 
-/*  ATGM336H Power Management Commands - CASIC Protocol */
-#define GNSS_CMD_STANDBY         "$PCAS12,0*1E\r\n"               // Enter standby mode (~15µA), timeout=0 for permanent standby (R23: checksum fixed)
 #define GNSS_WAKE_CHAR           "a"                               // Any char wakes from standby
 
 /* Exported macro ------------------------------------------------------------*/
@@ -287,6 +287,16 @@ GNSS_StatusTypeDef GNSS_ProcessByte(GNSS_HandleTypeDef *hgnss, uint8_t data);
   * @retval GNSS status
   */
 GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd);
+
+/**
+  * @brief  Send a PCAS command given its BODY only — the '$', checksum and
+  *         CRLF are computed at runtime (R23, #22). Baked-checksum strings
+  *         can drift from their bodies; computed ones cannot.
+  * @param  hgnss: Pointer to GNSS handle structure
+  * @param  body: Command body, e.g. "PCAS03,1,0,0,0,1,1,0,0"
+  * @retval GNSS status
+  */
+GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *body);
 
 /**
   * @brief  Calculate NMEA checksum

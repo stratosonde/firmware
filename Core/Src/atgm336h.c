@@ -167,7 +167,7 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   }
 
   /* OPTIONAL: Send standby command (commented out - using EN/PWR pins instead) */
-  /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
+  /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_STANDBY);
   
   if (cmd_status == GNSS_OK)
   {
@@ -217,7 +217,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   /* R26: flight mask is GGA+RMC+VTG with GSV off (bandwidth); the old
    * "GGA+RMC only" log string was never true. */
   SEGGER_RTT_WriteString(0, "Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_NMEA_CONFIG) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_NMEA_CONFIG) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send NMEA config\r\n");
   }
@@ -225,7 +225,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   
   /* Send constellation selection command (GPS+GLONASS) */
   SEGGER_RTT_WriteString(0, "Sending: Constellation select (GPS+GLONASS)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_CONSTELLATION) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_CONSTELLATION) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send constellation config\r\n");
   }
@@ -233,7 +233,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   
   /* CRITICAL: Send airborne dynamic model command (defeats 18km CoCom limit) */
   SEGGER_RTT_WriteString(0, "Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_AIRBORNE_MODE) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_AIRBORNE_MODE) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
   }
@@ -241,7 +241,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   
   /* Send update rate configuration (1 Hz) */
   SEGGER_RTT_WriteString(0, "Sending: Update rate (1 Hz)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_UPDATE_RATE) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_UPDATE_RATE) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send update rate\r\n");
   }
@@ -249,7 +249,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   
   /* Send satellite system configuration (GPS + BeiDou + GLONASS) */
   SEGGER_RTT_WriteString(0, "Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_SATELLITE_SYS) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SATELLITE_SYS) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send satellite config\r\n");
   }
@@ -261,7 +261,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   
   /* Save all configuration to GPS internal flash (PCAS00) */
   SEGGER_RTT_WriteString(0, "Sending: Save configuration to flash...\r\n");
-  if (GNSS_SendCommand(hgnss, GNSS_CMD_SAVE_CONFIG) != GNSS_OK)
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SAVE_CONFIG) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to save configuration\r\n");
   }
@@ -497,6 +497,25 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
   SEGGER_RTT_WriteString(0, "[GPS CMD] UART Transmit OK\r\n");
 
   return GNSS_OK;
+}
+
+GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *body)
+{
+  if (hgnss == NULL || body == NULL)
+  {
+    return GNSS_ERROR;
+  }
+
+  /* R23 (#22): checksum computed at runtime — can never drift from the body */
+  char cmd[96];
+  uint8_t cs = GNSS_CalculateChecksum(body);
+  int len = snprintf(cmd, sizeof(cmd), "$%s*%02X\r\n", body, cs);
+  if (len <= 0 || len >= (int)sizeof(cmd))
+  {
+    return GNSS_ERROR;  /* body too long — refuse to truncate a command */
+  }
+
+  return GNSS_SendCommand(hgnss, cmd);
 }
 
 /**
@@ -1121,7 +1140,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
    * persist ephemeris to its internal flash (PCAS00 is the flash-save command
    * used at commissioning). The 100 ms below covers that internal save before
    * the full power cut. */
-  GNSS_StatusTypeDef cmd_status = GNSS_SendCommand(hgnss, GNSS_CMD_STANDBY);
+  GNSS_StatusTypeDef cmd_status = GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_STANDBY);
 
   if (cmd_status == GNSS_OK)
   {
