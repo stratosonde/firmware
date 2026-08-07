@@ -161,18 +161,21 @@ In US915/AU915 the heartbeat is sent at SF9 (DR1): the SF10/DR0 11-byte budget i
 
 ## 7. FPort 11 — core science archive
 
-The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = current variable-length.
+The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = current variable-length with base sequence.
 
-### 7.1 Archive v3 (current firmware, D3, issue #33)
+### 7.1 Archive v4 (current firmware, D3 + DDR-0011, issues #33/#34)
 
-Variable length: `2 + 32n + 4` bytes. Header:
+Variable length: `6 + 32n + 4` bytes. Header:
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 1 | Packet type, `0x03` |
+| 0 | 1 | Packet type, `0x04` |
 | 1 | 1 | Record count n, 1-6 |
+| 2 | 4 | Base sequence, `uint32_t` LE — flash sequence of the first record |
 
-n complete 32-byte records follow (layout below), explicitly little-endian serialized (§3's explicit-serialization requirement lands with this version). The packet ends with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
+Records are contiguous FIFO, so record i carries archive identity `base_seq + i` — the stable 32-bit archive record ID required by §7.3 and DDR-0011. The backend deduplicates on (device, sequence).
+
+n complete 32-byte records follow (layout in §7.2), explicitly little-endian serialized (§3's explicit-serialization requirement landed with the variable-length version). The packet ends with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
 
 The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many oldest complete records as fit. Records cut by the budget remain pending with stable identity (§4, §7.3).
 
@@ -219,14 +222,7 @@ Legacy packet type `0x01` used 222 bytes and is retained only for backend compat
 
 ### 7.3 Core archive identity requirement
 
-The backend and firmware need a stable identity for every durable record. Timestamp alone is not sufficient under resets, duplicate timestamps, or clock correction.
-
-A future version must carry either:
-
-- A persistent 32-bit archive record ID, or
-- A mission ID plus monotonic record sequence.
-
-Until that exists, delivery commit and backend deduplication are weaker than intended.
+**Realized (2026-08-06, #34):** the archive v4 header carries `base_seq` (flash sequence of the first record); records are contiguous FIFO, so each record's identity is `base_seq + i`. The backend deduplicates on (DevEUI, sequence). The firmware commits the delivery watermark only on confirmed-uplink ACK (§4), so a lost ACK produces a duplicate retransmission that the backend must dedup — never a gap.
 
 ## 8. FPort 12 — proposed extension science archive v1
 
@@ -369,11 +365,11 @@ Each payload version must include:
 
 The desired strategy differs from the current implementation in several important respects:
 
-- Current code requests `LinkCheckReq` on the SF10 heartbeat itself.
-- Current heartbeat send is unconfirmed.
-- Current bulk packets are unconfirmed.
-- Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement.
-- Current queue handling and count-based record marking require transactional repair.
+- ~~Current code requests `LinkCheckReq` on the SF10 heartbeat itself~~ — LinkCheck now rides the first archive packet (#34).
+- ~~Current heartbeat send is unconfirmed~~ — the opportunity-probe heartbeat is confirmed (#34).
+- ~~Current bulk packets are unconfirmed~~ — archive packets are confirmed (#34).
+- ~~Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement~~ — commit requires `McpsConfirm.AckReceived` (#34).
+- ~~Current queue handling and count-based record marking require transactional repair~~ — archive v4 carries base_seq identity; count commit maps to contiguous monotonic sequences (#34).
 
 Resolved by the heartbeat v2 / archive v3 rework (#33):
 

@@ -163,15 +163,19 @@ typedef struct __attribute__((packed)) {
 
 } BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222) — LEGACY, superseded by v3
 
-/* ---- Bulk wire format v3 (D3, #33): variable-length, packet_type 0x03 ----
- * Layout: [packet_type=0x03][record_count=n][n × HighResTelemetryRecord_t][crc32]
- * Length = 2 + 32n + 4. CRC32 (same polynomial as v2) covers everything before it.
- * The sender packs only complete records and as many as fit the runtime payload
- * budget (LoRaMacQueryTxPossible — current DR + pending FOpts, protocol §11).
- * Decoder branches on payload[0] (0x01/0x02 = legacy fixed 198 B, 0x03 = variable). */
+/* ---- Bulk wire format v4 (D3 + DDR-0011, #33/#34): variable-length, packet_type 0x04 ----
+ * Layout: [packet_type=0x04][record_count=n][base_seq u32 LE][n × 32B records][crc32]
+ * Length = 6 + 32n + 4. CRC32 (same polynomial as v2) covers everything before it.
+ * base_seq is the flash sequence of the FIRST record; records are contiguous FIFO,
+ * so record i has identity base_seq + i (DDR-0011 stable archive record IDs —
+ * backend dedups on (device, sequence)). The sender packs only complete records
+ * and as many as fit the runtime payload budget (LoRaMacQueryTxPossible — current
+ * DR + pending FOpts, protocol §11). Decoder branches on payload[0].
+ * 0x03 (2+32n+4, no base_seq) shipped <1 day in CI only and never flew — superseded. */
 #define BULK_PACKET_TYPE_LEGACY_FIXED   0x02  // BulkTelemetryPacket_t (v2, 198 B fixed)
-#define BULK_PACKET_TYPE_VARIABLE       0x03  // v3: variable-length
-#define BULK_V3_OVERHEAD                6     // type + count + crc32
+#define BULK_PACKET_TYPE_V3_SUPERSEDED  0x03  // v3: variable, no record identity (never deployed)
+#define BULK_PACKET_TYPE_VARIABLE       0x04  // v4: variable + base_seq identity
+#define BULK_V3_OVERHEAD                10    // type + count + base_seq + crc32
 #define BULK_V3_MAX_RECORDS             6     // 198 B worst-case budget parity with v2
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
@@ -222,14 +226,15 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                                  uint8_t record_count);
 
 /**
- * @brief Encode a variable-length bulk packet (wire v3, packet_type 0x03)
+ * @brief Encode a variable-length bulk packet (wire v4, packet_type 0x04)
  * @param buf: output buffer
  * @param buf_cap: output buffer capacity in bytes
  * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
- * @param records: candidate records, FIFO order
+ * @param records: candidate records, FIFO order (contiguous flash sequences)
  * @param record_count: number of candidate records
+ * @param base_seq: flash sequence of records[0] (DDR-0011 identity: record i = base_seq + i)
  * @param packed_count: out — records actually encoded (<= record_count)
- * @param out_len: out — encoded packet length (2 + 32n + 4)
+ * @param out_len: out — encoded packet length (6 + 32n + 4)
  * @retval bool: true if at least one record was encoded
  * @note Packs only complete records, as many as fit BOTH buf_cap and max_payload.
  *       Records not packed remain pending for the next cycle (stable identity,
@@ -240,6 +245,7 @@ bool EncodeBulkPacketV3(uint8_t *buf,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
                         uint8_t record_count,
+                        uint32_t base_seq,
                         uint8_t *packed_count,
                         uint16_t *out_len);
 

@@ -203,18 +203,20 @@ Bulk transfer of historical high-resolution records at SF7, sent when link quali
 |---|---|---|
 | `0x01` | Legacy v1, 222 B fixed (historical only) | 222 |
 | `0x02` | Legacy v2, 198 B fixed (FW-20) | 198 |
-| `0x03` | **Current v3, variable** `2 + 32n + 4` (issue #33) | 38-198 |
+| `0x03` | Variable, no record identity (CI-only <1 day, never deployed — superseded) | 2+32n+4 |
+| `0x04` | **Current v4, variable** `6 + 32n + 4` with base sequence (issues #33/#34) | 42-202 |
 
-### Packet Structure v3 (variable length)
+### Packet Structure v4 (variable length)
 
-#### Header (2 bytes)
+#### Header (6 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 0 | Packet Type | uint8 | 1 | 0x03 = variable-length |
+| 0 | Packet Type | uint8 | 1 | 0x04 = variable-length + identity |
 | 1 | Record Count | uint8 | 1 | n records (1-6) |
+| 2 | Base Sequence | uint32 LE | 4 | Flash sequence of the FIRST record — record i has identity `base_seq + i` (DDR-0011; backend dedups on (DevEUI, sequence)) |
 
-n complete 32-byte records follow immediately at offset 2 (same layout as v2, below, but explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `2 + 32n + 4`.
+n complete 32-byte records follow immediately at offset 6 (layout below, explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `6 + 32n + 4`.
 
 The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0011).
 
@@ -248,11 +250,11 @@ Each record is 32 bytes, little-endian:
 | 1-4 | 0x1E | Satellite Count | Satellite count 0-15 (duplicates byte 26) |
 | 5-7 | 0xE0 | Power Mode | Operating mode 0-7 (duplicates byte 28) |
 
-#### Trailer (4 bytes, v3)
+#### Trailer (4 bytes, v4)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 2+32n | CRC32 | uint32 LE | 4 | CRC32/IEEE over bytes 0..(2+32n-1) |
+| 6+32n | CRC32 | uint32 LE | 4 | CRC32/IEEE over bytes 0..(6+32n-1) |
 
 ### Legacy v2 (packet_type 0x02, fixed 198 B)
 
@@ -282,7 +284,8 @@ def decode_archive_packet(payload: bytes) -> dict:
     Decode core science archive packet from LoRaWAN Port 11 (LITTLE-ENDIAN).
 
     Branches on payload[0]:
-      0x03 = v3 variable length: 2 + 32n + 4 bytes (current firmware)
+      0x04 = v4 variable length: 6 + 32n + 4 bytes, base_seq header (current firmware)
+      0x03 = v3 variable without identity (never deployed; superseded)
       0x02 = v2 legacy fixed 198 B
       0x01 = v1 legacy fixed 222 B (historical only)
     """
@@ -290,29 +293,41 @@ def decode_archive_packet(payload: bytes) -> dict:
         raise ValueError("payload too short")
 
     version = payload[0]
-    if version == 0x03:
+    if version == 0x04:
+        count = payload[1]
+        expected = 6 + RECORD_SIZE * count + 4
+        if len(payload) != expected:
+            raise ValueError(f"v4: expected {expected} bytes for {count} records, got {len(payload)}")
+        base_seq = struct.unpack('<I', payload[2:6])[0]
+        header_len = 6
+        crc_off = len(payload) - 4
+    elif version == 0x03:
         count = payload[1]
         expected = 2 + RECORD_SIZE * count + 4
         if len(payload) != expected:
             raise ValueError(f"v3: expected {expected} bytes for {count} records, got {len(payload)}")
+        base_seq = None
         header_len = 2
         crc_off = len(payload) - 4
     elif version == 0x02:
         if len(payload) != 198:
             raise ValueError(f"v2: expected 198 bytes, got {len(payload)}")
         count = min(payload[1], 6)
+        base_seq = None
         header_len = 2
         crc_off = 194
     elif version == 0x01:
         if len(payload) != 222:
             raise ValueError(f"v1: expected 222 bytes, got {len(payload)}")
         count = min(payload[1], 6)
+        base_seq = None
         header_len = 6
         crc_off = 218
     else:
         raise ValueError(f"Unknown archive packet type 0x{version:02X}")
 
-    result = {'packet_type': version, 'record_count': count, 'records': []}
+    result = {'packet_type': version, 'record_count': count,
+              'base_seq': base_seq, 'records': []}
 
     for i in range(count):
         rec = payload[header_len + i * RECORD_SIZE: header_len + (i + 1) * RECORD_SIZE]
@@ -369,27 +384,28 @@ def calculate_crc32(data: bytes) -> int:
 # Example usage
 if __name__ == "__main__":
     # Authoritative byte-level vectors: tests/host/test_main.c prints
-    # "GOLDEN bulk-v3 (2 records):" from the real firmware encoder.
-    # Build a minimal 1-record v3 packet (2 + 32 + 4 = 38 bytes):
-    example = bytearray(38)
-    example[0] = 0x03  # v3
+    # "GOLDEN bulk-v4 (2 records, base_seq=256):" from the real firmware encoder.
+    # Build a minimal 1-record v4 packet (6 + 32 + 4 = 42 bytes):
+    example = bytearray(42)
+    example[0] = 0x04  # v4
     example[1] = 0x01  # 1 record
-    struct.pack_into('<I', example, 2, 1737848000)   # Timestamp (LE)
-    struct.pack_into('<i', example, 6, 4768932)      # Lat binary
-    struct.pack_into('<i', example, 10, -10633288)   # Lon binary
-    struct.pack_into('<H', example, 14, 1078)        # Altitude
-    struct.pack_into('<h', example, 16, 179)         # Temp: 17.9 C
-    struct.pack_into('<H', example, 18, 301)         # Humidity: 30.1%
-    struct.pack_into('<H', example, 20, 8864)        # Pressure: 886.4 hPa
-    struct.pack_into('<H', example, 22, 5606)        # Battery: 5606 mV
-    struct.pack_into('<H', example, 24, 1189)        # Solar: 1189 mV
-    struct.pack_into('<h', example, 26, 0)           # Slope: 0 mV/h
-    example[28] = 9    # Satellites
-    example[29] = 16   # HDOP: 1.6
-    example[30] = 1    # Power mode: NORMAL
-    example[31] = 0x13 # Flags: GPS valid, 9 sats
-    struct.pack_into('<H', example, 32, calculate_crc16(bytes(example[2:32])))
-    struct.pack_into('<I', example, 34, calculate_crc32(bytes(example[0:34])))
+    struct.pack_into('<I', example, 2, 256)          # base_seq
+    struct.pack_into('<I', example, 6, 1737848000)   # Timestamp (LE)
+    struct.pack_into('<i', example, 10, 4768932)     # Lat binary
+    struct.pack_into('<i', example, 14, -10633288)   # Lon binary
+    struct.pack_into('<H', example, 18, 1078)        # Altitude
+    struct.pack_into('<h', example, 20, 179)         # Temp: 17.9 C
+    struct.pack_into('<H', example, 22, 301)         # Humidity: 30.1%
+    struct.pack_into('<H', example, 24, 8864)        # Pressure: 886.4 hPa
+    struct.pack_into('<H', example, 26, 5606)        # Battery: 5606 mV
+    struct.pack_into('<H', example, 28, 1189)        # Solar: 1189 mV
+    struct.pack_into('<h', example, 30, 0)           # Slope: 0 mV/h
+    example[32] = 9    # Satellites
+    example[33] = 16   # HDOP: 1.6
+    example[34] = 1    # Power mode: NORMAL
+    example[35] = 0x13 # Flags: GPS valid, 9 sats
+    struct.pack_into('<H', example, 36, calculate_crc16(bytes(example[6:36])))
+    struct.pack_into('<I', example, 38, calculate_crc32(bytes(example[0:38])))
 
     decoded = decode_archive_packet(bytes(example))
     print(f"Archive packet: type 0x{decoded['packet_type']:02X}, {decoded['record_count']} records")
@@ -535,6 +551,10 @@ Values outside these ranges indicate sensor errors.
 ---
 
 ## Changelog
+
+### 2026-08-06 (archive v4 / confirmed delivery, issue #34, DDR-0011)
+- **Archive v4** (`packet_type 0x04`): header gains `base_seq` (uint32 LE) — record i identity = base_seq + i; backend dedups on (DevEUI, sequence). Length now `6 + 32n + 4`. `0x03` existed <1 day in CI only, never deployed.
+- **Confirmed delivery**: opportunity-probe heartbeat and all archive packets are confirmed uplinks; watermark commits only on `McpsConfirm.AckReceived` (at-least-once; lost ACK → duplicate retransmission → backend dedup, never a gap). LinkCheckReq moved from the probe to the first archive packet; its LinkCheckAns gates burst continuation.
 
 ### 2026-08-06 (heartbeat v2 / archive v3, issue #33)
 - **Port 10 heartbeat v2**: pressure/humidity merged into one packed uint16 LE (bits 0-10 = 1 hPa units, 0-2046 valid / 2047 invalid sentinel — stratospheric-useful; bits 11-15 = 5% humidity, 31 sentinel). Status byte v2: b3 pressure-stale, b4 RTC GNSS-disciplined (N-03), b5 timestamp-wrap (D4); condensed reset cause removed from the wire. Endianness corrected to little-endian throughout (D9; earlier BE documentation was wrong, N-01).

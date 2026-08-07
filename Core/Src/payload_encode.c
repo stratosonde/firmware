@@ -300,13 +300,14 @@ static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t
 }
 
 /**
- * @brief Encode a variable-length bulk packet (wire v3, packet_type 0x03) — D3 (#33)
+ * @brief Encode a variable-length bulk packet (wire v4, packet_type 0x04) — D3 (#33) + DDR-0011 identity (#34)
  */
 bool EncodeBulkPacketV3(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
                         uint8_t record_count,
+                        uint32_t base_seq,
                         uint8_t *packed_count,
                         uint16_t *out_len)
 {
@@ -326,7 +327,8 @@ bool EncodeBulkPacketV3(uint8_t *buf,
 
     buf[0] = BULK_PACKET_TYPE_VARIABLE;
     buf[1] = n;
-    uint16_t off = 2;
+    PutU32LE(buf + 2, base_seq);   /* DDR-0011: record i identity = base_seq + i */
+    uint16_t off = 6;
     for (uint8_t i = 0; i < n; i++) {
         off += SerializeRecordV3LE(buf + off, &records[i]);
     }
@@ -336,7 +338,7 @@ bool EncodeBulkPacketV3(uint8_t *buf,
     *packed_count = n;
     *out_len = off;
 
-    SEGGER_RTT_printf(0, "Bulk v3: Records=%d Len=%u\r\n", n, off);
+    SEGGER_RTT_printf(0, "Bulk v4: Records=%d Base=%lu Len=%u\r\n", n, (unsigned long)base_seq, off);
     return true;
 }
 

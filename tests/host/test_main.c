@@ -187,7 +187,8 @@ static void test_highres_record(void)
 
 static void test_bulk_v3(void)
 {
-    /* D3 (#33): variable-length bulk, packet_type 0x03, explicit LE (D9) */
+    /* D3 (#33) + DDR-0011 (#34): variable-length bulk v4, packet_type 0x04,
+     * base_seq identity header, explicit LE (D9) */
     sensor_t s = make_nominal_sensors();
     HighResTelemetryRecord_t recs[3];
     for (int i = 0; i < 3; i++) {
@@ -198,25 +199,29 @@ static void test_bulk_v3(void)
     uint8_t buf[198];
     uint8_t packed = 0;
     uint16_t len = 0;
+    const uint32_t base_seq = 256;
 
-    /* Full budget: 3 records -> 2 + 96 + 4 = 102 bytes */
-    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 198, recs, 3, &packed, &len));
+    /* Full budget: 3 records -> 6 + 96 + 4 = 106 bytes */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 198, recs, 3, base_seq, &packed, &len));
     CHECK_EQ_I(packed, 3);
-    CHECK_EQ_I(len, 102);
-    CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_VARIABLE);   /* 0x03 */
+    CHECK_EQ_I(len, 106);
+    CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_VARIABLE);   /* 0x04 */
     CHECK_EQ_I(buf[1], 3);
-    /* Record 0 fields, explicit LE */
+    /* base_seq u32 LE at bytes 2-5 (DDR-0011 identity) */
     CHECK_EQ_I((uint32_t)buf[2] | ((uint32_t)buf[3] << 8) |
-               ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), 1754500123u);
-    /* temperature 0.1°C at record offset 14 -> buf[2+14]=16: 250 = 0x00FA LE */
-    CHECK_EQ_I(buf[16] | (buf[17] << 8), 250);
-    /* pressure 0.1hPa at record offset 18 -> buf[2+18]: 10132.5 -> 10133 or 10132 (float rounding) */
+               ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), base_seq);
+    /* Record 0 at buf[6]: timestamp LE */
+    CHECK_EQ_I((uint32_t)buf[6] | ((uint32_t)buf[7] << 8) |
+               ((uint32_t)buf[8] << 16) | ((uint32_t)buf[9] << 24), 1754500123u);
+    /* temperature 0.1°C at record offset 14 -> buf[6+14]: 250 = 0x00FA LE */
+    CHECK_EQ_I(buf[20] | (buf[21] << 8), 250);
+    /* pressure 0.1hPa at record offset 18 -> buf[24]: 10132.5 -> 10133 or 10132 */
     {
-        int p = buf[20] | (buf[21] << 8);
+        int p = buf[24] | (buf[25] << 8);
         CHECK(p == 10132 || p == 10133);
     }
-    /* per-record crc16 at bytes 30-31 of the record validates over bytes 0-29 */
-    CHECK_EQ_I(buf[32] | (buf[33] << 8), CalculateCRC16(buf + 2, 30));
+    /* per-record crc16 at record offset 30 -> buf[36] over the 30 bytes from buf[6] */
+    CHECK_EQ_I(buf[36] | (buf[37] << 8), CalculateCRC16(buf + 6, 30));
     /* packet crc32 LE over [0, len-4) */
     {
         uint32_t wire_crc = (uint32_t)buf[len-4] | ((uint32_t)buf[len-3] << 8) |
@@ -224,28 +229,28 @@ static void test_bulk_v3(void)
         CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, len - 4));
     }
 
-    /* Budget for exactly 2 records (70 B): packs 2, third stays pending */
-    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 70, recs, 3, &packed, &len));
+    /* Budget for exactly 2 records (74 B): packs 2, third stays pending */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 74, recs, 3, base_seq, &packed, &len));
     CHECK_EQ_I(packed, 2);
-    CHECK_EQ_I(len, 70);
+    CHECK_EQ_I(len, 74);
 
-    /* Budget for 1 record (38 B) */
-    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 38, recs, 3, &packed, &len));
+    /* Budget for 1 record (42 B) */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 42, recs, 3, base_seq, &packed, &len));
     CHECK_EQ_I(packed, 1);
-    CHECK_EQ_I(len, 38);
+    CHECK_EQ_I(len, 42);
 
-    /* Budget too small for even one record (37 B): fails, packs nothing */
-    CHECK(!EncodeBulkPacketV3(buf, sizeof(buf), 37, recs, 3, &packed, &len));
+    /* Budget too small for even one record (41 B): fails, packs nothing */
+    CHECK(!EncodeBulkPacketV3(buf, sizeof(buf), 41, recs, 3, base_seq, &packed, &len));
     CHECK_EQ_I(packed, 0);
 
     /* Buffer cap smaller than budget: buf_cap wins */
-    CHECK(EncodeBulkPacketV3(buf, 70, 198, recs, 3, &packed, &len));
+    CHECK(EncodeBulkPacketV3(buf, 74, 198, recs, 3, base_seq, &packed, &len));
     CHECK_EQ_I(packed, 2);
-    CHECK_EQ_I(len, 70);
+    CHECK_EQ_I(len, 74);
 
     /* Golden vector (D9/§13): exact LE bytes, 2-record packet */
-    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 70, recs, 3, &packed, &len));
-    printf("GOLDEN bulk-v3 (2 records):");
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 74, recs, 3, base_seq, &packed, &len));
+    printf("GOLDEN bulk-v4 (2 records, base_seq=256):");
     for (uint16_t i = 0; i < len; i++) printf(" %02X", buf[i]);
     printf("\n");
 }

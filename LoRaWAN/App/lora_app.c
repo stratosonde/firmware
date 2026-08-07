@@ -745,45 +745,28 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     SEGGER_RTT_WriteString(0, link_msg);
   }
   
-  // Evaluate link quality and trigger bulk transfer if conditions are met
-  // Only evaluate if we actually received a LinkCheckAns (linkcheck_received == true)
-  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && linkcheck_received) {
-    SEGGER_RTT_WriteString(0, "Processing LinkCheckAns for bulk transfer decision...\r\n");
-    
-    // Check all conditions for bulk transfer
-    bool link_good = (margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
-    uint16_t battery_mv = SYS_GetBatteryVoltage();
-    bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
-    bool has_cache = FlashLog_HasUnsentData(&hflashlog);
-    
-    SEGGER_RTT_printf(0, "Link quality: margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
-                     margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
-                     link_good ? "GOOD" : "POOR");
-    SEGGER_RTT_printf(0, "Battery: %dmV (>=%d) -> %s\r\n", 
-                     battery_mv, BULK_BATTERY_MIN_MV, battery_good ? "GOOD" : "LOW");
-    SEGGER_RTT_printf(0, "Cache: %s\r\n", has_cache ? "HAS_DATA" : "NO_DATA");
-    
-    if (link_good && battery_good && has_cache) {
-      SEGGER_RTT_WriteString(0, "CONDITIONS MET: Triggering bulk transfer mode!\r\n");
-      g_tx_state = TX_STATE_BULK_TRANSFER;
-      g_bulk_packets_sent = 0;
-      
-      // Trigger immediate bulk transfer (schedule next transmission)
-      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-    } else {
-      SEGGER_RTT_WriteString(0, "CONDITIONS NOT MET: Completing cycle (conservative approach)\r\n");
+  /* DDR-0011 (#34): the archive opportunity opens on the confirmed probe's ACK
+   * (OnTxData), not on LinkCheckAns. LinkCheckAns now rides the FIRST archive
+   * packet (protocol §5.2) and gates burst continuation (§5.3): poor margin /
+   * gateway count — or no LinkCheckAns at all — ends the burst after the
+   * (already ACKed) first archive packet. */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent == 1) {
+    bool link_good = (linkcheck_received &&
+                      margin >= LINK_MARGIN_THRESHOLD &&
+                      gw_count >= GATEWAY_COUNT_THRESHOLD);
+    SEGGER_RTT_printf(0, "First archive response: LinkCheckAns %s, margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
+                      linkcheck_received ? "received" : "MISSING",
+                      margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
+                      link_good ? "BURST CONTINUES" : "FALLBACK");
+    if (!link_good) {
+      /* Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
+       * The first packet's records were already committed on its ACK — no loss. */
       g_tx_state = TX_STATE_COMPLETE;
+      g_bulk_packets_sent = 0;
     }
-  } else if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && !linkcheck_received) {
-    // Downlink received but no LinkCheckAns - cannot assess link quality for bulk
-    SEGGER_RTT_WriteString(0, "Downlink received but no LinkCheckAns - skipping bulk evaluation\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-  } else {
-    // Link check result for non-probe transmissions (informational)
-    bool link_good = (linkcheck_received && margin >= LINK_MARGIN_THRESHOLD && gw_count >= GATEWAY_COUNT_THRESHOLD);
-    SEGGER_RTT_printf(0, "Link quality: %s (margin=%ddB >= %d, gateways=%d >= %d)\r\n",
-                     link_good ? "GOOD" : "POOR", margin, LINK_MARGIN_THRESHOLD, 
-                     gw_count, GATEWAY_COUNT_THRESHOLD);
+  } else if (linkcheck_received) {
+    // Link check result for non-archive transmissions (informational)
+    SEGGER_RTT_printf(0, "Link quality: margin=%ddB, gateways=%d\r\n", margin, gw_count);
   }
   
   // Process any received application data
@@ -1388,21 +1371,15 @@ static void SendTxData(void)
       compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
       compactData.Buffer = (uint8_t*)&compact_packet;
       
-      // Request LinkCheck immediately before send (should piggyback in FOpts)
-      SEGGER_RTT_WriteString(0, "Requesting LinkCheck...\r\n");
-      LmHandlerErrorStatus_t linkcheck_status = LmHandlerLinkCheckReq();
-      SEGGER_RTT_printf(0, "LinkCheckReq status: %d\r\n", linkcheck_status);
-      
-      /* FW-14: log actual size, not a stale hardcoded number */
-      SEGGER_RTT_printf(0, "Sending %u-byte compact packet at SF10 on port %d\r\n",
-                        (unsigned)sizeof(CompactTelemetryPacket_t),
-                        LORAWAN_COMPACT_PORT);
-      
-      LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+      /* DDR-0011 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
+       * No archive opportunity opens without its network ACK (evaluated in
+       * OnTxData via params->AckReceived). LinkCheck no longer rides the probe —
+       * it attaches to the first archive packet (protocol §5.2, §14). */
+      LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
-          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  // Wait for LinkCheckAns
-          SEGGER_RTT_WriteString(0, "Compact packet sent successfully, waiting for LinkCheckAns...\r\n");
+          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /* Wait for the confirmed-uplink ACK (OnTxData) */
+          SEGGER_RTT_WriteString(0, "Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
           SEGGER_RTT_printf(0, "Compact packet send failed (status: %d)\r\n", status);
           g_tx_state = TX_STATE_COMPLETE;  // Complete cycle on error
@@ -1506,17 +1483,27 @@ static void SendTxData(void)
           uint16_t v3_len = 0;
 
           if (EncodeBulkPacketV3(v3_buf, sizeof(v3_buf), max_payload,
-                                 highres_records, packed_count, &v3_packed, &v3_len)) {
+                                 highres_records, packed_count,
+                                 flash_records[0].sequence,  /* DDR-0011 base identity */
+                                 &v3_packed, &v3_len)) {
+
+            /* DDR-0011 (#34): archive packets are CONFIRMED uplinks. The FIRST
+             * archive packet of a burst carries LinkCheckReq (protocol §5.2);
+             * records commit only on network ACK (OnTxData). */
+            if (g_bulk_packets_sent == 0) {
+              LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
+              SEGGER_RTT_printf(0, "LinkCheckReq on first archive packet: %d\r\n", lc_status);
+            }
 
             LmHandlerAppData_t bulkData;
             bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
             bulkData.BufferSize = v3_len;
             bulkData.Buffer = v3_buf;
 
-            SEGGER_RTT_printf(0, "Sending %u-byte bulk v3 packet at SF7 on port %d with %u records\r\n",
+            SEGGER_RTT_printf(0, "Sending %u-byte bulk v4 packet at SF7 on port %d with %u records\r\n",
                               v3_len, LORAWAN_BULK_PORT, v3_packed);
 
-            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
             
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
@@ -1688,21 +1675,57 @@ static void OnTxData(LmHandlerTxParams_t *params)
   /* This ensures correct DevAddr, FCnt, and session state are saved */
   if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
     MultiRegion_SaveCurrentContext();
-    
-    /* C4 FIX: Mark flash records as transmitted only after confirmed TX */
-    if (g_bulk_pending_mark > 0) {
+  }
+
+  /* DDR-0011 (#34): delivery commit requires the NETWORK acknowledgement of a
+   * confirmed uplink — never bare radio-TX completion (F-004/N-04). Records
+   * without an ACK stay pending and are retransmitted later; the backend
+   * deduplicates by (device, base_seq + i). */
+  if (g_bulk_pending_mark > 0) {
+    if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       FlashLog_MarkRecordsTransmitted(&hflashlog, g_bulk_pending_mark);
-      SEGGER_RTT_printf(0, "OnTxData: Marked %lu records as transmitted\r\n", 
+      SEGGER_RTT_printf(0, "OnTxData: ACK received — committed %lu archive records\r\n",
                         (unsigned long)g_bulk_pending_mark);
-      g_bulk_pending_mark = 0;
-    }
-  } else {
-    /* TX failed - don't mark records, they'll be retransmitted */
-    if (g_bulk_pending_mark > 0) {
-      SEGGER_RTT_printf(0, "OnTxData: TX failed, NOT marking %lu records\r\n",
+    } else {
+      SEGGER_RTT_printf(0, "OnTxData: no network ACK (status %d, ack %d) — %lu records stay PENDING\r\n",
+                        params->Status, params->AckReceived,
                         (unsigned long)g_bulk_pending_mark);
-      g_bulk_pending_mark = 0;
     }
+    g_bulk_pending_mark = 0;
+  }
+
+  /* DDR-0011 (#34): the confirmed probe heartbeat opens the archive opportunity.
+   * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
+  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
+    if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
+      uint16_t battery_mv = SYS_GetBatteryVoltage();
+      bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
+      bool has_cache = FlashLog_HasUnsentData(&hflashlog);
+      SEGGER_RTT_printf(0, "Probe ACK received — battery %dmV (%s), cache %s\r\n",
+                        battery_mv, battery_good ? "GOOD" : "LOW",
+                        has_cache ? "HAS_DATA" : "NO_DATA");
+      if (battery_good && has_cache) {
+        SEGGER_RTT_WriteString(0, "Archive opportunity OPEN — first archive probe\r\n");
+        g_tx_state = TX_STATE_BULK_TRANSFER;
+        g_bulk_packets_sent = 0;
+        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+      } else {
+        g_tx_state = TX_STATE_COMPLETE;
+      }
+    } else {
+      SEGGER_RTT_printf(0, "Probe heartbeat NOT acknowledged (status %d, ack %d) — no archive opportunity\r\n",
+                        params->Status, params->AckReceived);
+      g_tx_state = TX_STATE_COMPLETE;
+    }
+  }
+
+  /* DDR-0011 (#34): burst continues only while archive packets are ACKed
+   * (protocol §5.3). First archive packet unACKed -> immediate fallback. */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER &&
+      g_bulk_packets_sent >= 1 && !params->AckReceived) {
+    SEGGER_RTT_WriteString(0, "Archive packet unACKed — FALLBACK to heartbeat mode\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
+    g_bulk_packets_sent = 0;
   }
   
   /* Drain packet queue after RX windows complete */
