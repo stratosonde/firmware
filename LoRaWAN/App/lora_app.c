@@ -347,6 +347,36 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
   */
 
 /* USER CODE BEGIN PV */
+#ifdef PROVISIONING_BUILD
+/* R30/D6 (#24): ABP provisioning table — build-time alternative to the OTAA
+ * ceremony. Entry macros live in the gitignored se-identity.h, e.g.:
+ *   #define ABP_DEV_ADDR_US915   0x78000005
+ *   #define ABP_APP_SKEY_US915   0x14,0x47,...  (16 bytes, brace-less)
+ *   #define ABP_NWK_SKEY_US915   0x84,0x2d,...
+ * A region with no macros defined is simply absent from the table. */
+#include "se-identity.h"
+typedef struct {
+  LoRaMacRegion_t region;
+  uint32_t dev_addr;
+  uint8_t app_s_key[16];
+  uint8_t nwk_s_key[16];
+} ABPProvisioningEntry_t;
+static const ABPProvisioningEntry_t abp_provisioning_table[] = {
+#ifdef ABP_DEV_ADDR_US915
+  { LORAMAC_REGION_US915, ABP_DEV_ADDR_US915, {ABP_APP_SKEY_US915}, {ABP_NWK_SKEY_US915} },
+#endif
+#ifdef ABP_DEV_ADDR_EU868
+  { LORAMAC_REGION_EU868, ABP_DEV_ADDR_EU868, {ABP_APP_SKEY_EU868}, {ABP_NWK_SKEY_EU868} },
+#endif
+#ifdef ABP_DEV_ADDR_AS923
+  { LORAMAC_REGION_AS923, ABP_DEV_ADDR_AS923, {ABP_APP_SKEY_AS923}, {ABP_NWK_SKEY_AS923} },
+#endif
+#ifdef ABP_DEV_ADDR_AU915
+  { LORAMAC_REGION_AU915, ABP_DEV_ADDR_AU915, {ABP_APP_SKEY_AU915}, {ABP_NWK_SKEY_AU915} },
+#endif
+};
+#endif
+
 /* Packet queue for deferred transmission after RX windows */
 static PacketQueue_t g_packet_queue = {0};
 
@@ -478,15 +508,42 @@ void LoRaWAN_Init(void)
     APP_LOG(TS_ON, VLEVEL_H, "Starting OTAA multi-region provision\r\n");
     
     if (MissionState_IsCommissioning()) {
+#ifdef PROVISIONING_BUILD
+      /* R30/D6 (#24): ABP provisioning from a build-time table. Keys come from
+       * the gitignored se-identity.h (F6/DDR-0006 — never committed). Define
+       * PROVISIONING_BUILD plus any of ABP_DEV_ADDR_xxx / ABP_APP_SKEY_xxx /
+       * ABP_NWK_SKEY_xxx (brace-less byte lists) to provision that region
+       * without the OTAA ceremony. */
+      uint8_t abp_count = 0;
+      for (uint32_t i = 0; i < sizeof(abp_provisioning_table)/sizeof(abp_provisioning_table[0]); i++) {
+        const ABPProvisioningEntry_t *e = &abp_provisioning_table[i];
+        if (MultiRegion_InitializeRegionFromNetworkServer(e->region, e->dev_addr, e->app_s_key, e->nwk_s_key)) {
+          abp_count++;
+        }
+      }
+      SEGGER_RTT_printf(0, "PROVISIONING_BUILD: %u region(s) initialized from table\r\n", abp_count);
+      if (abp_count > 0) {
+        MissionState_EnterFlight();
+      } else {
+        SEGGER_RTT_WriteString(0, "PROVISIONING FAILED: no regions initialized - staying in COMMISSIONING\r\n");
+      }
+#else
       /* Pre-join all regions via OTAA (includes post-join data packets) */
       /* This will: */
       /*   1. Join each region via OTAA */
       /*   2. Save session keys/DevAddr/counters to flash */
       /*   3. Send 2 post-join data packets per region */
       /*   4. Display session keys via RTT (for Chirpstack server setup) */
-      MultiRegion_PreJoinAllRegions();
-
-      APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
+      /* D6 (#24): act on the return — commissioning is ground-only and MUST
+       * complete; on failure say so loudly with remediation, not "complete". */
+      bool provision_ok = MultiRegion_PreJoinAllRegions();
+      if (provision_ok) {
+        APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
+      } else {
+        APP_LOG(TS_ON, VLEVEL_H, "PROVISION INCOMPLETE: fix gateway/credentials and power cycle to retry (still COMMISSIONING)\r\n");
+        SEGGER_RTT_WriteString(0, "*** PROVISION INCOMPLETE - unit stays in COMMISSIONING, fix and power-cycle ***\r\n");
+      }
+#endif
     } else {
       /* T1 ladder (DDR-0006), rung 3: FLIGHT with a virgin session bank means
        * RF silence. Keep flying the profile — GPS, flash logging, timers —
