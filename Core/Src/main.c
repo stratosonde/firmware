@@ -54,6 +54,7 @@
  * (stm32wlxx_it.c), 6 = deadman (lora_app.c); 16+ = boot-time fatal errors. */
 #define FAULT_CODE_CLOCK_CONFIG    16U
 #define FAULT_CODE_PAYLOAD_FORMAT  17U
+#define FAULT_CODE_FLASH_INIT      18U  /* R29 (#36): W25Q/archive unusable */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -222,8 +223,11 @@ int main(void)
       SEGGER_RTT_WriteString(0, "W25Q16JV initialized but JEDEC ID read failed\r\n");
     }
   } else {
-    SEGGER_RTT_WriteString(0, "ERROR: W25Q16JV initialization failed!\r\n");
-    Error_Handler();
+    SEGGER_RTT_printf(0, "ERROR: W25Q16JV initialization failed (status %d)!\r\n", w25q_status);
+    /* R29 (#36), F-001 split: without the archive a flight records NO science.
+     * Breadcrumb + reset (fatal) — never fly with a dead data store. The old
+     * path logged the error and flew on with logging silently disabled. */
+    Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
   }
   
   // Initialize flash logging system
@@ -242,7 +246,8 @@ int main(void)
                         used_records, total_capacity, free_records);
     } else {
       SEGGER_RTT_printf(0, "ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
-      Error_Handler();
+      /* R29 (#36): same F-001 split as W25Q — no archive, no flight. */
+      Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
     }
   }
   

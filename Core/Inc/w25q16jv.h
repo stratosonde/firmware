@@ -51,6 +51,8 @@ extern "C" {
 #define W25Q_CMD_READ_STATUS_1    0x05
 #define W25Q_CMD_READ_STATUS_2    0x35
 #define W25Q_CMD_WRITE_STATUS     0x01
+/* SR1 protection bits (R29/#36): SEC|TB|BP2..BP0 - block/sector protect */
+#define W25Q_SR1_PROTECT_MASK   0x7C
 #define W25Q_CMD_READ_DATA        0x03
 #define W25Q_CMD_FAST_READ        0x0B
 #define W25Q_CMD_PAGE_PROGRAM     0x02
@@ -98,7 +100,8 @@ typedef enum {
     W25Q_ERROR_PARAM,         /* Invalid parameter */
     W25Q_ERROR_VERIFY,        /* Verification failed */
     W25Q_ERROR_SPI,           /* SPI communication error */
-    W25Q_ERROR_NOT_FOUND      /* Device not found/wrong ID */
+    W25Q_ERROR_NOT_FOUND,     /* Device not found/wrong ID */
+    W25Q_ERROR_PROTECTED      /* R29 (#36): block-protect bits set and could not be cleared */
 } W25Q_StatusTypeDef;
 
 /**

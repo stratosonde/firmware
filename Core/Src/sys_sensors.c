@@ -177,17 +177,30 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   
   /* Read SHT31 sensor */
   if (SHT31_ReadTempAndHumidity(&hsht31, &sht_temp_scaled, &sht_hum_scaled) == SHT31_OK) {
-    TEMPERATURE_Value = sht_temp_scaled / 100.0f;  /* Convert from scaled to float */
-    HUMIDITY_Value = sht_hum_scaled / 100.0f;      /* Convert from scaled to float */
-    /* F9 FIX: update last-known-good cache, clear stale */
-    s_last_temp = TEMPERATURE_Value;
-    s_last_hum = HUMIDITY_Value;
-    s_have_th = true;
-    th_stale = false;
-    /* Print using integers (no float printf support needed) */
-    SEGGER_RTT_printf(0, "SHT31: T=%d.%d°C, H=%d.%d%%\r\n", 
-                      sht_temp_scaled / 100, (sht_temp_scaled % 100) / 10,
-                      sht_hum_scaled / 100, (sht_hum_scaled % 100) / 10);
+    float t_c = sht_temp_scaled / 100.0f;
+    float h_pct = sht_hum_scaled / 100.0f;
+    /* R28 (#36): plausibility gate BEFORE last-known-good cache accept — a
+     * corrupt read must never poison the cache that stale mode serves. */
+    if (t_c >= -90.0f && t_c <= 85.0f && h_pct >= 0.0f && h_pct <= 100.0f) {
+      TEMPERATURE_Value = t_c;
+      HUMIDITY_Value = h_pct;
+      /* F9 FIX: update last-known-good cache, clear stale */
+      s_last_temp = TEMPERATURE_Value;
+      s_last_hum = HUMIDITY_Value;
+      s_have_th = true;
+      th_stale = false;
+      /* Print using integers (no float printf support needed) */
+      SEGGER_RTT_printf(0, "SHT31: T=%d.%d°C, H=%d.%d%%\r\n",
+                        sht_temp_scaled / 100, (sht_temp_scaled % 100) / 10,
+                        sht_hum_scaled / 100, (sht_hum_scaled % 100) / 10);
+    } else {
+      if (s_have_th) {
+        TEMPERATURE_Value = s_last_temp;
+        HUMIDITY_Value = s_last_hum;
+      }
+      th_stale = true;
+      SEGGER_RTT_WriteString(0, "SHT31 implausible read rejected (STALE)\r\n");
+    }
   } else {
     /* F9 FIX: serve last-known-good (never the +18°C fantasy default once we
      * have a real reading) and mark stale. Fail safe, not fail sunny. */
@@ -201,17 +214,27 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   
   /* Read MS5607 sensor */
   if (MS5607_ReadPressureAndTemperature(&hms5607, &ms_temp, &ms_press) == MS5607_OK) {
-    PRESSURE_Value = ms_press;
-    /* FW-7: update last-known-good cache, clear stale (mirrors F9 SHT31 pattern) */
-    s_last_press = PRESSURE_Value;
-    s_have_press = true;
-    press_stale = false;
-    /* Use MS5607 temperature as backup/verification */
-    int press_int = (int)(ms_press * 10);
-    int temp_int = (int)(ms_temp * 10);
-    SEGGER_RTT_printf(0, "MS5607: P=%d.%d hPa, T=%d.%d°C\r\n", 
-                      press_int / 10, press_int % 10,
-                      temp_int / 10, temp_int % 10);
+    /* R28 (#36): plausibility gate before cache accept (defense in depth —
+     * the driver gates too, 1..1200 hPa) */
+    if (ms_press >= 1.0f && ms_press <= 1200.0f) {
+      PRESSURE_Value = ms_press;
+      /* FW-7: update last-known-good cache, clear stale (mirrors F9 SHT31 pattern) */
+      s_last_press = PRESSURE_Value;
+      s_have_press = true;
+      press_stale = false;
+      /* Use MS5607 temperature as backup/verification */
+      int press_int = (int)(ms_press * 10);
+      int temp_int = (int)(ms_temp * 10);
+      SEGGER_RTT_printf(0, "MS5607: P=%d.%d hPa, T=%d.%d°C\r\n",
+                        press_int / 10, press_int % 10,
+                        temp_int / 10, temp_int % 10);
+    } else {
+      if (s_have_press) {
+        PRESSURE_Value = s_last_press;
+      }
+      press_stale = true;
+      SEGGER_RTT_WriteString(0, "MS5607 implausible pressure rejected (STALE)\r\n");
+    }
   } else {
     /* FW-7: serve last-known-good (never the 1000.0 hPa sea-level default once
      * we have a real reading) and mark stale. A failed read must never

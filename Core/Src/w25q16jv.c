@@ -146,8 +146,75 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     }
     
     hw25q->jedec_id = jedec_id;
+
+    /* R29 (#36): block-protect / write-path verification. With BP|SEC|TB set,
+     * PageProgram is silently ignored by the device: WriteEnable succeeds,
+     * BUSY never asserts, WaitReady returns OK, and without a read-back the
+     * archive would report success while storing nothing. */
+    {
+        uint8_t sr1 = 0, sr2 = 0;
+        if (W25Q_ReadStatus1(hw25q, &sr1) != W25Q_OK) {
+            SEGGER_RTT_WriteString(0, "W25Q_Init: SR1 read FAILED\r\n");
+            return W25Q_ERROR_SPI;
+        }
+        {
+            uint8_t cmd2 = W25Q_CMD_READ_STATUS_2;
+            W25Q_CS_Low(hw25q);
+            if (W25Q_SPI_Transmit(hw25q, &cmd2, 1) == W25Q_OK) {
+                W25Q_SPI_Receive(hw25q, &sr2, 1);
+            }
+            W25Q_CS_High(hw25q);
+        }
+        SEGGER_RTT_printf(0, "W25Q_Init: SR1=0x%02X SR2=0x%02X\r\n", sr1, sr2);
+
+        if ((sr1 & W25Q_SR1_PROTECT_MASK) != 0) {
+            /* Attempt to clear BP/SEC/TB (bits 2-6); SRP0 (bit 7) and the
+             * read-only BUSY/WEL bits are preserved/masked out of the write. */
+            uint8_t clear_val = (uint8_t)(sr1 & ~W25Q_SR1_PROTECT_MASK);
+            SEGGER_RTT_printf(0, "W25Q_Init: block-protect bits set (SR1=0x%02X) - clearing to 0x%02X\r\n",
+                              sr1, clear_val);
+            if (W25Q_WriteEnable(hw25q) != W25Q_OK) {
+                return W25Q_ERROR_PROTECTED;
+            }
+            uint8_t wr[2] = { W25Q_CMD_WRITE_STATUS, clear_val };
+            W25Q_CS_Low(hw25q);
+            W25Q_StatusTypeDef wst = W25Q_SPI_Transmit(hw25q, wr, 2);
+            W25Q_CS_High(hw25q);
+            if (wst != W25Q_OK || W25Q_WaitReady(hw25q, 100) != W25Q_OK) {
+                return W25Q_ERROR_PROTECTED;
+            }
+            if (W25Q_ReadStatus1(hw25q, &sr1) != W25Q_OK ||
+                (sr1 & W25Q_SR1_PROTECT_MASK) != 0) {
+                SEGGER_RTT_printf(0, "W25Q_Init: PROTECTED - BP bits stuck (SR1=0x%02X, maybe SRP0/SRL locked)\r\n", sr1);
+                return W25Q_ERROR_PROTECTED;   /* distinct error: archive cannot store */
+            }
+            SEGGER_RTT_WriteString(0, "W25Q_Init: block-protect cleared OK\r\n");
+        }
+
+        /* Write-path self-test WITHOUT touching the data array (a sector
+         * self-test would erase 64 archive records per boot): toggle WEL and
+         * read it back. WEL only sets if WriteEnable genuinely reached the
+         * device — the same command path PageProgram requires. */
+        if (W25Q_WriteEnable(hw25q) != W25Q_OK) {
+            return W25Q_ERROR_SPI;
+        }
+        uint8_t wel = 0;
+        W25Q_ReadStatus1(hw25q, &wel);
+        if ((wel & 0x02u) == 0) {
+            SEGGER_RTT_WriteString(0, "W25Q_Init: SELF-TEST FAILED - WEL did not set\r\n");
+            return W25Q_ERROR_VERIFY;
+        }
+        W25Q_WriteDisable(hw25q);
+        W25Q_ReadStatus1(hw25q, &wel);
+        if ((wel & 0x02u) != 0) {
+            SEGGER_RTT_WriteString(0, "W25Q_Init: SELF-TEST FAILED - WEL did not clear\r\n");
+            return W25Q_ERROR_VERIFY;
+        }
+        SEGGER_RTT_WriteString(0, "W25Q_Init: write-path self-test OK (WEL toggle verified)\r\n");
+    }
+
     hw25q->initialized = true;
-    
+
     return W25Q_OK;
 }
 
@@ -292,6 +359,12 @@ W25Q_StatusTypeDef W25Q_WriteDisable(W25Q_HandleTypeDef *hw25q)
 W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hw25q, uint32_t addr, 
                              uint8_t *data, uint32_t len)
 {
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
+{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -339,6 +412,12 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hw25q, uint32_t addr,
 W25Q_StatusTypeDef W25Q_FastRead(W25Q_HandleTypeDef *hw25q, uint32_t addr,
                                  uint8_t *data, uint32_t len)
 {
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
+{
     W25Q_StatusTypeDef status;
     uint8_t cmd[5];
     
@@ -385,6 +464,12 @@ W25Q_StatusTypeDef W25Q_FastRead(W25Q_HandleTypeDef *hw25q, uint32_t addr,
 
 W25Q_StatusTypeDef W25Q_PageProgram(W25Q_HandleTypeDef *hw25q, uint32_t addr,
                                     const uint8_t *data, uint32_t len)
+{
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
 {
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
@@ -443,6 +528,12 @@ W25Q_StatusTypeDef W25Q_PageProgram(W25Q_HandleTypeDef *hw25q, uint32_t addr,
 W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
                               const uint8_t *data, uint32_t len)
 {
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
+{
     W25Q_StatusTypeDef status;
     uint32_t bytes_to_write;
     uint32_t page_offset;
@@ -479,6 +570,12 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
 }
 
 W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hw25q, uint32_t addr)
+{
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
 {
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
@@ -525,6 +622,12 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hw25q, uint32_t addr)
 
 W25Q_StatusTypeDef W25Q_EraseBlock32K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
 {
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
+{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -570,6 +673,12 @@ W25Q_StatusTypeDef W25Q_EraseBlock32K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
 
 W25Q_StatusTypeDef W25Q_EraseBlock64K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
 {
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
+{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -614,6 +723,12 @@ W25Q_StatusTypeDef W25Q_EraseBlock64K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
 }
 
 W25Q_StatusTypeDef W25Q_EraseChip(W25Q_HandleTypeDef *hw25q)
+{
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
 {
     W25Q_StatusTypeDef status;
     uint8_t cmd = W25Q_CMD_CHIP_ERASE;
@@ -718,6 +833,12 @@ W25Q_StatusTypeDef W25Q_Reset(W25Q_HandleTypeDef *hw25q)
 
 W25Q_StatusTypeDef W25Q_IsErased(W25Q_HandleTypeDef *hw25q, uint32_t addr,
                                  uint32_t len, bool *is_erased)
+{
+    /* R29 (#36): public entry points require a verified-initialized device
+     * (block-protect cleared, write path self-tested in W25Q_Init). */
+    if (hw25q == NULL || !hw25q->initialized) {
+        return W25Q_ERROR_INIT;
+    }
 {
     W25Q_StatusTypeDef status;
     uint8_t buf[64];  /* Read in chunks */

@@ -229,11 +229,12 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   int64_t off, sens;
   int64_t p;
   
-  /* DIAGNOSTIC MODE: Skip initialization check to force I2C communication attempts */
-  /* This allows us to see what's happening on the I2C bus even if init failed */
+  /* R28 (#36): diagnostic mode removed — an uninitialized sensor is a hard
+   * error, never an I2C probe with garbage calibration data. */
   if (!hms5607->IsInitialized)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: Sensor not initialized\r\n");
+    SEGGER_RTT_WriteString(0, "MS5607: ERROR - read attempted while not initialized\r\n");
+    return MS5607_ERROR;
   }
   
   /* Start D2 (temperature) conversion */
@@ -310,11 +311,12 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
     return status;
   }
   
-  /* Check if D1 or D2 is zero or very small, which would indicate a communication problem */
-  /* But don't return error, try to calculate with the values we have */
+  /* R28 (#36): zero/tiny ADC values mean a communication problem — hard error,
+   * never "calculate anyway" and transmit fantasy pressure as science. */
   if (d1 == 0 || d2 == 0 || d1 < 1000 || d2 < 1000) {
-    SEGGER_RTT_WriteString(0, "MS5607: Warning - ADC values low\r\n");
-    /* Continue anyway and see if we get reasonable values */
+    SEGGER_RTT_printf(0, "MS5607: ERROR - implausible ADC values d1=%lu d2=%lu\r\n",
+                      (unsigned long)d1, (unsigned long)d2);
+    return MS5607_ERROR;
   }
   
   /* Calculate temperature per datasheet (page 8, Figure 2) */
@@ -354,7 +356,20 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Convert to float values */
   *temperature = (float)temp / 100.0f;
   *pressure = (float)p / 100.0f;
-  
+
+  /* R28 (#36): plausibility gate — 1..1200 hPa, -90..+85 C. A corrupt I2C read
+   * or torn calibration must never become an "authentic" float-altitude
+   * pressure. The caller's stale path (last-known-good + flag) handles it. */
+  if (*pressure < 1.0f || *pressure > 1200.0f ||
+      *temperature < -90.0f || *temperature > 85.0f)
+  {
+    int p10 = (int)(*pressure * 10.0f);
+    int t10 = (int)(*temperature * 10.0f);
+    SEGGER_RTT_printf(0, "MS5607: ERROR - implausible result P=%d.%d hPa T=%d.%d C\r\n",
+                      p10 / 10, abs(p10 % 10), t10 / 10, abs(t10 % 10));
+    return MS5607_ERROR;
+  }
+
   return MS5607_OK;
 }
 
