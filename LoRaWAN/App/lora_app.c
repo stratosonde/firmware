@@ -1056,6 +1056,10 @@ static void Deadman_MarkProgress(void)
 
 void Deadman_Check(void)
 {
+  /* R45: Deadman deliberately keeps boot-relative MCU time (TIMER_IF), NOT
+   * SysTime — a GPS sync would jump the clock by decades and false-trip the
+   * watchdog. Two clocks, two jobs: UTC for science records, monotonic MCU
+   * time for liveness. */
   extern RTC_HandleTypeDef hrtc;
   uint16_t ms_unused;
   uint32_t now = TIMER_IF_GetTime(&ms_unused);
@@ -1529,7 +1533,11 @@ static void SendTxData(void)
    * sensor re-read — so position, time, and environment in a record describe
    * the same moment. Timestamp is taken fresh at write time. */
   SEGGER_RTT_WriteString(0, "Logging high-resolution data to flash...\r\n");
-  now_timestamp = TIMER_IF_GetTime(&ms_unused);  // Fresh RTC seconds at write time
+  /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
+   * delta stored in backup regs), NOT boot-relative RTC calendar time.
+   * Before the first GPS fix this falls back to boot-relative seconds —
+   * honest, monotonic, and distinguishable (small values) from epoch. */
+  now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
   FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp);
   if (log_status == FLASH_LOG_OK) {
     uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);

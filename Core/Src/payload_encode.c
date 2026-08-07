@@ -15,6 +15,7 @@
 #include "payload_format.h"
 #include "sys_sensors.h"
 #include "timer_if.h"
+#include "stm32_systime.h"  /* R45: SysTimeGet for UTC-disciplined timestamps */
 #include "reset_cause.h"
 #include "mission_state.h"
 #include "SEGGER_RTT.h"
@@ -155,8 +156,10 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     
     // If timestamp not provided, get current timestamp
     if (timestamp == 0) {
-        uint16_t ms_unused;
-        timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
+        /* R45: UTC epoch via SysTime (GPS-disciplined delta), not the
+         * boot-relative RTC calendar. Falls back to boot-relative before
+         * the first fix — honest and distinguishable from epoch. */
+        timestamp = SysTimeGet().Seconds;  // UTC epoch seconds
     }
     record->timestamp = timestamp;
     

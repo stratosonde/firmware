@@ -96,7 +96,7 @@ typedef struct __attribute__((packed)) {
     uint32_t sequence;          /**< Monotonic sequence number (never wraps in practice) */
     
     /* Timestamp (4 bytes) */
-    uint32_t timestamp;         /**< RTC timestamp (seconds since device start or epoch) */
+    uint32_t timestamp;         /**< UTC epoch seconds (R45: SysTime, GPS-disciplined); boot-relative only before first fix */
     
     /* Environmental sensors (12 bytes) */
     float pressure;             /**< Barometric pressure in mbar */
