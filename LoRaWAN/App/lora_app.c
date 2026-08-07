@@ -1166,9 +1166,12 @@ static void SendTxData(void)
       RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
       
       if (h3_region_id == REGION_RESTRICTED) {
-        SEGGER_RTT_WriteString(0, "RESTRICTED REGION DETECTED: Skipping transmission for safety\r\n");
-        SEGGER_RTT_WriteString(0, "=== SendTxData END (SAFETY RESTRICTION) ===\r\n");
-        return;  // Exit early - no transmission allowed in restricted areas
+        /* R11 (#56): don't RETURN here — that discarded the sample entirely.
+         * The archive exists precisely for data that can't be transmitted:
+         * use the rf_silence pattern (DDR-0006) — GPS + re-read + flash write
+         * proceed below; only the TX state machine is skipped. */
+        SEGGER_RTT_WriteString(0, "RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
+        rf_silence = true;
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
