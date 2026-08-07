@@ -15,6 +15,7 @@
 #include "transmit_plan.h"
 #include "config.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -167,7 +168,7 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         char temp_msg[96];
         snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d C)\r\n",
                  temp_deci / 10, abs(temp_deci % 10));
-        SEGGER_RTT_WriteString(0, temp_msg);
+        SONDE_LOG_STR(temp_msg);
     } else if (temperature_c < gps_lockout_temp) {
         plan.gps_enabled = false;
         plan.veto = VETO_TEMP_LOCKOUT;
@@ -175,7 +176,7 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         char temp_msg[96];
         snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %d.%d C < %d C (supercap inoperative)\r\n",
                  temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
-        SEGGER_RTT_WriteString(0, temp_msg);
+        SONDE_LOG_STR(temp_msg);
     }
 
     /* T1 ladder (DDR-0006): FLIGHT with no session = RF silence. The cycle

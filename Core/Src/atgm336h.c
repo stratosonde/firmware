@@ -13,6 +13,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "atgm336h.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "usart_if.h"
 #include "stm32_lpm.h"
 #include "utilities_def.h"
@@ -91,12 +92,12 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);   // PB10 LOW (no power)
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (disabled)
 
-  SEGGER_RTT_WriteString(0, "GNSS_Init: PB10=LOW, PB5=LOW (fully powered off, 0µA at startup)\r\n");
+  SONDE_LOG_STR("GNSS_Init: PB10=LOW, PB5=LOW (fully powered off, 0µA at startup)\r\n");
   
   /* NOTE: UART pins (PB6/PB7) left in UART mode (configured by main.c) */
   /* No parasitic power issue since GPS is fully off (PB10=LOW, PB5=LOW) */
   /* UART pins will only be forced to OUTPUT-LOW in GNSS_EnterStandby() */
-  SEGGER_RTT_WriteString(0, "GNSS_Init: UART pins left in AF mode - ready for first wake\r\n");
+  SONDE_LOG_STR("GNSS_Init: UART pins left in AF mode - ready for first wake\r\n");
 
   hgnss->is_initialized = true;
 
@@ -123,7 +124,7 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
 
   /* Both PB10 and PB5 stay HIGH permanently (set in GNSS_Init) */
   /* Wake GPS from standby using UART command */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: Waking GPS via UART...\r\n");
+  SONDE_LOG_STR("GNSS_PowerOn: Waking GPS via UART...\r\n");
   
   /* Disable STOP mode while GNSS is active */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
@@ -153,7 +154,7 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   HAL_Delay(100);  // GPS takes ~100ms to wake and start NMEA output
   
   hgnss->is_powered = true;
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOn: DMA started, GPS woken from standby\r\n");
+  SONDE_LOG_STR("GNSS_PowerOn: DMA started, GPS woken from standby\r\n");
 
   return GNSS_OK;
 }
@@ -176,11 +177,11 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   
   if (cmd_status == GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] Standby command sent successfully (PCAS12)\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] Standby command sent successfully (PCAS12)\r\n");
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] ERROR - Standby command TX failed!\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] ERROR - Standby command TX failed!\r\n");
   }
   
   HAL_Delay(200); */
@@ -189,16 +190,16 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
   {
     HAL_UART_AbortReceive(hgnss->huart);
-    SEGGER_RTT_WriteString(0, "GNSS_PowerOff: DMA receive aborted\r\n");
+    SONDE_LOG_STR("GNSS_PowerOff: DMA receive aborted\r\n");
   }
 
   /* CRITICAL: Re-enable STOP mode so MCU can sleep */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: MCU STOP mode re-enabled\r\n");
+  SONDE_LOG_STR("GNSS_PowerOff: MCU STOP mode re-enabled\r\n");
 
   /* FW-8: this function does NOT touch PB10/PB5 — they keep whatever state
    * the caller established (GNSS_EnterStandby() drives both LOW, 0µA). */
-  SEGGER_RTT_WriteString(0, "GNSS_PowerOff: DMA aborted, pins unchanged, MCU can now sleep\r\n");
+  SONDE_LOG_STR("GNSS_PowerOff: DMA aborted, pins unchanged, MCU can now sleep\r\n");
   
   hgnss->is_powered = false;
 
@@ -217,46 +218,46 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
-  SEGGER_RTT_WriteString(0, "\r\n=== Configuring ATGM336H GNSS Module ===\r\n");
+  SONDE_LOG_STR("\r\n=== Configuring ATGM336H GNSS Module ===\r\n");
   
   /* R26: flight mask is GGA+RMC+VTG with GSV off (bandwidth); the old
    * "GGA+RMC only" log string was never true. */
-  SEGGER_RTT_WriteString(0, "Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
+  SONDE_LOG_STR("Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_NMEA_CONFIG) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send NMEA config\r\n");
+    SONDE_LOG_STR("WARNING: Failed to send NMEA config\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
   /* Send constellation selection command (GPS+GLONASS) */
-  SEGGER_RTT_WriteString(0, "Sending: Constellation select (GPS+GLONASS)...\r\n");
+  SONDE_LOG_STR("Sending: Constellation select (GPS+GLONASS)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_CONSTELLATION) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send constellation config\r\n");
+    SONDE_LOG_STR("WARNING: Failed to send constellation config\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
   /* CRITICAL: Send airborne dynamic model command (defeats 18km CoCom limit) */
-  SEGGER_RTT_WriteString(0, "Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
+  SONDE_LOG_STR("Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_AIRBORNE_MODE) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
+    SONDE_LOG_STR("WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
   /* Send update rate configuration (1 Hz) */
-  SEGGER_RTT_WriteString(0, "Sending: Update rate (1 Hz)...\r\n");
+  SONDE_LOG_STR("Sending: Update rate (1 Hz)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_UPDATE_RATE) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send update rate\r\n");
+    SONDE_LOG_STR("WARNING: Failed to send update rate\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
   /* Send satellite system configuration (GPS + BeiDou + GLONASS) */
-  SEGGER_RTT_WriteString(0, "Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
+  SONDE_LOG_STR("Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SATELLITE_SYS) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to send satellite config\r\n");
+    SONDE_LOG_STR("WARNING: Failed to send satellite config\r\n");
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
@@ -265,14 +266,14 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
    * re-enables the 18 km CoCom limit. Airborne must be the LAST PCAS11 write. */
   
   /* Save all configuration to GPS internal flash (PCAS00) */
-  SEGGER_RTT_WriteString(0, "Sending: Save configuration to flash...\r\n");
+  SONDE_LOG_STR("Sending: Save configuration to flash...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SAVE_CONFIG) != GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "WARNING: Failed to save configuration\r\n");
+    SONDE_LOG_STR("WARNING: Failed to save configuration\r\n");
   }
   HAL_Delay(100);  /* Give GPS time to save to flash */
   
-  SEGGER_RTT_WriteString(0, "=== GNSS Configuration Complete (saved to flash) ===\r\n\r\n");
+  SONDE_LOG_STR("=== GNSS Configuration Complete (saved to flash) ===\r\n\r\n");
   
   return GNSS_OK;
 }
@@ -314,14 +315,14 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   }
 
   /* Log raw NMEA sentence - DISABLED to reduce output */
-  // SEGGER_RTT_WriteString(0, "[NMEA] ");
-  // SEGGER_RTT_WriteString(0, sentence);
-  // SEGGER_RTT_WriteString(0, "\r\n");
+  // SONDE_LOG_STR("[NMEA] ");
+  // SONDE_LOG_STR(sentence);
+  // SONDE_LOG_STR("\r\n");
 
   /* Verify checksum if present */
   if (!GNSS_VerifyChecksum(sentence))
   {
-    SEGGER_RTT_WriteString(0, "[NMEA] Checksum FAILED\r\n");
+    SONDE_LOG_STR("[NMEA] Checksum FAILED\r\n");
     return GNSS_INVALID;
   }
 
@@ -425,29 +426,29 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
   }
 
   /* DEBUG: Log command string */
-  SEGGER_RTT_WriteString(0, "[GPS CMD] Sending: ");
-  SEGGER_RTT_WriteString(0, cmd);
+  SONDE_LOG_STR("[GPS CMD] Sending: ");
+  SONDE_LOG_STR(cmd);
   
   /* DEBUG: Log hex bytes */
-  SEGGER_RTT_WriteString(0, "[GPS CMD] Hex: ");
+  SONDE_LOG_STR("[GPS CMD] Hex: ");
   for(size_t i = 0; i < strlen(cmd); i++)
   {
     char hex_buf[8];
     snprintf(hex_buf, sizeof(hex_buf), "%02X ", (uint8_t)cmd[i]);
-    SEGGER_RTT_WriteString(0, hex_buf);
+    SONDE_LOG_STR(hex_buf);
   }
-  SEGGER_RTT_WriteString(0, "\r\n");
+  SONDE_LOG_STR("\r\n");
 
   HAL_StatusTypeDef status;
   status = HAL_UART_Transmit(hgnss->huart, (uint8_t *)cmd, strlen(cmd), GNSS_UART_TIMEOUT);
 
   if (status != HAL_OK)
   {
-    SEGGER_RTT_WriteString(0, "[GPS CMD] UART Transmit FAILED!\r\n");
+    SONDE_LOG_STR("[GPS CMD] UART Transmit FAILED!\r\n");
     return GNSS_ERROR;
   }
   
-  SEGGER_RTT_WriteString(0, "[GPS CMD] UART Transmit OK\r\n");
+  SONDE_LOG_STR("[GPS CMD] UART Transmit OK\r\n");
 
   return GNSS_OK;
 }
@@ -532,7 +533,7 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
                (hgnss->data.fix_quality == GNSS_FIX_INVALID) ? "No Fix" : "Acquiring");
     }
     
-    SEGGER_RTT_WriteString(0, summary);
+    SONDE_LOG_STR(summary);
     last_debug_time = now;
   }
 
@@ -544,7 +545,7 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   if ((hgnss->dma_produced_total - hgnss->dma_consumed_total) > GNSS_DMA_BUFFER_SIZE)
   {
     hgnss->dma_overrun_count++;
-    SEGGER_RTT_printf(0, "[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
+    SONDE_LOG("[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
                       (unsigned long)hgnss->dma_overrun_count);
     hgnss->dma_tail = hgnss->dma_head;
     hgnss->dma_consumed_total = hgnss->dma_produced_total;
@@ -1125,11 +1126,11 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
 
   if (cmd_status == GNSS_OK)
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] PCAS12 command sent - GPS saving ephemeris...\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] PCAS12 command sent - GPS saving ephemeris...\r\n");
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] WARNING - PCAS12 TX failed!\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] WARNING - PCAS12 TX failed!\r\n");
   }
 
   /* Wait 100ms for the PCAS12-triggered ephemeris save before power cut */
@@ -1139,7 +1140,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
   {
     HAL_UART_AbortReceive(hgnss->huart);
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] DMA aborted\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] DMA aborted\r\n");
   }
   
   /* Flush UART hardware FIFO to discard any stale data */
@@ -1150,7 +1151,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART hardware FIFO flushed\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] UART hardware FIFO flushed\r\n");
   }
   
   /* Clear software buffers and reset state */
@@ -1160,13 +1161,13 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   hgnss->nmea_length = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Software buffers cleared\r\n");
+  SONDE_LOG_STR("[GPS STANDBY] Software buffers cleared\r\n");
   
   /* Configure UART pins for minimal power (full power-off follows below) */
   if (hgnss->huart != NULL)
   {
     HAL_UART_DeInit(hgnss->huart);
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] UART deinitialized\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] UART deinitialized\r\n");
 
     /* CRITICAL PIN CONFIGURATION FOR HOT-START MODE */
     /* PB6 (MCU TX -> GPS RX): OUTPUT-LOW to prevent parasitic power to GPS */
@@ -1188,7 +1189,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-    SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB6=OUTPUT-LOW, PB7=ANALOG (hi-Z)\r\n");
+    SONDE_LOG_STR("[GPS STANDBY] PB6=OUTPUT-LOW, PB7=ANALOG (hi-Z)\r\n");
   }
 
   /* FULL POWER-OFF MODE: Both PB10=LOW and PB5=LOW after PCAS12 */
@@ -1200,13 +1201,13 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW (no power)
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);    // PB5 LOW (disabled)
 
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] PB10=LOW, PB5=LOW (full power-off, 0µA) - ephemeris saved\r\n");
+  SONDE_LOG_STR("[GPS STANDBY] PB10=LOW, PB5=LOW (full power-off, 0µA) - ephemeris saved\r\n");
 
   /* CRITICAL: Re-enable MCU STOP mode */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] MCU STOP mode re-enabled\r\n");
+  SONDE_LOG_STR("[GPS STANDBY] MCU STOP mode re-enabled\r\n");
 
-  SEGGER_RTT_WriteString(0, "[GPS STANDBY] Complete - GPS fully off (0µA), ephemeris in flash\r\n");
+  SONDE_LOG_STR("[GPS STANDBY] Complete - GPS fully off (0µA), ephemeris in flash\r\n");
   
   hgnss->is_powered = false;
   return GNSS_OK;
@@ -1227,14 +1228,14 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   
   /* Disable MCU STOP mode during GPS operation */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] MCU STOP mode disabled\r\n");
+  SONDE_LOG_STR("[GPS WAKE] MCU STOP mode disabled\r\n");
   
   /* STEP 1: Initialize UART peripheral FIRST (before GPS transmits) */
   if (hgnss->huart != NULL)
   {
     /* Reinitialize UART peripheral - restores PB6/PB7 to UART function */
     HAL_UART_Init(hgnss->huart);
-    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART reinitialized\r\n");
+    SONDE_LOG_STR("[GPS WAKE] UART reinitialized\r\n");
     
     /* CRITICAL: Flush UART hardware FIFO to ensure clean start */
     /* This prevents reading any stale/corrupt data from previous cycle */
@@ -1243,7 +1244,7 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
     __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
-    SEGGER_RTT_WriteString(0, "[GPS WAKE] UART hardware FIFO flushed\r\n");
+    SONDE_LOG_STR("[GPS WAKE] UART hardware FIFO flushed\r\n");
   }
   
   /* STEP 2: Clear software buffers (and the F-011 absolute counters) */
@@ -1255,26 +1256,26 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   hgnss->nmea_length = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] Software buffers cleared\r\n");
+  SONDE_LOG_STR("[GPS WAKE] Software buffers cleared\r\n");
   
   /* STEP 3: Start DMA reception (UART is ready and listening) */
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
   if (dma_status != HAL_OK)
   {
-    SEGGER_RTT_WriteString(0, "[GPS WAKE] ERROR - DMA start failed\r\n");
+    SONDE_LOG_STR("[GPS WAKE] ERROR - DMA start failed\r\n");
     /* BUG 2.4 FIX: Re-enable STOP mode on error path to prevent permanent ~mA Sleep-only */
     UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
     return GNSS_ERROR;
   }
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] DMA started - ready to receive\r\n");
+  SONDE_LOG_STR("[GPS WAKE] DMA started - ready to receive\r\n");
   
   /* STEP 4: Ensure PB10 is HIGH (main power) - may have been affected by sleep mode */
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB10 HIGH - main power confirmed\r\n");
+  SONDE_LOG_STR("[GPS WAKE] PB10 HIGH - main power confirmed\r\n");
   
   /* STEP 5: Enable GPS via PB5 - UART/DMA infrastructure is ready to capture from first byte */
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
+  SONDE_LOG_STR("[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
   
   /* DEBUG: Read back GPIO states to verify pins are actually set */
   GPIO_PinState pb10_state = HAL_GPIO_ReadPin(hgnss->pwr_port, hgnss->pwr_pin);
@@ -1282,7 +1283,7 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   char pin_buf[80];
   snprintf(pin_buf, sizeof(pin_buf), "[GPS WAKE DEBUG] Pin readback: PB10=%d PB5=%d (expect 1,1)\r\n", 
            pb10_state, pb5_state);
-  SEGGER_RTT_WriteString(0, pin_buf);
+  SONDE_LOG_STR(pin_buf);
   
   /* DEBUG: Check UART error flags */
   uint32_t uart_errors = hgnss->huart->ErrorCode;
@@ -1290,14 +1291,14 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     char err_buf[80];
     snprintf(err_buf, sizeof(err_buf), "[GPS WAKE DEBUG] UART errors: 0x%08lX\r\n", 
              (unsigned long)uart_errors);
-    SEGGER_RTT_WriteString(0, err_buf);
+    SONDE_LOG_STR(err_buf);
   } else {
-    SEGGER_RTT_WriteString(0, "[GPS WAKE DEBUG] UART no errors\r\n");
+    SONDE_LOG_STR("[GPS WAKE DEBUG] UART no errors\r\n");
   }
   
   /* No delay needed - 40 second polling loop will wait for GPS boot and satellite acquisition */
   hgnss->is_powered = true;
-  SEGGER_RTT_WriteString(0, "[GPS WAKE] Complete - UART/DMA ready for GPS transmission\r\n");
+  SONDE_LOG_STR("[GPS WAKE] Complete - UART/DMA ready for GPS transmission\r\n");
   
   return GNSS_OK;
 }

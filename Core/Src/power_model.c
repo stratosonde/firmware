@@ -14,6 +14,7 @@
 
 #include "power_model.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include <stdlib.h>  /* abs */
 
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c) {
@@ -159,37 +160,37 @@ OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
     // value let up to +2700 mV of cold compensation (at -66C) mask a real
     // brownout. Normalization is for slope/prediction only.
     if (raw_voltage_mv < 4300) {
-        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V raw (LTO critical) -> SURVIVAL\r\n");
+        SONDE_LOG_STR("PREDICT: V<4.3V raw (LTO critical) -> SURVIVAL\r\n");
         return MODE_SURVIVAL;
     }
 
     // EMERGENCY: Depleting fast and will hit critical soon
     if (current_slope < -30 && time_to_critical != 0xFFFF && time_to_critical < 6) {
-        SEGGER_RTT_WriteString(0, "PREDICT: Critical in <6h -> SURVIVAL\r\n");
+        SONDE_LOG_STR("PREDICT: Critical in <6h -> SURVIVAL\r\n");
         return MODE_SURVIVAL;
     }
 
     // WARNING: Moderate depletion with limited time
     if (current_slope < -15 && time_to_critical != 0xFFFF && time_to_critical < 12) {
-        SEGGER_RTT_WriteString(0, "PREDICT: Critical in <12h -> RECOVERY\r\n");
+        SONDE_LOG_STR("PREDICT: Critical in <12h -> RECOVERY\r\n");
         return MODE_RECOVERY;
     }
 
     // CAUTION: Slow depletion
     if (current_slope < -5) {
-        SEGGER_RTT_WriteString(0, "PREDICT: Slow depletion -> REDUCED\r\n");
+        SONDE_LOG_STR("PREDICT: Slow depletion -> REDUCED\r\n");
         return MODE_REDUCED;
     }
 
     // CHARGING: Good charging rate
     if (current_slope > 20) {
-        SEGGER_RTT_WriteString(0, "PREDICT: Fast charging -> NORMAL\r\n");
+        SONDE_LOG_STR("PREDICT: Fast charging -> NORMAL\r\n");
         return MODE_NORMAL;
     }
 
     // STABLE/SLIGHT CHARGE: Gentle charging or stable
     if (current_slope > 0) {
-        SEGGER_RTT_WriteString(0, "PREDICT: Stable/charging -> CONSERVATIVE\r\n");
+        SONDE_LOG_STR("PREDICT: Stable/charging -> CONSERVATIVE\r\n");
         return MODE_CONSERVATIVE;
     }
 

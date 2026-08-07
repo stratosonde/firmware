@@ -31,6 +31,7 @@
 #include "atgm336h.h"
 #include "adc_if.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
 #include "sht31.h"
 #include "ms5607.h"
@@ -190,7 +191,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
       s_have_th = true;
       th_stale = false;
       /* Print using integers (no float printf support needed) */
-      SEGGER_RTT_printf(0, "SHT31: T=%d.%d°C, H=%d.%d%%\r\n",
+      SONDE_LOG("SHT31: T=%d.%d°C, H=%d.%d%%\r\n",
                         sht_temp_scaled / 100, (sht_temp_scaled % 100) / 10,
                         sht_hum_scaled / 100, (sht_hum_scaled % 100) / 10);
     } else {
@@ -199,7 +200,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
         HUMIDITY_Value = s_last_hum;
       }
       th_stale = true;
-      SEGGER_RTT_WriteString(0, "SHT31 implausible read rejected (STALE)\r\n");
+      SONDE_LOG_STR("SHT31 implausible read rejected (STALE)\r\n");
     }
   } else {
     /* F9 FIX: serve last-known-good (never the +18°C fantasy default once we
@@ -209,7 +210,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
       HUMIDITY_Value = s_last_hum;
     }
     th_stale = true;
-    SEGGER_RTT_WriteString(0, "SHT31 read failed, using last-known-good (STALE)\r\n");
+    SONDE_LOG_STR("SHT31 read failed, using last-known-good (STALE)\r\n");
   }
   
   /* Read MS5607 sensor */
@@ -225,7 +226,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
       /* Use MS5607 temperature as backup/verification */
       int press_int = (int)(ms_press * 10);
       int temp_int = (int)(ms_temp * 10);
-      SEGGER_RTT_printf(0, "MS5607: P=%d.%d hPa, T=%d.%d°C\r\n",
+      SONDE_LOG("MS5607: P=%d.%d hPa, T=%d.%d°C\r\n",
                         press_int / 10, press_int % 10,
                         temp_int / 10, temp_int % 10);
     } else {
@@ -233,7 +234,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
         PRESSURE_Value = s_last_press;
       }
       press_stale = true;
-      SEGGER_RTT_WriteString(0, "MS5607 implausible pressure rejected (STALE)\r\n");
+      SONDE_LOG_STR("MS5607 implausible pressure rejected (STALE)\r\n");
     }
   } else {
     /* FW-7: serve last-known-good (never the 1000.0 hPa sea-level default once
@@ -243,7 +244,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
       PRESSURE_Value = s_last_press;
     }
     press_stale = true;
-    SEGGER_RTT_WriteString(0, "MS5607 read failed, using last-known-good (STALE)\r\n");
+    SONDE_LOG_STR("MS5607 read failed, using last-known-good (STALE)\r\n");
   }
 
   /* F20: track consecutive total bus failures; recover the bus after 3.
@@ -252,7 +253,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
    * 1000.0 hPa reading as a bus failure. */
   I2C_NoteResult((!th_stale) || (!press_stale));
 #else
-  SEGGER_RTT_WriteString(0, "Sensors disabled, using default values\r\n");
+  SONDE_LOG_STR("Sensors disabled, using default values\r\n");
 #endif
 
   /* F25 FIX: LED flash + HAL_Delay(50) removed from flight path.
@@ -279,10 +280,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   int batt_mv = SYS_GetBatteryVoltage();
   int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
   int solar_mv = SYS_GetSolarVoltage();
-  SEGGER_RTT_printf(0, "Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
+  SONDE_LOG("Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
                     vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
-  SEGGER_RTT_printf(0, "Solar: %d.%02d V (%d mV)\r\n", 
+  SONDE_LOG("Solar: %d.%02d V (%d mV)\r\n", 
                     solar_mv / 1000, (solar_mv % 1000) / 10, solar_mv);
   
  
@@ -305,7 +306,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     sensor_data->gnss_valid = true;
     sensor_data->gnss_stale = s_gnss_stale ? 1 : 0;  /* T2: honesty from the TX path */
     
-    SEGGER_RTT_printf(0, "GNSS: Valid fix | Sats:%d%s\r\n", hgnss.data.satellites,
+    SONDE_LOG("GNSS: Valid fix | Sats:%d%s\r\n", hgnss.data.satellites,
                       s_gnss_stale ? " (STALE)" : "");
   }
   else
@@ -322,7 +323,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     sensor_data->gnss_hdop = 99.9f;
     sensor_data->gnss_valid = false;
 
-    SEGGER_RTT_printf(0, "GNSS: No fix | Sats visible:%d | Position zeroed\r\n",
+    SONDE_LOG("GNSS: No fix | Sats visible:%d | Position zeroed\r\n",
                       hgnss.data.satellites_in_view);
   }
 
@@ -343,7 +344,7 @@ int32_t EnvSensors_Init(void)
   int32_t ret = 0;
   /* USER CODE BEGIN EnvSensors_Init */
   
-  SEGGER_RTT_WriteString(0, "EnvSensors_Init: Starting I2C sensor initialization...\r\n");
+  SONDE_LOG_STR("EnvSensors_Init: Starting I2C sensor initialization...\r\n");
   
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
   /* Initialize SHT31 sensor handle */
@@ -359,25 +360,25 @@ int32_t EnvSensors_Init(void)
   
   /* Initialize SHT31 sensor */
   if (SHT31_Init(&hsht31) == SHT31_OK) {
-    SEGGER_RTT_WriteString(0, "SHT31 sensor initialized successfully\r\n");
+    SONDE_LOG_STR("SHT31 sensor initialized successfully\r\n");
   } else {
-    SEGGER_RTT_WriteString(0, "SHT31 sensor initialization failed\r\n");
+    SONDE_LOG_STR("SHT31 sensor initialization failed\r\n");
     ret = -1;
   }
   
   /* Initialize MS5607 sensor */
   if (MS5607_Init(&hms5607) == MS5607_OK) {
-    SEGGER_RTT_WriteString(0, "MS5607 sensor initialized successfully\r\n");
+    SONDE_LOG_STR("MS5607 sensor initialized successfully\r\n");
   } else {
-    SEGGER_RTT_WriteString(0, "MS5607 sensor initialization failed\r\n");
+    SONDE_LOG_STR("MS5607 sensor initialization failed\r\n");
     ret = -2;
   }
 #else
-  SEGGER_RTT_WriteString(0, "Sensors disabled in configuration\r\n");
+  SONDE_LOG_STR("Sensors disabled in configuration\r\n");
 #endif
   
   /* Initialize GNSS module handle */
-  SEGGER_RTT_WriteString(0, "Initializing GNSS module...\r\n");
+  SONDE_LOG_STR("Initializing GNSS module...\r\n");
   hgnss.huart = &huart1;
   hgnss.pwr_port = GPIOB;
   hgnss.pwr_pin = GPIO_PIN_10;
@@ -386,17 +387,17 @@ int32_t EnvSensors_Init(void)
   
   /* Initialize GNSS module (configures GPIO, sets up structure - does NOT power on) */
   if (GNSS_Init(&hgnss) == GNSS_OK) {
-    SEGGER_RTT_WriteString(0, "GNSS module initialized successfully\r\n");
+    SONDE_LOG_STR("GNSS module initialized successfully\r\n");
   } else {
-    SEGGER_RTT_WriteString(0, "GNSS module initialization FAILED\r\n");
+    SONDE_LOG_STR("GNSS module initialization FAILED\r\n");
     ret = -3;
   }
   
   /* GNSS power-on DISABLED during init to prevent interference with LoRaWAN join */
   /* GPS will be powered on/off by SendTxData() callback after join succeeds */
-  SEGGER_RTT_WriteString(0, "GNSS init complete - will be powered on during transmissions\r\n");
+  SONDE_LOG_STR("GNSS init complete - will be powered on during transmissions\r\n");
   
-  SEGGER_RTT_WriteString(0, "EnvSensors_Init: Initialization complete\r\n");
+  SONDE_LOG_STR("EnvSensors_Init: Initialization complete\r\n");
   /* USER CODE END EnvSensors_Init */
   return ret;
 }
@@ -451,7 +452,7 @@ static void I2C_BusRecover(void)
 
   /* Re-init peripheral (MspInit restores PA15/PB15 to AF open-drain) */
   HAL_I2C_Init(&hi2c2);
-  SEGGER_RTT_WriteString(0, "I2C2 bus recovery: 9-clock + STOP, re-init done\r\n");
+  SONDE_LOG_STR("I2C2 bus recovery: 9-clock + STOP, re-init done\r\n");
 }
 
 static void I2C_NoteResult(bool any_success)

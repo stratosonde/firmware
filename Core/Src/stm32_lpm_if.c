@@ -26,6 +26,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "atgm336h.h"  // For GNSS_HandleTypeDef and power state check
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For TCXO control
 #include "w25q16jv.h"  // For external flash deep power-down
@@ -358,14 +359,14 @@ void PWR_ExitStopMode(void)
   /* Re-initialize I2C2 - sensors need this to work */
   HAL_I2C_DeInit(&hi2c2);
   if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
-    SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: I2C2\r\n");
+    SONDE_LOG_STR("STOP2 REINIT FAIL: I2C2\r\n");
     reinit_failed = true;
   }
 
   /* Re-initialize SPI2 - external flash needs this */
   HAL_SPI_DeInit(&hspi2);
   if (HAL_SPI_Init(&hspi2) != HAL_OK) {
-    SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: SPI2 (flash archive at risk)\r\n");
+    SONDE_LOG_STR("STOP2 REINIT FAIL: SPI2 (flash archive at risk)\r\n");
     reinit_failed = true;
   }
 
@@ -373,7 +374,7 @@ void PWR_ExitStopMode(void)
    * datasheet; W25Q_ReleasePowerDown already delays 1ms. */
   if (hw25q.initialized) {
     if (W25Q_ReleasePowerDown(&hw25q) != W25Q_OK) {
-      SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: W25Q wake\r\n");
+      SONDE_LOG_STR("STOP2 REINIT FAIL: W25Q wake\r\n");
       reinit_failed = true;
     }
   }
@@ -389,14 +390,14 @@ void PWR_ExitStopMode(void)
   if (hgnss.is_powered) {
     HAL_UART_DeInit(&huart1);
     if (HAL_UART_Init(&huart1) != HAL_OK) {
-      SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: UART1 (GNSS)\r\n");
+      SONDE_LOG_STR("STOP2 REINIT FAIL: UART1 (GNSS)\r\n");
       reinit_failed = true;
     }
   }
 
   if (reinit_failed) {
     stop2_reinit_fail_count++;
-    SEGGER_RTT_printf(0, "STOP2 reinit failures this boot: %lu\r\n",
+    SONDE_LOG("STOP2 reinit failures this boot: %lu\r\n",
                       (unsigned long)stop2_reinit_fail_count);
   }
   

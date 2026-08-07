@@ -15,7 +15,8 @@
 #include "multiregion_h3.h"
 #include "multiregion_context.h"  // For MultiRegion_GetActiveRegion()
 #include "sys_app.h"  // For debug logging
-#include "SEGGER_RTT.h"  // For profiling output
+#include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */  // For profiling output
 #include "stm32wlxx_hal.h"  // For HAL_GetTick()
 #include <string.h>
 #include <stdio.h>
@@ -181,10 +182,10 @@ void MultiRegion_ProfileH3Performance(void)
 {
     extern uint32_t HAL_GetTick(void);
     
-    SEGGER_RTT_WriteString(0, "\r\n");
-    SEGGER_RTT_WriteString(0, "========================================\r\n");
-    SEGGER_RTT_WriteString(0, "===  H3LITE PROFILING TEST SUITE    ===\r\n");
-    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
+    SONDE_LOG_STR("\r\n");
+    SONDE_LOG_STR("========================================\r\n");
+    SONDE_LOG_STR("===  H3LITE PROFILING TEST SUITE    ===\r\n");
+    SONDE_LOG_STR("========================================\r\n\r\n");
     
     // Test coordinates structure
     typedef struct {
@@ -251,7 +252,7 @@ void MultiRegion_ProfileH3Performance(void)
     
     int num_tests = sizeof(tests) / sizeof(tests[0]);
     
-    SEGGER_RTT_printf(0, "Running %d test scenarios...\r\n\r\n", num_tests);
+    SONDE_LOG("Running %d test scenarios...\r\n\r\n", num_tests);
     
     // Run each test
     for (int i = 0; i < num_tests; i++) {
@@ -261,16 +262,16 @@ void MultiRegion_ProfileH3Performance(void)
         int32_t lat_int = (int32_t)(test->lat * 10000);
         int32_t lon_int = (int32_t)(test->lon * 10000);
         
-        SEGGER_RTT_WriteString(0, "========================================\r\n");
-        SEGGER_RTT_printf(0, "Test %d/%d: %s\r\n", i+1, num_tests, test->name);
-        SEGGER_RTT_printf(0, "Coords: (%d.%04d, %d.%04d) | Expect: %s\r\n", 
+        SONDE_LOG_STR("========================================\r\n");
+        SONDE_LOG("Test %d/%d: %s\r\n", i+1, num_tests, test->name);
+        SONDE_LOG("Coords: (%d.%04d, %d.%04d) | Expect: %s\r\n", 
                           lat_int / 10000, abs(lat_int % 10000),
                           lon_int / 10000, abs(lon_int % 10000),
                           test->expected_region);
         
         // === TEST 1: Get H3 hex ID ===
         H3Index h3_index = latLngToH3((double)test->lat, (double)test->lon, 4);
-        SEGGER_RTT_printf(0, "H3 Index: 0x%08X%08X\r\n", 
+        SONDE_LOG("H3 Index: 0x%08X%08X\r\n", 
                           (uint32_t)(h3_index >> 32), 
                           (uint32_t)(h3_index & 0xFFFFFFFF));
         
@@ -282,36 +283,36 @@ void MultiRegion_ProfileH3Performance(void)
         if (direct_result != 0) {
             const char* region_name = getRegionName(direct_result);
             LoRaMacRegion_t lora_region = H3Region_ToLoRaMacRegion(direct_result);
-            SEGGER_RTT_printf(0, "Direct Lookup: %lums -> %s (%s) ✓\r\n", 
+            SONDE_LOG("Direct Lookup: %lums -> %s (%s) ✓\r\n", 
                               (unsigned long)direct_time, 
                               region_name,
                               LoRaMacRegion_ToString(lora_region));
         } else {
-            SEGGER_RTT_printf(0, "Direct Lookup: %lums -> NOT FOUND (offshore)\r\n", 
+            SONDE_LOG("Direct Lookup: %lums -> NOT FOUND (offshore)\r\n", 
                               (unsigned long)direct_time);
         }
         
         // === TEST 3: Dynamic ring search (search until found) ===
         if (test->is_offshore || direct_result == 0) {
-            SEGGER_RTT_WriteString(0, "\r\nDynamic Ring Search (until found or max):\r\n");
+            SONDE_LOG_STR("\r\nDynamic Ring Search (until found or max):\r\n");
             
             int max_rings = 6;  // Search up to 6 rings
             bool found = false;
             
             for (int rings = 1; rings <= max_rings; rings++) {
-                SEGGER_RTT_printf(0, "  [DEBUG] Starting ring %d...\r\n", rings);
+                SONDE_LOG("  [DEBUG] Starting ring %d...\r\n", rings);
                 HAL_Delay(10);  // Let RTT drain
                 
                 start = HAL_GetTick();
                 NearestRegionsInfo nearest = findNearestRegions((double)test->lat, (double)test->lon, rings);
                 uint32_t ring_time = HAL_GetTick() - start;
                 
-                SEGGER_RTT_printf(0, "  [DEBUG] Ring %d completed in %lums\r\n", rings, (unsigned long)ring_time);
+                SONDE_LOG("  [DEBUG] Ring %d completed in %lums\r\n", rings, (unsigned long)ring_time);
                 
                 if (nearest.numRegions > 0) {
                     // Convert distance to integer (e.g. 125.3 km -> 1253 -> "125.3")
                     int32_t dist_int = (int32_t)(nearest.regions[0].distanceKm * 10);
-                    SEGGER_RTT_printf(0, "  Ring %d: %lums -> %s (%d.%d km) ✓ FOUND\r\n",
+                    SONDE_LOG("  Ring %d: %lums -> %s (%d.%d km) ✓ FOUND\r\n",
                                       rings,
                                       (unsigned long)ring_time,
                                       nearest.regions[0].regionName,
@@ -321,7 +322,7 @@ void MultiRegion_ProfileH3Performance(void)
                     if (nearest.numRegions > 1) {
                         for (int j = 1; j < nearest.numRegions; j++) {
                             int32_t dist_j = (int32_t)(nearest.regions[j].distanceKm * 10);
-                            SEGGER_RTT_printf(0, "          Also: %s (%d.%d km)\r\n",
+                            SONDE_LOG("          Also: %s (%d.%d km)\r\n",
                                               nearest.regions[j].regionName,
                                               dist_j / 10, abs(dist_j % 10));
                         }
@@ -329,30 +330,30 @@ void MultiRegion_ProfileH3Performance(void)
                     found = true;
                     break;  // Stop searching once found
                 } else {
-                    SEGGER_RTT_printf(0, "  Ring %d: %lums -> NOT FOUND\r\n",
+                    SONDE_LOG("  Ring %d: %lums -> NOT FOUND\r\n",
                                       rings, (unsigned long)ring_time);
                 }
             }
             
             if (!found) {
-                SEGGER_RTT_printf(0, "  No regions found within %d rings\r\n", max_rings);
+                SONDE_LOG("  No regions found within %d rings\r\n", max_rings);
             }
         }
         
-        SEGGER_RTT_WriteString(0, "\r\n");
+        SONDE_LOG_STR("\r\n");
         
         // Add delay to prevent RTT buffer overflow (let buffer drain)
         HAL_Delay(100);
     }
     
     // === Summary statistics ===
-    SEGGER_RTT_WriteString(0, "========================================\r\n");
-    SEGGER_RTT_WriteString(0, "===  PROFILING COMPLETE             ===\r\n");
-    SEGGER_RTT_WriteString(0, "========================================\r\n");
-    SEGGER_RTT_printf(0, "Total tests run: %d\r\n", num_tests);
-    SEGGER_RTT_WriteString(0, "\r\nKey findings:\r\n");
-    SEGGER_RTT_WriteString(0, "- Direct lookup: Fast for in-region coords\r\n");
-    SEGGER_RTT_WriteString(0, "- Ring search: Time increases with ring count\r\n");
-    SEGGER_RTT_WriteString(0, "- Recommendation: Use 2 rings for offshore\r\n");
-    SEGGER_RTT_WriteString(0, "========================================\r\n\r\n");
+    SONDE_LOG_STR("========================================\r\n");
+    SONDE_LOG_STR("===  PROFILING COMPLETE             ===\r\n");
+    SONDE_LOG_STR("========================================\r\n");
+    SONDE_LOG("Total tests run: %d\r\n", num_tests);
+    SONDE_LOG_STR("\r\nKey findings:\r\n");
+    SONDE_LOG_STR("- Direct lookup: Fast for in-region coords\r\n");
+    SONDE_LOG_STR("- Ring search: Time increases with ring count\r\n");
+    SONDE_LOG_STR("- Recommendation: Use 2 rings for offshore\r\n");
+    SONDE_LOG_STR("========================================\r\n\r\n");
 }

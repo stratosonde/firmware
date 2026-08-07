@@ -18,6 +18,7 @@
 #include "w25q16jv.h"
 #include <string.h>
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 
 /* Private defines -----------------------------------------------------------*/
 #define W25Q_SPI_TIMEOUT     100   /* SPI HAL timeout in ms */
@@ -114,7 +115,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* Release from power-down in case device was in sleep mode */
     status = W25Q_ReleasePowerDown(hw25q);
     if (status != W25Q_OK) {
-        SEGGER_RTT_printf(0, "W25Q_Init: ReleasePowerDown FAILED (status=%d)\r\n", status);
+        SONDE_LOG("W25Q_Init: ReleasePowerDown FAILED (status=%d)\r\n", status);
         return status;
     }
     
@@ -124,7 +125,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* Software reset to ensure clean state */
     status = W25Q_Reset(hw25q);
     if (status != W25Q_OK) {
-        SEGGER_RTT_printf(0, "W25Q_Init: Reset FAILED (status=%d)\r\n", status);
+        SONDE_LOG("W25Q_Init: Reset FAILED (status=%d)\r\n", status);
         return status;
     }
     HAL_Delay(1);  /* tRST = 30us max, using 1ms */
@@ -132,7 +133,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* Read and verify JEDEC ID */
     status = W25Q_ReadJEDECID(hw25q, &jedec_id);
     if (status != W25Q_OK) {
-        SEGGER_RTT_printf(0, "W25Q_Init: ReadJEDEC FAILED (status=%d)\r\n", status);
+        SONDE_LOG("W25Q_Init: ReadJEDEC FAILED (status=%d)\r\n", status);
         return status;
     }
     
@@ -141,7 +142,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     /* We accept any W25Q16 variant (manufacturer 0xEF, memory type 0x40, capacity 0x15) */
     if ((jedec_id & 0xFFFF00) != 0xEF4000) {
         /* Not a Winbond W25Q series device */
-        SEGGER_RTT_printf(0, "W25Q_Init: VERIFICATION FAILED - Wrong device ID: 0x%06lX\r\n", jedec_id);
+        SONDE_LOG("W25Q_Init: VERIFICATION FAILED - Wrong device ID: 0x%06lX\r\n", jedec_id);
         return W25Q_ERROR_NOT_FOUND;
     }
     
@@ -154,7 +155,7 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     {
         uint8_t sr1 = 0, sr2 = 0;
         if (W25Q_ReadStatus1(hw25q, &sr1) != W25Q_OK) {
-            SEGGER_RTT_WriteString(0, "W25Q_Init: SR1 read FAILED\r\n");
+            SONDE_LOG_STR("W25Q_Init: SR1 read FAILED\r\n");
             return W25Q_ERROR_SPI;
         }
         {
@@ -165,13 +166,13 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
             }
             W25Q_CS_High(hw25q);
         }
-        SEGGER_RTT_printf(0, "W25Q_Init: SR1=0x%02X SR2=0x%02X\r\n", sr1, sr2);
+        SONDE_LOG("W25Q_Init: SR1=0x%02X SR2=0x%02X\r\n", sr1, sr2);
 
         if ((sr1 & W25Q_SR1_PROTECT_MASK) != 0) {
             /* Attempt to clear BP/SEC/TB (bits 2-6); SRP0 (bit 7) and the
              * read-only BUSY/WEL bits are preserved/masked out of the write. */
             uint8_t clear_val = (uint8_t)(sr1 & ~W25Q_SR1_PROTECT_MASK);
-            SEGGER_RTT_printf(0, "W25Q_Init: block-protect bits set (SR1=0x%02X) - clearing to 0x%02X\r\n",
+            SONDE_LOG("W25Q_Init: block-protect bits set (SR1=0x%02X) - clearing to 0x%02X\r\n",
                               sr1, clear_val);
             if (W25Q_WriteEnable(hw25q) != W25Q_OK) {
                 return W25Q_ERROR_PROTECTED;
@@ -185,10 +186,10 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
             }
             if (W25Q_ReadStatus1(hw25q, &sr1) != W25Q_OK ||
                 (sr1 & W25Q_SR1_PROTECT_MASK) != 0) {
-                SEGGER_RTT_printf(0, "W25Q_Init: PROTECTED - BP bits stuck (SR1=0x%02X, maybe SRP0/SRL locked)\r\n", sr1);
+                SONDE_LOG("W25Q_Init: PROTECTED - BP bits stuck (SR1=0x%02X, maybe SRP0/SRL locked)\r\n", sr1);
                 return W25Q_ERROR_PROTECTED;   /* distinct error: archive cannot store */
             }
-            SEGGER_RTT_WriteString(0, "W25Q_Init: block-protect cleared OK\r\n");
+            SONDE_LOG_STR("W25Q_Init: block-protect cleared OK\r\n");
         }
 
         /* Write-path self-test WITHOUT touching the data array (a sector
@@ -201,16 +202,16 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
         uint8_t wel = 0;
         W25Q_ReadStatus1(hw25q, &wel);
         if ((wel & 0x02u) == 0) {
-            SEGGER_RTT_WriteString(0, "W25Q_Init: SELF-TEST FAILED - WEL did not set\r\n");
+            SONDE_LOG_STR("W25Q_Init: SELF-TEST FAILED - WEL did not set\r\n");
             return W25Q_ERROR_VERIFY;
         }
         W25Q_WriteDisable(hw25q);
         W25Q_ReadStatus1(hw25q, &wel);
         if ((wel & 0x02u) != 0) {
-            SEGGER_RTT_WriteString(0, "W25Q_Init: SELF-TEST FAILED - WEL did not clear\r\n");
+            SONDE_LOG_STR("W25Q_Init: SELF-TEST FAILED - WEL did not clear\r\n");
             return W25Q_ERROR_VERIFY;
         }
-        SEGGER_RTT_WriteString(0, "W25Q_Init: write-path self-test OK (WEL toggle verified)\r\n");
+        SONDE_LOG_STR("W25Q_Init: write-path self-test OK (WEL toggle verified)\r\n");
     }
 
     hw25q->initialized = true;

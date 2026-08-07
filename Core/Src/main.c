@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include "stm32wlxx_hal_pwr.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "atgm336h.h"
 #include "sys_sensors.h"
 #include "sht31.h"
@@ -148,8 +149,8 @@ int main(void)
   /* Increased buffer size and non-blocking mode to prevent watchdog hangs */
   static char rtt_buffer[4096];  // 4KB buffer (up from default 1KB)
   SEGGER_RTT_ConfigUpBuffer(0, "Terminal", rtt_buffer, sizeof(rtt_buffer), SEGGER_RTT_MODE_NO_BLOCK_SKIP);
-  SEGGER_RTT_WriteString(0, "=== RTT Terminal 0 Configured (4KB, NON-BLOCKING) ===\r\n");
-  SEGGER_RTT_WriteString(0, "All output: System, NMEA, APP_LOG\r\n");
+  SONDE_LOG_STR("=== RTT Terminal 0 Configured (4KB, NON-BLOCKING) ===\r\n");
+  SONDE_LOG_STR("All output: System, NMEA, APP_LOG\r\n");
 
   /* USER CODE END 1 */
 
@@ -179,7 +180,7 @@ int main(void)
   /* USER CODE BEGIN SysInit */
 
   /* NOTE: IWDG watchdog armed above, right after SystemClock_Config (FW-5) */
-  SEGGER_RTT_WriteString(0, "IWDG watchdog armed (32.76s timeout)\r\n");
+  SONDE_LOG_STR("IWDG watchdog armed (32.76s timeout)\r\n");
   
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
@@ -201,29 +202,29 @@ int main(void)
   
   leds_boot_seq();
   
-  SEGGER_RTT_WriteString(0, "Boot sequence complete, initializing H3Lite...\r\n");
+  SONDE_LOG_STR("Boot sequence complete, initializing H3Lite...\r\n");
   
   // Initialize h3lite for region detection
   if (!h3liteInit()) {
-    SEGGER_RTT_WriteString(0, "ERROR: H3Lite initialization failed!\r\n");
+    SONDE_LOG_STR("ERROR: H3Lite initialization failed!\r\n");
     Error_Handler();  /* F-001: recoverable — returns */
     /* F-001 residual: no success print on this path — failure stays honest. */
   } else {
-    SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
+    SONDE_LOG_STR("H3Lite initialized successfully\r\n");
   }
   
   // Initialize external flash (W25Q16JV) for logging
-  SEGGER_RTT_WriteString(0, "Initializing external flash (W25Q16JV)...\r\n");
+  SONDE_LOG_STR("Initializing external flash (W25Q16JV)...\r\n");
   W25Q_StatusTypeDef w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);  // Use software CS on PB9
   if (w25q_status == W25Q_OK) {
     uint32_t jedec_id;
     if (W25Q_ReadJEDECID(&hw25q, &jedec_id) == W25Q_OK) {
-      SEGGER_RTT_printf(0, "W25Q16JV initialized successfully (JEDEC ID: 0x%06lX)\r\n", jedec_id);
+      SONDE_LOG("W25Q16JV initialized successfully (JEDEC ID: 0x%06lX)\r\n", jedec_id);
     } else {
-      SEGGER_RTT_WriteString(0, "W25Q16JV initialized but JEDEC ID read failed\r\n");
+      SONDE_LOG_STR("W25Q16JV initialized but JEDEC ID read failed\r\n");
     }
   } else {
-    SEGGER_RTT_printf(0, "ERROR: W25Q16JV initialization failed (status %d)!\r\n", w25q_status);
+    SONDE_LOG("ERROR: W25Q16JV initialization failed (status %d)!\r\n", w25q_status);
     /* R29 (#36), F-001 split: without the archive a flight records NO science.
      * Breadcrumb + reset (fatal) — never fly with a dead data store. The old
      * path logged the error and flew on with logging silently disabled. */
@@ -235,51 +236,51 @@ int main(void)
    * here would be a false success print. Failure stays honest (DDR-0007);
    * logging is recoverable-degraded per DDR-0001. */
   if (w25q_status != W25Q_OK) {
-    SEGGER_RTT_WriteString(0, "Flash logging disabled: W25Q init failed\r\n");
+    SONDE_LOG_STR("Flash logging disabled: W25Q init failed\r\n");
   } else {
-    SEGGER_RTT_WriteString(0, "Initializing flash logging system...\r\n");
+    SONDE_LOG_STR("Initializing flash logging system...\r\n");
     FlashLog_StatusTypeDef flashlog_status = FlashLog_Init(&hflashlog, &hw25q);
     if (flashlog_status == FLASH_LOG_OK) {
       uint32_t total_capacity, used_records, free_records;
       FlashLog_GetStats(&hflashlog, &total_capacity, &used_records, &free_records);
-      SEGGER_RTT_printf(0, "Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
+      SONDE_LOG("Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
                         used_records, total_capacity, free_records);
     } else {
-      SEGGER_RTT_printf(0, "ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
+      SONDE_LOG("ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
       /* R29 (#36): same F-001 split as W25Q — no archive, no flight. */
       Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
     }
   }
   
   // Validate payload format sizes at compile time
-  SEGGER_RTT_WriteString(0, "Validating payload format sizes...\r\n");
+  SONDE_LOG_STR("Validating payload format sizes...\r\n");
   if (!PayloadFormat_ValidateSizes()) {
     /* F-001: a size/layout mismatch is a BUILD bug — every uplink would be
      * malformed. Breadcrumb + reset so the failure is observable, not silent. */
-    SEGGER_RTT_WriteString(0, "ERROR: Payload format size validation failed!\r\n");
+    SONDE_LOG_STR("ERROR: Payload format size validation failed!\r\n");
     Error_Handler_Fatal(FAULT_CODE_PAYLOAD_FORMAT);
   }
   
   // Initialize configuration system
-  SEGGER_RTT_WriteString(0, "Initializing configuration system...\r\n");
+  SONDE_LOG_STR("Initializing configuration system...\r\n");
   ConfigStatus_t config_status = Config_Init();
   if (config_status == CONFIG_OK) {
-    SEGGER_RTT_WriteString(0, "Configuration system initialized successfully\r\n");
+    SONDE_LOG_STR("Configuration system initialized successfully\r\n");
     
     // Print current configuration for verification
     Config_PrintCurrent();
   } else {
-    SEGGER_RTT_printf(0, "WARNING: Configuration initialization failed (status: %d)\r\n", config_status);
-    SEGGER_RTT_WriteString(0, "Continuing with hardcoded defaults...\r\n");
+    SONDE_LOG("WARNING: Configuration initialization failed (status: %d)\r\n", config_status);
+    SONDE_LOG_STR("Continuing with hardcoded defaults...\r\n");
   }
   
   // Optional: Run H3Lite profiling suite (enable for testing only)
   #ifdef H3LITE_PROFILING_ENABLED
-  SEGGER_RTT_WriteString(0, "\r\nRunning H3Lite profiling suite...\r\n");
+  SONDE_LOG_STR("\r\nRunning H3Lite profiling suite...\r\n");
   MultiRegion_ProfileH3Performance();
   #endif
   
-  SEGGER_RTT_WriteString(0, "Starting LoRaWAN...\r\n");
+  SONDE_LOG_STR("Starting LoRaWAN...\r\n");
 
   /* Removed system_sleep() call to keep I2C and UART active for debug */
   /* system_sleep() call commented out to ensure I2C remains active for SHT31 sensor */
@@ -287,9 +288,9 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  SEGGER_RTT_WriteString(0, "\r\n===== STARTING LORAWAN OPERATION =====\r\n");
-  SEGGER_RTT_WriteString(0, "Main loop: Continuous LoRaWAN servicing\r\n");
-  SEGGER_RTT_WriteString(0, "Join will happen in background via TxTimer\r\n\r\n");
+  SONDE_LOG_STR("\r\n===== STARTING LORAWAN OPERATION =====\r\n");
+  SONDE_LOG_STR("Main loop: Continuous LoRaWAN servicing\r\n");
+  SONDE_LOG_STR("Join will happen in background via TxTimer\r\n\r\n");
   
   while (1)
   {
@@ -365,7 +366,7 @@ void SystemClock_Config(void)
     rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
     HAL_RCCEx_PeriphCLKConfig(&rtcClk);
     g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
-    SEGGER_RTT_WriteString(0, "WARNING: LSE failed - RTC on LSI (~1% drift)\r\n");
+    SONDE_LOG_STR("WARNING: LSE failed - RTC on LSI (~1% drift)\r\n");
   }
 
   /** Configure the SYSCLKSource, HCLK, PCLK1 and PCLK2 clocks dividers
@@ -783,7 +784,7 @@ void Error_Handler(void)
    * At 40 km altitude, a hang is permanent death.
    * Do NOT disable interrupts — IWDG must remain active.
    * For truly unrecoverable errors, callers should use NVIC_SystemReset() directly. */
-  SEGGER_RTT_WriteString(0, "ERROR_HANDLER: Non-fatal error, continuing...\r\n");
+  SONDE_LOG_STR("ERROR_HANDLER: Non-fatal error, continuing...\r\n");
   /* USER CODE END Error_Handler_Debug */
 }
 
@@ -797,7 +798,7 @@ void Error_Handler(void)
  * 16+ = boot-time fatal errors below. */
 void Error_Handler_Fatal(uint16_t code)
 {
-  SEGGER_RTT_printf(0, "FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
+  SONDE_LOG("FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_RTCAPB_CLK_ENABLE();
   HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,

@@ -8,7 +8,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "ms5607.h"
 #include "sys_app.h" /* For APP_LOG */
-#include "SEGGER_RTT.h" /* For RTT debug output */
+#include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */ /* For RTT debug output */
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -57,29 +58,29 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   }
   
   /* Reset the sensor */
-  SEGGER_RTT_WriteString(0, "MS5607: Sending reset...\r\n");
+  SONDE_LOG_STR("MS5607: Sending reset...\r\n");
   status = MS5607_Reset(hms5607);
   if (status != MS5607_OK)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: Reset FAILED\r\n");
+    SONDE_LOG_STR("MS5607: Reset FAILED\r\n");
     return status;
   }
-  SEGGER_RTT_WriteString(0, "MS5607: Reset OK\r\n");
+  SONDE_LOG_STR("MS5607: Reset OK\r\n");
   
   /* Wait for reset to complete - datasheet specifies minimum 2.8ms */
   HAL_Delay(20);
   
   /* Read calibration data */
-  SEGGER_RTT_WriteString(0, "MS5607: Reading PROM calibration...\r\n");
+  SONDE_LOG_STR("MS5607: Reading PROM calibration...\r\n");
   status = MS5607_ReadCalibration(hms5607);
   if (status != MS5607_OK)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: PROM read FAILED\r\n");
+    SONDE_LOG_STR("MS5607: PROM read FAILED\r\n");
     return status;
   }
   
   /* Print raw calibration values via RTT */
-  SEGGER_RTT_WriteString(0, "MS5607: Calibration data read\r\n");
+  SONDE_LOG_STR("MS5607: Calibration data read\r\n");
   
   /* Verify calibration data is valid (not all zeros or all ones) */
   if (hms5607->CalData.c1 == 0 || hms5607->CalData.c1 == 0xFFFF ||
@@ -89,7 +90,7 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
       hms5607->CalData.c5 == 0 || hms5607->CalData.c5 == 0xFFFF ||
       hms5607->CalData.c6 == 0 || hms5607->CalData.c6 == 0xFFFF)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: Cal data INVALID (0 or 0xFFFF)\r\n");
+    SONDE_LOG_STR("MS5607: Cal data INVALID (0 or 0xFFFF)\r\n");
     return MS5607_ERROR;
   }
   
@@ -105,7 +106,7 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   prom[7] = hms5607->CalData.crc;
   
   /* Debug: print raw PROM values */
-  SEGGER_RTT_WriteString(0, "MS5607: PROM values read\r\n");
+  SONDE_LOG_STR("MS5607: PROM values read\r\n");
   
   uint8_t crc = MS5607_CRC4(prom);
   
@@ -114,28 +115,28 @@ MS5607_StatusTypeDef MS5607_Init(MS5607_HandleTypeDef *hms5607)
   // uint8_t stored_crc_high4 = (hms5607->CalData.crc >> 12) & 0x000F;  /* Reserved for future CRC validation */
   // uint8_t stored_crc_prom0 = (hms5607->CalData.reserved >> 12) & 0x000F; /* Reserved for future CRC validation */
   
-  SEGGER_RTT_WriteString(0, "MS5607: CRC check in progress\r\n");
+  SONDE_LOG_STR("MS5607: CRC check in progress\r\n");
   
   /* CRC is stored in lower 4 bits of PROM[7] per AN520 CRC Notes */
   uint8_t stored_crc = stored_crc_low4;
   
   if (crc != stored_crc)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: CRC MISMATCH!\r\n");
+    SONDE_LOG_STR("MS5607: CRC MISMATCH!\r\n");
     return MS5607_ERROR;
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "MS5607: CRC OK\r\n");
+    SONDE_LOG_STR("MS5607: CRC OK\r\n");
   }
   
   /* Calibration complete */
-  SEGGER_RTT_WriteString(0, "MS5607: Calibration complete\r\n");
+  SONDE_LOG_STR("MS5607: Calibration complete\r\n");
   
   /* Set initialization flag */
   hms5607->IsInitialized = 1;
   
-  SEGGER_RTT_WriteString(0, "MS5607: Initialization successful\r\n");
+  SONDE_LOG_STR("MS5607: Initialization successful\r\n");
   return MS5607_OK;
 }
 
@@ -233,14 +234,14 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
    * error, never an I2C probe with garbage calibration data. */
   if (!hms5607->IsInitialized)
   {
-    SEGGER_RTT_WriteString(0, "MS5607: ERROR - read attempted while not initialized\r\n");
+    SONDE_LOG_STR("MS5607: ERROR - read attempted while not initialized\r\n");
     return MS5607_ERROR;
   }
   
   /* Start D2 (temperature) conversion */
   status = MS5607_StartConversion(hms5607, MS5607_CMD_CONVERT_D2 | hms5607->TemperatureOsr);
   if (status != MS5607_OK) {
-    SEGGER_RTT_WriteString(0, "MS5607: D2 conversion failed\r\n");
+    SONDE_LOG_STR("MS5607: D2 conversion failed\r\n");
     return status;
   }
   
@@ -270,14 +271,14 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Read D2 (temperature) ADC value */
   status = MS5607_ReadADC(hms5607, &d2);
   if (status != MS5607_OK) {
-    SEGGER_RTT_WriteString(0, "MS5607: D2 ADC read failed\r\n");
+    SONDE_LOG_STR("MS5607: D2 ADC read failed\r\n");
     return status;
   }
   
   /* Start D1 (pressure) conversion */
   status = MS5607_StartConversion(hms5607, MS5607_CMD_CONVERT_D1 | hms5607->PressureOsr);
   if (status != MS5607_OK) {
-    SEGGER_RTT_WriteString(0, "MS5607: D1 conversion failed\r\n");
+    SONDE_LOG_STR("MS5607: D1 conversion failed\r\n");
     return status;
   }
   
@@ -307,14 +308,14 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   /* Read D1 (pressure) ADC value */
   status = MS5607_ReadADC(hms5607, &d1);
   if (status != MS5607_OK) {
-    SEGGER_RTT_WriteString(0, "MS5607: D1 ADC read failed\r\n");
+    SONDE_LOG_STR("MS5607: D1 ADC read failed\r\n");
     return status;
   }
   
   /* R28 (#36): zero/tiny ADC values mean a communication problem — hard error,
    * never "calculate anyway" and transmit fantasy pressure as science. */
   if (d1 == 0 || d2 == 0 || d1 < 1000 || d2 < 1000) {
-    SEGGER_RTT_printf(0, "MS5607: ERROR - implausible ADC values d1=%lu d2=%lu\r\n",
+    SONDE_LOG("MS5607: ERROR - implausible ADC values d1=%lu d2=%lu\r\n",
                       (unsigned long)d1, (unsigned long)d2);
     return MS5607_ERROR;
   }
@@ -365,7 +366,7 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   {
     int p10 = (int)(*pressure * 10.0f);
     int t10 = (int)(*temperature * 10.0f);
-    SEGGER_RTT_printf(0, "MS5607: ERROR - implausible result P=%d.%d hPa T=%d.%d C\r\n",
+    SONDE_LOG("MS5607: ERROR - implausible result P=%d.%d hPa T=%d.%d C\r\n",
                       p10 / 10, abs(p10 % 10), t10 / 10, abs(t10 % 10));
     return MS5607_ERROR;
   }
@@ -457,7 +458,7 @@ static MS5607_StatusTypeDef MS5607_ReadProm(MS5607_HandleTypeDef *hms5607, uint8
   /* Check if address is valid */
   if (address > 7)
   {
-    SEGGER_RTT_WriteString(0, "MS5607_ReadProm: Invalid address\r\n");
+    SONDE_LOG_STR("MS5607_ReadProm: Invalid address\r\n");
     return MS5607_ERROR;
   }
   

@@ -41,6 +41,7 @@
 #include "stdlib.h"
 #include "string.h"  /* memset — R31 full GNSS invalidation (#57) */
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "atgm336h.h"
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
@@ -402,19 +403,19 @@ static uint32_t g_bulk_pending_mark = 0;  /* C4: records to mark after confirmed
  */
 void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
 {
-  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Starting full stack reset...\r\n");
+  SONDE_LOG_STR("LoRaApp_ReInitStack: Starting full stack reset...\r\n");
   
   // Halt current operations
   LmHandlerHalt();
   HAL_Delay(100);
   
   // Complete teardown
-  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Calling LmHandlerDeInit...\r\n");
+  SONDE_LOG_STR("LoRaApp_ReInitStack: Calling LmHandlerDeInit...\r\n");
   LmHandlerDeInit();
   HAL_Delay(200);
   
   // Rebuild from scratch
-  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Calling LmHandlerInit...\r\n");
+  SONDE_LOG_STR("LoRaApp_ReInitStack: Calling LmHandlerInit...\r\n");
   LmHandlerInit(&LmHandlerCallbacks, APP_VERSION);
   HAL_Delay(100);
   
@@ -422,7 +423,7 @@ void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
   // Configuration must be done AFTER DevEUI is set by caller
   LmHandlerParams.ActiveRegion = new_region;
   
-  SEGGER_RTT_WriteString(0, "LoRaApp_ReInitStack: Stack reset complete (region set, not configured)\r\n");
+  SONDE_LOG_STR("LoRaApp_ReInitStack: Stack reset complete (region set, not configured)\r\n");
 }
 
 /* USER CODE END EF */
@@ -469,11 +470,11 @@ void LoRaWAN_Init(void)
    * build reads FLIGHT and skips the wipe (its bank stays intact). */
   if (ForceRejoin) {
     if (MissionState_IsCommissioning()) {
-      SEGGER_RTT_WriteString(0, "\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
+      SONDE_LOG_STR("\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
       MultiRegion_ClearAllContexts();
-      SEGGER_RTT_WriteString(0, "*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
+      SONDE_LOG_STR("*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
     } else {
-      SEGGER_RTT_WriteString(0, "FORCE REJOIN ignored: mission is FLIGHT (FW-10)\r\n");
+      SONDE_LOG_STR("FORCE REJOIN ignored: mission is FLIGHT (FW-10)\r\n");
     }
   }
   
@@ -481,13 +482,13 @@ void LoRaWAN_Init(void)
    * PCAS03/04/05/11 are saved to the GNSS module's internal flash via PCAS00 —
    * writing that flash on every boot wears it for zero benefit. */
   if (MissionState_IsCommissioning()) {
-    SEGGER_RTT_WriteString(0, "*** COMMISSIONING: Reconfiguring GPS module (all constellations) ***\r\n");
+    SONDE_LOG_STR("*** COMMISSIONING: Reconfiguring GPS module (all constellations) ***\r\n");
     GNSS_PowerOn(&hgnss);
     HAL_Delay(1000);  // Let GPS boot
     GNSS_Configure(&hgnss);  // Sends PCAS04,7 + PCAS11 airborne + PCAS00 (save)
     HAL_Delay(500);   // Let GPS save to flash
     GNSS_PowerOff(&hgnss);
-    SEGGER_RTT_WriteString(0, "*** GPS reconfigured and saved to flash ***\r\n\r\n");
+    SONDE_LOG_STR("*** GPS reconfigured and saved to flash ***\r\n\r\n");
   }
   
   /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
@@ -495,7 +496,7 @@ void LoRaWAN_Init(void)
   if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
     
     /* Already provisioned - use saved ABP context from flash */
-    SEGGER_RTT_WriteString(0, "Found valid ABP context - using saved session\r\n");
+    SONDE_LOG_STR("Found valid ABP context - using saved session\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP context for US915\r\n");
     
     /* Switch to US915 as starting region */
@@ -503,14 +504,14 @@ void LoRaWAN_Init(void)
     
     /* Display session keys for Chirpstack verification (F-017: commissioning only) */
     if (MissionState_IsCommissioning()) {
-      SEGGER_RTT_WriteString(0, "\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
+      SONDE_LOG_STR("\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
       MultiRegion_DisplaySessionKeys();
     }
     
   } else {
     
     /* Not provisioned yet - run OTAA provision sequence */
-    SEGGER_RTT_WriteString(0, "No valid contexts found - running OTAA provision\r\n");
+    SONDE_LOG_STR("No valid contexts found - running OTAA provision\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "Starting OTAA multi-region provision\r\n");
     
     if (MissionState_IsCommissioning()) {
@@ -527,11 +528,11 @@ void LoRaWAN_Init(void)
           abp_count++;
         }
       }
-      SEGGER_RTT_printf(0, "PROVISIONING_BUILD: %u region(s) initialized from table\r\n", abp_count);
+      SONDE_LOG("PROVISIONING_BUILD: %u region(s) initialized from table\r\n", abp_count);
       if (abp_count > 0) {
         MissionState_EnterFlight();
       } else {
-        SEGGER_RTT_WriteString(0, "PROVISIONING FAILED: no regions initialized - staying in COMMISSIONING\r\n");
+        SONDE_LOG_STR("PROVISIONING FAILED: no regions initialized - staying in COMMISSIONING\r\n");
       }
 #else
       /* Pre-join all regions via OTAA (includes post-join data packets) */
@@ -547,7 +548,7 @@ void LoRaWAN_Init(void)
         APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
       } else {
         APP_LOG(TS_ON, VLEVEL_H, "PROVISION INCOMPLETE: fix gateway/credentials and power cycle to retry (still COMMISSIONING)\r\n");
-        SEGGER_RTT_WriteString(0, "*** PROVISION INCOMPLETE - unit stays in COMMISSIONING, fix and power-cycle ***\r\n");
+        SONDE_LOG_STR("*** PROVISION INCOMPLETE - unit stays in COMMISSIONING, fix and power-cycle ***\r\n");
       }
 #endif
     } else {
@@ -555,7 +556,7 @@ void LoRaWAN_Init(void)
        * RF silence. Keep flying the profile — GPS, flash logging, timers —
        * but never attempt a join. */
       APP_LOG(TS_ON, VLEVEL_H, "FLIGHT: no valid session bank - RF silence, logging only\r\n");
-      SEGGER_RTT_WriteString(0, "FLIGHT MODE with no saved session: RF SILENCE (DDR-0006)\r\n");
+      SONDE_LOG_STR("FLIGHT MODE with no saved session: RF SILENCE (DDR-0006)\r\n");
     }
   }
 
@@ -563,7 +564,7 @@ void LoRaWAN_Init(void)
 
   // Skip LmHandlerJoin - already handled by auto-provision logic above
   // LmHandlerJoin(ActivationType, ForceRejoin);
-  SEGGER_RTT_WriteString(0, "Skipping LmHandlerJoin - using auto-provision\r\n");
+  SONDE_LOG_STR("Skipping LmHandlerJoin - using auto-provision\r\n");
 
   if (EventType == TX_ON_TIMER)
   {
@@ -572,7 +573,7 @@ void LoRaWAN_Init(void)
     UTIL_TIMER_Start(&TxTimer);
 
     /* Trigger first transmission immediately (don't wait for timer) */
-    SEGGER_RTT_WriteString(0, "Triggering first transmission immediately...\r\n");
+    SONDE_LOG_STR("Triggering first transmission immediately...\r\n");
     UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
   }
   else
@@ -585,7 +586,7 @@ void LoRaWAN_Init(void)
   /* USER CODE BEGIN LoRaWAN_Init_Last */
   /* Initialize packet queue for deferred transmission */
   PacketQueue_Init(&g_packet_queue);
-  SEGGER_RTT_WriteString(0, "Packet queue initialized\r\n");
+  SONDE_LOG_STR("Packet queue initialized\r\n");
   /* USER CODE END LoRaWAN_Init_Last */
 }
 
@@ -632,7 +633,7 @@ static int8_t DatarateFromSF(uint8_t sf)
       return (int8_t)dr;
     }
   }
-  SEGGER_RTT_printf(0, "DatarateFromSF: SF%u not in region table - default\r\n", sf);
+  SONDE_LOG("DatarateFromSF: SF%u not in region table - default\r\n", sf);
   return LORAWAN_DEFAULT_DATA_RATE;
 }
 
@@ -727,7 +728,7 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 {
   /* USER CODE BEGIN OnRxData_1 */
-  SEGGER_RTT_WriteString(0, "\r\n=== OnRxData Callback ===\r\n");
+  SONDE_LOG_STR("\r\n=== OnRxData Callback ===\r\n");
   
   // Read real LinkCheck results from LmHandler RxParams
   // LmHandlerRxParams_t already contains LinkCheck, DemodMargin, NbGateways
@@ -743,7 +744,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     snprintf(link_msg, sizeof(link_msg),
              "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n",
              margin, gw_count);
-    SEGGER_RTT_WriteString(0, link_msg);
+    SONDE_LOG_STR(link_msg);
   }
   
   /* DDR-0011 (#34): the archive opportunity opens on the confirmed probe's ACK
@@ -755,7 +756,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     bool link_good = (linkcheck_received &&
                       margin >= LINK_MARGIN_THRESHOLD &&
                       gw_count >= GATEWAY_COUNT_THRESHOLD);
-    SEGGER_RTT_printf(0, "First archive response: LinkCheckAns %s, margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
+    SONDE_LOG("First archive response: LinkCheckAns %s, margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
                       linkcheck_received ? "received" : "MISSING",
                       margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
                       link_good ? "BURST CONTINUES" : "FALLBACK");
@@ -767,7 +768,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     }
   } else if (linkcheck_received) {
     // Link check result for non-archive transmissions (informational)
-    SEGGER_RTT_printf(0, "Link quality: margin=%ddB, gateways=%d\r\n", margin, gw_count);
+    SONDE_LOG("Link quality: margin=%ddB, gateways=%d\r\n", margin, gw_count);
   }
   
   // Process any received application data
@@ -775,10 +776,10 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     char rx_msg[64];
     snprintf(rx_msg, sizeof(rx_msg), "Received %d bytes on port %d\r\n", 
              appData->BufferSize, appData->Port);
-    SEGGER_RTT_WriteString(0, rx_msg);
+    SONDE_LOG_STR(rx_msg);
   }
   
-  SEGGER_RTT_WriteString(0, "=== OnRxData Callback END ===\r\n");
+  SONDE_LOG_STR("=== OnRxData Callback END ===\r\n");
   /* USER CODE END OnRxData_1 */
 }
 
@@ -821,7 +822,7 @@ void Deadman_Check(void)
     return;  /* bench: human idle is legitimate */
   }
   if ((now - last) > DEADMAN_TIMEOUT_S) {
-    SEGGER_RTT_WriteString(0, "DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
+    SONDE_LOG_STR("DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
     HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                         RESET_CAUSE_FAULT_MAGIC | 6U);  /* 6 = deadman */
     NVIC_SystemReset();
@@ -862,7 +863,7 @@ static void SysTimeSyncFromGnss(void)
   st.Seconds = epoch;
   st.SubSeconds = 0;
   SysTimeSet(st);
-  SEGGER_RTT_printf(0, "SysTime disciplined from GPS: %lu epoch seconds\r\n",
+  SONDE_LOG("SysTime disciplined from GPS: %lu epoch seconds\r\n",
                     (unsigned long)epoch);
 }
 
@@ -916,7 +917,7 @@ static void SendTxData(void)
            "\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
            temp_deci_pm / 10, abs(temp_deci_pm % 10),
            battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
-  SEGGER_RTT_WriteString(0, pm_msg);
+  SONDE_LOG_STR(pm_msg);
   
   if (time_to_target_signed < 0) {
     snprintf(pm_msg, sizeof(pm_msg), "Critical_in=%dh ", abs(time_to_target_signed));
@@ -925,11 +926,11 @@ static void SendTxData(void)
   } else {
     snprintf(pm_msg, sizeof(pm_msg), "Stable ");
   }
-  SEGGER_RTT_WriteString(0, pm_msg);
+  SONDE_LOG_STR(pm_msg);
   
   snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
-  SEGGER_RTT_WriteString(0, pm_msg);
+  SONDE_LOG_STR(pm_msg);
   
   /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
    * (see below). Previously the record was written here with the PREVIOUS
@@ -945,15 +946,15 @@ static void SendTxData(void)
   if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
   {
     if (MissionState_IsCommissioning()) {
-      SEGGER_RTT_WriteString(0, "SendTxData: Not joined yet, triggering join retry...\r\n");
+      SONDE_LOG_STR("SendTxData: Not joined yet, triggering join retry...\r\n");
       LmHandlerJoin(ActivationType, true);
       return; /* Exit - will send data after join succeeds */
     }
     rf_silence = true;
-    SEGGER_RTT_WriteString(0, "SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
+    SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
 
-  SEGGER_RTT_WriteString(0, "\r\n=== SendTxData START ===\r\n");
+  SONDE_LOG_STR("\r\n=== SendTxData START ===\r\n");
 
   /* ========== GPS POWER-CYCLING MODE ========== */
   /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
@@ -970,9 +971,9 @@ static void SendTxData(void)
   if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
     /* GPS disabled - skip acquisition */
     if (g_tx_state == TX_STATE_BULK_TRANSFER) {
-      SEGGER_RTT_WriteString(0, "GPS skipped - bulk transfer mode (using cached data)\r\n");
+      SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
     } else {
-      SEGGER_RTT_WriteString(0, "GPS disabled by power management - skipping acquisition\r\n");
+      SONDE_LOG_STR("GPS disabled by power management - skipping acquisition\r\n");
     }
     /* R31 (#57): FULL invalidation before/without acquisition — clear all of
      * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
@@ -985,7 +986,7 @@ static void SendTxData(void)
   #ifdef GPS_DISABLED_FOR_TESTING
   
   /* Use fake GPS data for testing MCU sleep mode */
-  SEGGER_RTT_WriteString(0, "GPS DISABLED FOR TESTING - using fake coordinates\r\n");
+  SONDE_LOG_STR("GPS DISABLED FOR TESTING - using fake coordinates\r\n");
   
   /* Simulate GPS fix data */
   hgnss.data.valid = true;
@@ -998,7 +999,7 @@ static void SendTxData(void)
   
   ttf_ms = 0;  /* No actual fix acquired */
   
-  SEGGER_RTT_WriteString(0, "Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
+  SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
   
   #else
   
@@ -1020,7 +1021,7 @@ static void SendTxData(void)
   uint32_t gps_start = 0;
   ttf_ms = 0;  /* Will be updated when fix is obtained */
   
-  SEGGER_RTT_printf(0, "Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
+  SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
   if (GNSS_WakeFromStandby(&hgnss) == GNSS_OK)
   {
@@ -1030,7 +1031,7 @@ static void SendTxData(void)
      * partial sentence must never meet last cycle's sats/hdop/lat/lon.
      * Last-known-good lives in the last_valid_* statics below. */
     memset(&hgnss.data, 0, sizeof(hgnss.data));
-    SEGGER_RTT_WriteString(0, "GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
+    SONDE_LOG_STR("GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
     
     gps_start = HAL_GetTick();
     bool got_fix = false;
@@ -1067,7 +1068,7 @@ static void SendTxData(void)
                  hgnss.data.satellites,
                  (long)(hdop_int / 10), (long)labs(hdop_int % 10),
                  (unsigned long)ttf_ms);
-        SEGGER_RTT_WriteString(0, fix_msg);
+        SONDE_LOG_STR(fix_msg);
         break;  /* Exit early - we have what we need */
       }
       
@@ -1084,7 +1085,7 @@ static void SendTxData(void)
                  hgnss.data.satellites, hgnss.data.satellites_in_view,
                  hdop_deci / 10, hdop_deci % 10,
                  (hgnss.data.fix_quality != GNSS_FIX_INVALID) ? "Yes" : "No");
-        SEGGER_RTT_WriteString(0, status_msg);
+        SONDE_LOG_STR(status_msg);
         last_status_print = elapsed;
       }
       
@@ -1099,7 +1100,7 @@ static void SendTxData(void)
       /* Check if we have at least basic fix */
       if (GNSS_IsFixValid(&hgnss))
       {
-        SEGGER_RTT_WriteString(0, "GPS: Basic fix (not high quality)\r\n");
+        SONDE_LOG_STR("GPS: Basic fix (not high quality)\r\n");
         /* Update last known position even for basic fix */
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
@@ -1114,7 +1115,7 @@ static void SendTxData(void)
         {
           /* F8/T2 (DDR-0007): last-known-good position still flows, but the
            * GPS-stale bit is set so nothing downstream mistakes it for live. */
-          SEGGER_RTT_WriteString(0, "GPS: Timeout - using last known position (STALE)\r\n");
+          SONDE_LOG_STR("GPS: Timeout - using last known position (STALE)\r\n");
           hgnss.data.latitude = last_valid_lat;
           hgnss.data.longitude = last_valid_lon;
           hgnss.data.altitude = last_valid_alt;
@@ -1124,7 +1125,7 @@ static void SendTxData(void)
         }
         else
         {
-          SEGGER_RTT_WriteString(0, "GPS: No fix and no previous position - sending zeros\r\n");
+          SONDE_LOG_STR("GPS: No fix and no previous position - sending zeros\r\n");
           /* hgnss.data.valid remains false, will send zeros as fallback */
         }
       }
@@ -1138,12 +1139,12 @@ static void SendTxData(void)
       have_previous_fix = true;
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
       SysTimeSyncFromGnss();            /* F12 (DDR-0003): epoch seconds */
-      SEGGER_RTT_WriteString(0, "GPS: Fix acquired and stored as last known position\r\n");
+      SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
     }
     
     /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
     GNSS_EnterStandby(&hgnss);
-    SEGGER_RTT_WriteString(0, "GPS fully powered off (0µA), MCU can now sleep\r\n");
+    SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
     
     /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 
@@ -1176,12 +1177,12 @@ static void SendTxData(void)
          * The archive exists precisely for data that can't be transmitted:
          * use the rf_silence pattern (DDR-0006) — GPS + re-read + flash write
          * proceed below; only the TX state machine is skipped. */
-        SEGGER_RTT_WriteString(0, "RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
+        SONDE_LOG_STR("RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
         rf_silence = true;
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
-        SEGGER_RTT_WriteString(0, "UNKNOWN REGION (ocean/uncovered): Keeping current region, transmitting normally\r\n");
+        SONDE_LOG_STR("UNKNOWN REGION (ocean/uncovered): Keeping current region, transmitting normally\r\n");
         // Do NOT return — continue with current region
       }
       
@@ -1210,7 +1211,7 @@ static void SendTxData(void)
                (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
                (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
-      SEGGER_RTT_WriteString(0, h3_msg);
+      SONDE_LOG_STR(h3_msg);
       
       /* Production: Auto-switch region based on H3lite lookup */
       LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
@@ -1219,37 +1220,37 @@ static void SendTxData(void)
       );
       
       if (switch_status == LORAMAC_HANDLER_SUCCESS) {
-        SEGGER_RTT_WriteString(0, "MultiRegion: Auto-switch completed successfully\r\n");
+        SONDE_LOG_STR("MultiRegion: Auto-switch completed successfully\r\n");
       } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
-        SEGGER_RTT_WriteString(0, "MultiRegion: Switch deferred (MAC busy)\r\n");
+        SONDE_LOG_STR("MultiRegion: Switch deferred (MAC busy)\r\n");
       }
     }
     else
     {
-      SEGGER_RTT_WriteString(0, "H3 Region Lookup: Skipped (no valid GPS fix)\r\n");
+      SONDE_LOG_STR("H3 Region Lookup: Skipped (no valid GPS fix)\r\n");
     }
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "GPS: Wake from standby failed!\r\n");
+    SONDE_LOG_STR("GPS: Wake from standby failed!\r\n");
   }
   
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
 
   /* Add separator before continuing to telemetry */
-  SEGGER_RTT_WriteString(0, "\r\n");
+  SONDE_LOG_STR("\r\n");
   
   // CRITICAL: Re-read sensor data AFTER GPS acquisition to include fresh GPS fix
-  SEGGER_RTT_WriteString(0, "Re-reading sensor data to capture fresh GPS fix...\r\n");
+  SONDE_LOG_STR("Re-reading sensor data to capture fresh GPS fix...\r\n");
   EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
-  SEGGER_RTT_WriteString(0, "Sensor data refreshed with current GPS position\r\n");
+  SONDE_LOG_STR("Sensor data refreshed with current GPS position\r\n");
 
   /* ========== FLASH LOGGING: Store high-resolution data ========== */
   /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
    * sensor re-read — so position, time, and environment in a record describe
    * the same moment. Timestamp is taken fresh at write time. */
-  SEGGER_RTT_WriteString(0, "Logging high-resolution data to flash...\r\n");
+  SONDE_LOG_STR("Logging high-resolution data to flash...\r\n");
   /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
    * delta stored in backup regs), NOT boot-relative RTC calendar time.
    * Before the first GPS fix this falls back to boot-relative seconds —
@@ -1259,15 +1260,15 @@ static void SendTxData(void)
                                                            slope_mv_per_hour, (uint8_t)current_mode);
   if (log_status == FLASH_LOG_OK) {
     uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
-    SEGGER_RTT_printf(0, "Flash log: Written record %lu (total records: %lu)\r\n",
+    SONDE_LOG("Flash log: Written record %lu (total records: %lu)\r\n",
                       record_count, record_count);
   } else {
-    SEGGER_RTT_printf(0, "Flash log: Write failed (status: %d)\r\n", log_status);
+    SONDE_LOG("Flash log: Write failed (status: %d)\r\n", log_status);
   }
 
   // Initialize Cayenne LPP payload
   CayenneLppReset();
-  SEGGER_RTT_WriteString(0, "CayenneLpp reset\r\n");
+  SONDE_LOG_STR("CayenneLpp reset\r\n");
   
   // Add temperature data (channel 1)
   CayenneLppAddTemperature(1, sensor_data.temperature);
@@ -1286,14 +1287,14 @@ static void SendTxData(void)
     lon = (sensor_data.longitude * 180.0f) / 8388607.0f;
     alt = (float)sensor_data.altitudeGps;
     
-    SEGGER_RTT_WriteString(0, "GNSS data valid\r\n");
+    SONDE_LOG_STR("GNSS data valid\r\n");
   } else {
     // Use zeros when no valid GNSS fix
     lat = 0.0f;
     lon = 0.0f;
     alt = 0.0f;
     
-    SEGGER_RTT_WriteString(0, "GNSS data invalid\r\n");
+    SONDE_LOG_STR("GNSS data invalid\r\n");
   }
   
   CayenneLppAddGps(4, lat, lon, alt);
@@ -1334,7 +1335,7 @@ static void SendTxData(void)
   snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n", 
            hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms, 
            slope_mv_per_hour, time_to_target_signed, current_mode);
-  SEGGER_RTT_WriteString(0, lpp_msg);
+  SONDE_LOG_STR(lpp_msg);
   
   /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
@@ -1345,12 +1346,12 @@ static void SendTxData(void)
    * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
    * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData. */
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
-    SEGGER_RTT_printf(0, "Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
+    SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
     g_tx_state = TX_STATE_PROBE_SF10;
     g_bulk_packets_sent = 0;
   }
   
-  SEGGER_RTT_printf(0, "Adaptive TX: State=%d\r\n", g_tx_state);
+  SONDE_LOG("Adaptive TX: State=%d\r\n", g_tx_state);
 
   /* T1 (DDR-0006): RF silence skips the entire transmit state machine —
    * GPS acquisition and flash logging above have already run. */
@@ -1388,13 +1389,13 @@ static void SendTxData(void)
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
           g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /* Wait for the confirmed-uplink ACK (OnTxData) */
-          SEGGER_RTT_WriteString(0, "Confirmed heartbeat sent, waiting for network ACK...\r\n");
+          SONDE_LOG_STR("Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
-          SEGGER_RTT_printf(0, "Compact packet send failed (status: %d)\r\n", status);
+          SONDE_LOG("Compact packet send failed (status: %d)\r\n", status);
           g_tx_state = TX_STATE_COMPLETE;  // Complete cycle on error
         }
       } else {
-        SEGGER_RTT_WriteString(0, "ERROR: Failed to encode compact packet!\r\n");
+        SONDE_LOG_STR("ERROR: Failed to encode compact packet!\r\n");
         g_tx_state = TX_STATE_COMPLETE;
       }
       break;
@@ -1403,14 +1404,14 @@ static void SendTxData(void)
     case TX_STATE_WAIT_PROBE_ACK:
       /* Should not reach here - stale states are reset above before the switch.
        * Fall through to PROBE_SF10 as safety fallback. */
-      SEGGER_RTT_WriteString(0, "WARN: Unexpected WAIT_PROBE_ACK in switch, resetting\r\n");
+      SONDE_LOG_STR("WARN: Unexpected WAIT_PROBE_ACK in switch, resetting\r\n");
       g_tx_state = TX_STATE_PROBE_SF10;
       /* fall through to PROBE_SF10 - will send on next cycle */
       break;
       
     case TX_STATE_BULK_TRANSFER:
     {
-      SEGGER_RTT_printf(0, "Bulk transfer mode: packet %d/%d\r\n", 
+      SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n", 
                         g_bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
       
       // Check if we have unsent data and haven't exceeded packet limit
@@ -1429,12 +1430,12 @@ static void SendTxData(void)
                                                                             &skipped_count);
         if (skipped_count > 0) {
           /* DDR-0007: a skipped record is visible, not silent */
-          SEGGER_RTT_printf(0, "Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
+          SONDE_LOG("Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
                             (unsigned long)skipped_count);
         }
         
         if (flash_status == FLASH_LOG_OK && record_count > 0) {
-          SEGGER_RTT_printf(0, "Retrieved %lu unsent records from flash\r\n", record_count);
+          SONDE_LOG("Retrieved %lu unsent records from flash\r\n", record_count);
           
           // Convert flash records to high-res format for bulk packet
           /* F10 FIX: Failed conversion => skip that record entirely.
@@ -1446,7 +1447,7 @@ static void SendTxData(void)
           for (uint32_t i = 0; i < record_count && i < 6; i++) {
             if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count],
                                          slope_mv_per_hour, current_mode)) {
-              SEGGER_RTT_printf(0, "Warning: Failed to convert flash record %lu - skipped\r\n", i);
+              SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
               continue;  /* Skip bad record, keep packing the rest */
             }
             packed_count++;
@@ -1457,7 +1458,7 @@ static void SendTxData(void)
              * a corrupt run can't wedge bulk transfer by being re-probed
              * forever; good records are left for the next cycle. */
             if (skipped_count > 0) {
-              SEGGER_RTT_printf(0, "Retiring %lu corrupt record(s) with no TX (anti-wedge)\r\n",
+              SONDE_LOG("Retiring %lu corrupt record(s) with no TX (anti-wedge)\r\n",
                                 (unsigned long)skipped_count);
               FlashLog_MarkRecordsTransmitted(&hflashlog, skipped_count);
             }
@@ -1482,7 +1483,7 @@ static void SendTxData(void)
             }
           }
           if (max_payload == 0) {
-            SEGGER_RTT_WriteString(0, "Bulk: no payload budget at current DR - retry next cycle\r\n");
+            SONDE_LOG_STR("Bulk: no payload budget at current DR - retry next cycle\r\n");
             g_tx_state = TX_STATE_COMPLETE;
             break;
           }
@@ -1501,7 +1502,7 @@ static void SendTxData(void)
              * records commit only on network ACK (OnTxData). */
             if (g_bulk_packets_sent == 0) {
               LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
-              SEGGER_RTT_printf(0, "LinkCheckReq on first archive packet: %d\r\n", lc_status);
+              SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
             }
 
             LmHandlerAppData_t bulkData;
@@ -1509,7 +1510,7 @@ static void SendTxData(void)
             bulkData.BufferSize = v3_len;
             bulkData.Buffer = v3_buf;
 
-            SEGGER_RTT_printf(0, "Sending %u-byte bulk v4 packet at SF7 on port %d with %u records\r\n",
+            SONDE_LOG("Sending %u-byte bulk v4 packet at SF7 on port %d with %u records\r\n",
                               v3_len, LORAWAN_BULK_PORT, v3_packed);
 
             LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
@@ -1524,40 +1525,40 @@ static void SendTxData(void)
                * payload budget stay pending. The exact-identity ack lands with
                * the confirmed-delivery rework (#34). */
               if (v3_packed != record_count) {
-                SEGGER_RTT_printf(0, "WARN: packed %u of %lu read - marking only packed+skipped\r\n",
+                SONDE_LOG("WARN: packed %u of %lu read - marking only packed+skipped\r\n",
                                   v3_packed, (unsigned long)record_count);
               }
               g_bulk_pending_mark = v3_packed + skipped_count;
               
-              SEGGER_RTT_printf(0, "Bulk packet sent successfully! (%d/%d packets sent)\r\n",
+              SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
               
               // Continue bulk transfer if more data available and under packet limit
               if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
-                SEGGER_RTT_WriteString(0, "More unsent data available, continuing bulk transfer...\r\n");
+                SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
                 // Stay in TX_STATE_BULK_TRANSFER for next packet
               } else {
-                SEGGER_RTT_WriteString(0, "Bulk transfer complete (no more data or packet limit reached)\r\n");
+                SONDE_LOG_STR("Bulk transfer complete (no more data or packet limit reached)\r\n");
                 g_tx_state = TX_STATE_COMPLETE;
               }
               
             } else {
-              SEGGER_RTT_printf(0, "Bulk packet send failed (status: %d)\r\n", bulk_status);
+              SONDE_LOG("Bulk packet send failed (status: %d)\r\n", bulk_status);
               g_tx_state = TX_STATE_COMPLETE;  // Complete on error
             }
             
           } else {
-            SEGGER_RTT_WriteString(0, "ERROR: Failed to encode bulk packet!\r\n");
+            SONDE_LOG_STR("ERROR: Failed to encode bulk packet!\r\n");
             g_tx_state = TX_STATE_COMPLETE;
           }
           
         } else {
-          SEGGER_RTT_printf(0, "No unsent records available (status: %d)\r\n", flash_status);
+          SONDE_LOG("No unsent records available (status: %d)\r\n", flash_status);
           g_tx_state = TX_STATE_COMPLETE;
         }
         
       } else {
-        SEGGER_RTT_WriteString(0, "Bulk transfer complete: no data or packet limit reached\r\n");
+        SONDE_LOG_STR("Bulk transfer complete: no data or packet limit reached\r\n");
         g_tx_state = TX_STATE_COMPLETE;
       }
       break;
@@ -1568,7 +1569,7 @@ static void SendTxData(void)
       // Reset for next cycle
       g_tx_state = TX_STATE_PROBE_SF10;
       g_bulk_packets_sent = 0;
-      SEGGER_RTT_WriteString(0, "Transmission cycle complete, reset to PROBE_SF10\r\n");
+      SONDE_LOG_STR("Transmission cycle complete, reset to PROBE_SF10\r\n");
       break;
   }
 
@@ -1578,7 +1579,7 @@ static void SendTxData(void)
   tx_count++;
   
   if ((tx_count % DEBUG_LPP_TX_INTERVAL) == 0) {  // Every 5th transmission
-    SEGGER_RTT_printf(0, "Debug: Sending CayenneLPP packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
+    SONDE_LOG("Debug: Sending CayenneLPP packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
     
     // Prepare and send the CayenneLPP packet
     LmHandlerAppData_t lppData;
@@ -1589,15 +1590,15 @@ static void SendTxData(void)
     // DEBUG: Log payload size
     char size_msg[64];
     snprintf(size_msg, sizeof(size_msg), "CayenneLPP payload size: %d bytes\r\n", lppData.BufferSize);
-    SEGGER_RTT_WriteString(0, size_msg);
+    SONDE_LOG_STR(size_msg);
     
     // Send with default datarate  
     LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
     LmHandlerErrorStatus_t lpp_status = LmHandlerSend(&lppData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
     
-    SEGGER_RTT_printf(0, "CayenneLPP send status: %d\r\n", lpp_status);
+    SONDE_LOG("CayenneLPP send status: %d\r\n", lpp_status);
   } else {
-    SEGGER_RTT_printf(0, "Debug: Skipping CayenneLPP (TX count: %lu)\r\n", tx_count);
+    SONDE_LOG("Debug: Skipping CayenneLPP (TX count: %lu)\r\n", tx_count);
   }
   #endif
   
@@ -1611,7 +1612,7 @@ static void SendTxData(void)
   if (sensor_data.gnss_valid && (hgnss.extended.gps_count > 0 || hgnss.extended.beidou_count > 0) &&
       ((gnss_tx_count % DEBUG_LPP_TX_INTERVAL) == 0)) {  // Same interval as LPP debug
     
-    SEGGER_RTT_printf(0, "Debug: Sending GNSS detail packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
+    SONDE_LOG("Debug: Sending GNSS detail packet (every %dth TX)\r\n", DEBUG_LPP_TX_INTERVAL);
     
     static uint8_t gnss_detail_buffer[150];  // Buffer for detailed GNSS packet
     uint16_t gnss_packet_size = EncodeGNSSDetailPacket(gnss_detail_buffer, sizeof(gnss_detail_buffer));
@@ -1623,7 +1624,7 @@ static void SendTxData(void)
                "Queuing GNSS detail packet: %d bytes (GPS:%d BeiDou:%d GLONASS:%d)\r\n",
                gnss_packet_size, hgnss.extended.gps_count, 
                hgnss.extended.beidou_count, hgnss.extended.glonass_count);
-      SEGGER_RTT_WriteString(0, gnss_msg);
+      SONDE_LOG_STR(gnss_msg);
       
       /* Push to queue - will be sent after RX windows complete */
       if (PacketQueue_Push(&g_packet_queue, gnss_detail_buffer, gnss_packet_size, LORAWAN_GNSS_DETAIL_PORT))
@@ -1631,41 +1632,41 @@ static void SendTxData(void)
         char queue_msg[60];
         snprintf(queue_msg, sizeof(queue_msg), "GNSS packet queued (queue size: %d)\r\n", 
                  PacketQueue_Count(&g_packet_queue));
-        SEGGER_RTT_WriteString(0, queue_msg);
+        SONDE_LOG_STR(queue_msg);
       }
       else
       {
-        SEGGER_RTT_WriteString(0, "WARNING: Queue full - GNSS packet dropped!\r\n");
+        SONDE_LOG_STR("WARNING: Queue full - GNSS packet dropped!\r\n");
       }
     }
     else
     {
-      SEGGER_RTT_WriteString(0, "GNSS detail packet encoding failed (0 bytes)\r\n");
+      SONDE_LOG_STR("GNSS detail packet encoding failed (0 bytes)\r\n");
     }
   }
   else
   {
-    SEGGER_RTT_printf(0, "Debug: Skipping GNSS detail packet (TX count: %lu)\r\n", gnss_tx_count);
+    SONDE_LOG("Debug: Skipping GNSS detail packet (TX count: %lu)\r\n", gnss_tx_count);
   }
   #else
-  SEGGER_RTT_WriteString(0, "GNSS detail packets disabled (ENABLE_GNSS_DETAIL_PACKET = 0)\r\n");
+  SONDE_LOG_STR("GNSS detail packets disabled (ENABLE_GNSS_DETAIL_PACKET = 0)\r\n");
   #endif
   
-  SEGGER_RTT_WriteString(0, "=== SendTxData END ===\r\n");
+  SONDE_LOG_STR("=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }
 
 static void OnTxTimerEvent(void *context)
 {
   /* USER CODE BEGIN OnTxTimerEvent_1 */
-  SEGGER_RTT_WriteString(0, "\r\n*** OnTxTimerEvent FIRED ***\r\n");
+  SONDE_LOG_STR("\r\n*** OnTxTimerEvent FIRED ***\r\n");
   /* USER CODE END OnTxTimerEvent_1 */
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
 
   /*Wait for next tx slot*/
   UTIL_TIMER_Start(&TxTimer);
   /* USER CODE BEGIN OnTxTimerEvent_2 */
-  SEGGER_RTT_WriteString(0, "Timer restarted for next cycle\r\n");
+  SONDE_LOG_STR("Timer restarted for next cycle\r\n");
   /* USER CODE END OnTxTimerEvent_2 */
 }
 
@@ -1676,7 +1677,7 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
-  SEGGER_RTT_printf(0, "\r\nOnTxData: Status=%d DR=%d Ch=%lu FCnt=%lu\r\n",
+  SONDE_LOG("\r\nOnTxData: Status=%d DR=%d Ch=%lu FCnt=%lu\r\n",
                     params->Status, params->Datarate,
                     (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
   
@@ -1693,10 +1694,10 @@ static void OnTxData(LmHandlerTxParams_t *params)
   if (g_bulk_pending_mark > 0) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       FlashLog_MarkRecordsTransmitted(&hflashlog, g_bulk_pending_mark);
-      SEGGER_RTT_printf(0, "OnTxData: ACK received — committed %lu archive records\r\n",
+      SONDE_LOG("OnTxData: ACK received — committed %lu archive records\r\n",
                         (unsigned long)g_bulk_pending_mark);
     } else {
-      SEGGER_RTT_printf(0, "OnTxData: no network ACK (status %d, ack %d) — %lu records stay PENDING\r\n",
+      SONDE_LOG("OnTxData: no network ACK (status %d, ack %d) — %lu records stay PENDING\r\n",
                         params->Status, params->AckReceived,
                         (unsigned long)g_bulk_pending_mark);
     }
@@ -1710,11 +1711,11 @@ static void OnTxData(LmHandlerTxParams_t *params)
       uint16_t battery_mv = SYS_GetBatteryVoltage();
       bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
       bool has_cache = FlashLog_HasUnsentData(&hflashlog);
-      SEGGER_RTT_printf(0, "Probe ACK received — battery %dmV (%s), cache %s\r\n",
+      SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
                         battery_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
       if (battery_good && has_cache) {
-        SEGGER_RTT_WriteString(0, "Archive opportunity OPEN — first archive probe\r\n");
+        SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
         g_tx_state = TX_STATE_BULK_TRANSFER;
         g_bulk_packets_sent = 0;
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
@@ -1722,7 +1723,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
         g_tx_state = TX_STATE_COMPLETE;
       }
     } else {
-      SEGGER_RTT_printf(0, "Probe heartbeat NOT acknowledged (status %d, ack %d) — no archive opportunity\r\n",
+      SONDE_LOG("Probe heartbeat NOT acknowledged (status %d, ack %d) — no archive opportunity\r\n",
                         params->Status, params->AckReceived);
       g_tx_state = TX_STATE_COMPLETE;
     }
@@ -1732,7 +1733,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
    * (protocol §5.3). First archive packet unACKed -> immediate fallback. */
   if (g_tx_state == TX_STATE_BULK_TRANSFER &&
       g_bulk_packets_sent >= 1 && !params->AckReceived) {
-    SEGGER_RTT_WriteString(0, "Archive packet unACKed — FALLBACK to heartbeat mode\r\n");
+    SONDE_LOG_STR("Archive packet unACKed — FALLBACK to heartbeat mode\r\n");
     g_tx_state = TX_STATE_COMPLETE;
     g_bulk_packets_sent = 0;
   }
@@ -1750,7 +1751,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
       queuedData.Buffer = entry.buffer;
       
       LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-      SEGGER_RTT_printf(0, "OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
+      SONDE_LOG("OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
                         entry.port, entry.size, queue_status, PacketQueue_Count(&g_packet_queue));
     }
   }
@@ -1761,10 +1762,10 @@ static void OnTxData(LmHandlerTxParams_t *params)
   if (g_tx_state == TX_STATE_BULK_TRANSFER && 
       FlashLog_HasUnsentData(&hflashlog) && 
       g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
-    SEGGER_RTT_WriteString(0, "OnTxData: Re-arming bulk transfer (next packet)...\r\n");
+    SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
     UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
   } else if (g_tx_state == TX_STATE_BULK_TRANSFER) {
-    SEGGER_RTT_WriteString(0, "OnTxData: Bulk transfer complete\r\n");
+    SONDE_LOG_STR("OnTxData: Bulk transfer complete\r\n");
     g_tx_state = TX_STATE_COMPLETE;
     g_bulk_packets_sent = 0;
   }
@@ -1776,35 +1777,35 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   /* USER CODE BEGIN OnJoinRequest_1 */
   char rtt_buf[128];
   
-  SEGGER_RTT_WriteString(0, "\r\n=== OnJoinRequest Callback ===\r\n");
+  SONDE_LOG_STR("\r\n=== OnJoinRequest Callback ===\r\n");
   snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %s (%d)\r\n", 
            (joinParams->Status == LORAMAC_HANDLER_SUCCESS) ? "SUCCESS" : "FAILED",
            joinParams->Status);
-  SEGGER_RTT_WriteString(0, rtt_buf);
+  SONDE_LOG_STR(rtt_buf);
   
   snprintf(rtt_buf, sizeof(rtt_buf), "  Mode: %s\r\n", 
            (joinParams->Mode == ACTIVATION_TYPE_OTAA) ? "OTAA" : "ABP");
-  SEGGER_RTT_WriteString(0, rtt_buf);
+  SONDE_LOG_STR(rtt_buf);
   
   snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", 
            joinParams->Datarate, joinParams->TxPower);
-  SEGGER_RTT_WriteString(0, rtt_buf);
+  SONDE_LOG_STR(rtt_buf);
   
   if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
   {
-    SEGGER_RTT_WriteString(0, "JOIN SUCCESS!\r\n");
+    SONDE_LOG_STR("JOIN SUCCESS!\r\n");
     
     /* Set flag for multi-region pre-join */
     g_multiregion_join_success = true;
     
     /* ONLY start timer if NOT in pre-join mode */
     if (g_multiregion_in_prejoin) {
-      SEGGER_RTT_WriteString(0, "Pre-join mode: Skipping Tx timer start\r\n");
+      SONDE_LOG_STR("Pre-join mode: Skipping Tx timer start\r\n");
     } else {
       /* Start the Tx timer now that we're joined */
       if (EventType == TX_ON_TIMER)
       {
-        SEGGER_RTT_WriteString(0, "Restarting Tx timer after rejoin...\r\n");
+        SONDE_LOG_STR("Restarting Tx timer after rejoin...\r\n");
         UTIL_TIMER_Stop(&TxTimer);   // Stop existing timer first to prevent corruption
         UTIL_TIMER_Start(&TxTimer);  // Now safe to restart
       }
@@ -1812,7 +1813,7 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   }
   else
   {
-    SEGGER_RTT_WriteString(0, "JOIN FAILED - will retry on next timer event\r\n");
+    SONDE_LOG_STR("JOIN FAILED - will retry on next timer event\r\n");
     g_multiregion_join_success = false;
   }
   /* USER CODE END OnJoinRequest_1 */
@@ -1978,7 +1979,7 @@ static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
   /* USER CODE END OnStoreContextRequest_1 */
   if (nvm == NULL || nvm_size == 0 ||
       nvm_size + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
-    SEGGER_RTT_printf(0, "NVM store REJECTED (size %lu too large or bad ptr)\r\n",
+    SONDE_LOG("NVM store REJECTED (size %lu too large or bad ptr)\r\n",
                       (unsigned long)nvm_size);
     return;  /* honest failure, no silent drop */
   }
@@ -1993,12 +1994,12 @@ static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
   hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, nvm_size);
 
   if (FLASH_IF_Erase((void *)slot_addr, FLASH_PAGE_SIZE) != FLASH_IF_OK) {
-    SEGGER_RTT_WriteString(0, "NVM store: slot erase FAILED\r\n");
+    SONDE_LOG_STR("NVM store: slot erase FAILED\r\n");
     return;
   }
   if (FLASH_IF_Write((void *)slot_addr, &hdr, sizeof(hdr)) != FLASH_IF_OK ||
       FLASH_IF_Write((void *)(slot_addr + sizeof(hdr)), nvm, nvm_size) != FLASH_IF_OK) {
-    SEGGER_RTT_WriteString(0, "NVM store: slot write FAILED\r\n");
+    SONDE_LOG_STR("NVM store: slot write FAILED\r\n");
     return;
   }
   g_nvm_generation = hdr.generation;
@@ -2027,15 +2028,15 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
     best_hdr = hdr;
   }
   if (best < 0) {
-    SEGGER_RTT_WriteString(0, "NVM restore: no valid slot (fresh start)\r\n");
+    SONDE_LOG_STR("NVM restore: no valid slot (fresh start)\r\n");
     return;  /* leave nvm untouched — MAC treats as no context */
   }
   if (FLASH_IF_Read(nvm, (void *)(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK) {
-    SEGGER_RTT_WriteString(0, "NVM restore: payload read FAILED\r\n");
+    SONDE_LOG_STR("NVM restore: payload read FAILED\r\n");
     return;
   }
   if (FlashLog_CRC32((const uint8_t *)nvm, nvm_size) != best_hdr.crc32) {
-    SEGGER_RTT_WriteString(0, "NVM restore: payload CRC FAILED\r\n");
+    SONDE_LOG_STR("NVM restore: payload CRC FAILED\r\n");
     return;
   }
   g_nvm_generation = best_hdr.generation;

@@ -15,6 +15,7 @@
 #include "config.h"
 #include "flash_if.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "LmHandler.h"
 #include <string.h>
 
@@ -45,31 +46,31 @@ ConfigStatus_t Config_Init(void)
         return CONFIG_OK;  // Already initialized
     }
     
-    SEGGER_RTT_WriteString(0, "\r\n=== Config_Init ===\r\n");
+    SONDE_LOG_STR("\r\n=== Config_Init ===\r\n");
     
     // Try to load from flash
     status = Config_Load();
     
     if (status == CONFIG_OK) {
-        SEGGER_RTT_WriteString(0, "Configuration loaded from flash successfully\r\n");
+        SONDE_LOG_STR("Configuration loaded from flash successfully\r\n");
     } else {
-        SEGGER_RTT_printf(0, "Flash config invalid (status: %d), loading defaults\r\n", status);
+        SONDE_LOG("Flash config invalid (status: %d), loading defaults\r\n", status);
         status = Config_LoadDefaults();
         if (status != CONFIG_OK) {
-            SEGGER_RTT_printf(0, "ERROR: Failed to load default config (status: %d)\r\n", status);
+            SONDE_LOG("ERROR: Failed to load default config (status: %d)\r\n", status);
             return status;
         }
         
         // Save defaults to flash (F-002: internal path — the public flag isn't set yet)
         status = Config_WriteInternal();
         if (status != CONFIG_OK) {
-            SEGGER_RTT_printf(0, "WARNING: Failed to save default config to flash (status: %d)\r\n", status);
+            SONDE_LOG("WARNING: Failed to save default config to flash (status: %d)\r\n", status);
             // Continue anyway - we have valid defaults in RAM
         }
     }
     
     g_config_initialized = true;
-    SEGGER_RTT_WriteString(0, "Configuration system initialized\r\n");
+    SONDE_LOG_STR("Configuration system initialized\r\n");
     
     return CONFIG_OK;
 }
@@ -86,7 +87,7 @@ ConfigStatus_t Config_Load(void)
 {
     ConfigStatus_t status;
     
-    SEGGER_RTT_WriteString(0, "Loading configuration from flash...\r\n");
+    SONDE_LOG_STR("Loading configuration from flash...\r\n");
     
     // Read from flash
     status = Config_FlashRead();
@@ -98,12 +99,12 @@ ConfigStatus_t Config_Load(void)
     // Validate loaded configuration
     status = Config_Validate(&g_config);
     if (status != CONFIG_OK) {
-        SEGGER_RTT_printf(0, "Config validation failed (status: %d)\r\n", status);
+        SONDE_LOG("Config validation failed (status: %d)\r\n", status);
         return status;
     }
     
     g_flash_read_count++;
-    SEGGER_RTT_WriteString(0, "Configuration loaded and validated successfully\r\n");
+    SONDE_LOG_STR("Configuration loaded and validated successfully\r\n");
     
     return CONFIG_OK;
 }
@@ -118,7 +119,7 @@ static ConfigStatus_t Config_WriteInternal(void)
     // Validate before saving
     status = Config_Validate(&g_config);
     if (status != CONFIG_OK) {
-        SEGGER_RTT_printf(0, "Config validation failed before save (status: %d)\r\n", status);
+        SONDE_LOG("Config validation failed before save (status: %d)\r\n", status);
         return status;
     }
 
@@ -128,7 +129,7 @@ static ConfigStatus_t Config_WriteInternal(void)
     // Write to flash
     status = Config_FlashWrite();
     if (status != CONFIG_OK) {
-        SEGGER_RTT_printf(0, "Flash write failed (status: %d)\r\n", status);
+        SONDE_LOG("Flash write failed (status: %d)\r\n", status);
         return status;
     }
 
@@ -142,11 +143,11 @@ ConfigStatus_t Config_Save(void)
         return CONFIG_ERROR_PARAM;
     }
 
-    SEGGER_RTT_WriteString(0, "Saving configuration to flash...\r\n");
+    SONDE_LOG_STR("Saving configuration to flash...\r\n");
 
     ConfigStatus_t status = Config_WriteInternal();
     if (status == CONFIG_OK) {
-        SEGGER_RTT_WriteString(0, "Configuration saved to flash successfully\r\n");
+        SONDE_LOG_STR("Configuration saved to flash successfully\r\n");
     }
     return status;
 }
@@ -221,7 +222,7 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
 
 ConfigStatus_t Config_LoadDefaults(void)
 {
-    SEGGER_RTT_WriteString(0, "Loading factory default configuration...\r\n");
+    SONDE_LOG_STR("Loading factory default configuration...\r\n");
     
     // Clear structure
     memset(&g_config, 0, sizeof(SystemConfig_t));
@@ -284,7 +285,7 @@ ConfigStatus_t Config_LoadDefaults(void)
     // Calculate CRC32
     g_config.crc32 = Config_CalculateCRC32(&g_config);
     
-    SEGGER_RTT_WriteString(0, "Factory defaults loaded successfully\r\n");
+    SONDE_LOG_STR("Factory defaults loaded successfully\r\n");
     
     return CONFIG_OK;
 }
@@ -309,47 +310,47 @@ ConfigStatus_t Config_GetStats(uint32_t *flash_reads,
 ConfigStatus_t Config_PrintCurrent(void)
 {
     if (!g_config_initialized) {
-        SEGGER_RTT_WriteString(0, "Configuration not initialized\r\n");
+        SONDE_LOG_STR("Configuration not initialized\r\n");
         return CONFIG_ERROR_PARAM;
     }
     
-    SEGGER_RTT_WriteString(0, "\r\n=== CURRENT CONFIGURATION ===\r\n");
+    SONDE_LOG_STR("\r\n=== CURRENT CONFIGURATION ===\r\n");
     
     // Header
-    SEGGER_RTT_printf(0, "Magic: 0x%08lX, Version: %d, Size: %d\r\n",
+    SONDE_LOG("Magic: 0x%08lX, Version: %d, Size: %d\r\n",
                       g_config.magic, g_config.version, g_config.size);
     
     // Transmission settings
-    SEGGER_RTT_printf(0, "TX Intervals: Normal=%lums Conservative=%lums Reduced=%lums\r\n",
+    SONDE_LOG("TX Intervals: Normal=%lums Conservative=%lums Reduced=%lums\r\n",
                       g_config.tx_interval_normal, g_config.tx_interval_conservative, 
                       g_config.tx_interval_reduced);
-    SEGGER_RTT_printf(0, "              Recovery=%lums Survival=%lums\r\n",
+    SONDE_LOG("              Recovery=%lums Survival=%lums\r\n",
                       g_config.tx_interval_recovery, g_config.tx_interval_survival);
     
     // LoRaWAN
-    SEGGER_RTT_printf(0, "LoRaWAN: DR=%d TxPower=%d ADR=%s Confirmed=%s\r\n",
+    SONDE_LOG("LoRaWAN: DR=%d TxPower=%d ADR=%s Confirmed=%s\r\n",
                       g_config.lorawan_datarate, g_config.lorawan_txpower,
                       g_config.lorawan_adr_enabled ? "ON" : "OFF",
                       g_config.lorawan_confirmed ? "ON" : "OFF");
     
     // Power management
-    SEGGER_RTT_printf(0, "Battery: Low=%dmV Critical=%dmV Bulk=%dmV GPS_Lockout=%d°C\r\n",
+    SONDE_LOG("Battery: Low=%dmV Critical=%dmV Bulk=%dmV GPS_Lockout=%d°C\r\n",
                       g_config.battery_low_threshold, g_config.battery_critical_threshold,
                       g_config.bulk_battery_min_mv, g_config.gps_temperature_lockout);
     
     // Adaptive transmission
-    SEGGER_RTT_printf(0, "Adaptive: Margin=%ddB Gateways=%d MaxBulk=%d FCntSave=%d\r\n",
+    SONDE_LOG("Adaptive: Margin=%ddB Gateways=%d MaxBulk=%d FCntSave=%d\r\n",
                       g_config.link_margin_threshold, g_config.gateway_count_threshold,
                       g_config.max_bulk_packets, g_config.frame_counter_save_interval);
     
     // Debug settings
-    SEGGER_RTT_printf(0, "Debug: LPP=%s GNSS=%s Interval=%d Level=%d\r\n",
+    SONDE_LOG("Debug: LPP=%s GNSS=%s Interval=%d Level=%d\r\n",
                       g_config.debug_lpp_enabled ? "ON" : "OFF",
                       g_config.debug_gnss_detail_enabled ? "ON" : "OFF",
                       g_config.debug_lpp_interval, g_config.debug_rtt_level);
     
-    SEGGER_RTT_printf(0, "CRC32: 0x%08lX\r\n", g_config.crc32);
-    SEGGER_RTT_WriteString(0, "=== END CONFIGURATION ===\r\n\r\n");
+    SONDE_LOG("CRC32: 0x%08lX\r\n", g_config.crc32);
+    SONDE_LOG_STR("=== END CONFIGURATION ===\r\n\r\n");
     
     return CONFIG_OK;
 }
@@ -404,7 +405,7 @@ static ConfigStatus_t Config_FlashRead(void)
     flash_status = FLASH_IF_Read(&g_config, (void*)CONFIG_FLASH_ADDRESS, sizeof(SystemConfig_t));
     
     if (flash_status != FLASH_IF_OK) {
-        SEGGER_RTT_printf(0, "Config flash read failed (status: %d)\r\n", flash_status);
+        SONDE_LOG("Config flash read failed (status: %d)\r\n", flash_status);
         return CONFIG_ERROR_FLASH;
     }
     
@@ -421,14 +422,14 @@ static ConfigStatus_t Config_FlashWrite(void)
     // Erase flash page first
     flash_status = FLASH_IF_Erase((void*)CONFIG_FLASH_ADDRESS, CONFIG_FLASH_SIZE);
     if (flash_status != FLASH_IF_OK) {
-        SEGGER_RTT_printf(0, "Config flash erase failed (status: %d)\r\n", flash_status);
+        SONDE_LOG("Config flash erase failed (status: %d)\r\n", flash_status);
         return CONFIG_ERROR_FLASH;
     }
     
     // Write configuration
     flash_status = FLASH_IF_Write((void*)CONFIG_FLASH_ADDRESS, &g_config, sizeof(SystemConfig_t));
     if (flash_status != FLASH_IF_OK) {
-        SEGGER_RTT_printf(0, "Config flash write failed (status: %d)\r\n", flash_status);
+        SONDE_LOG("Config flash write failed (status: %d)\r\n", flash_status);
         return CONFIG_ERROR_FLASH;
     }
     

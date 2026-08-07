@@ -14,6 +14,7 @@
 #include "multiregion_context.h"
 #include "backup_regs.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 
 extern RTC_HandleTypeDef hrtc;
 
@@ -72,7 +73,7 @@ void MissionState_Init(void)
 
     MissionState_Persist();
 
-    SEGGER_RTT_printf(0, "MissionState: %s (bank %s, DR3 %s)\r\n",
+    SONDE_LOG("MissionState: %s (bank %s, DR3 %s)\r\n",
                       s_state == MISSION_COMMISSIONING ? "COMMISSIONING" :
                       s_state == MISSION_ASCENT ? "FLIGHT-ASCENT" : "FLIGHT-FLOAT",
                       bank_commissioned ? "commissioned" : "virgin",
@@ -95,7 +96,7 @@ void MissionState_EnterFlight(void)
     if (s_state == MISSION_COMMISSIONING) {
         s_state = MISSION_ASCENT;
         MissionState_Persist();
-        SEGGER_RTT_WriteString(0, "MissionState: COMMISSIONING -> FLIGHT (ASCENT)\r\n");
+        SONDE_LOG_STR("MissionState: COMMISSIONING -> FLIGHT (ASCENT)\r\n");
     }
 }
 
@@ -125,7 +126,7 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid)
         if (s_level_count >= MISSION_FLOAT_LEVEL_SAMPLES) {
             s_state = MISSION_FLOAT;
             MissionState_Persist();
-            SEGGER_RTT_WriteString(0, "MissionState: ASCENT -> FLOAT (pressure level)\r\n");
+            SONDE_LOG_STR("MissionState: ASCENT -> FLOAT (pressure level)\r\n");
         }
     }
     s_last_pressure_hpa = pressure_hpa;

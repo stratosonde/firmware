@@ -21,7 +21,8 @@
 /* Includes ------------------------------------------------------------------*/
 #include "adc_if.h"
 #include "sys_app.h"
-#include "SEGGER_RTT.h"  /* F-014 timeout visibility (#31) */
+#include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */  /* F-014 timeout visibility (#31) */
 
 /* USER CODE BEGIN Includes */
 
@@ -308,7 +309,7 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
    *  return 0; every caller treats 0 as read-failure and uses its stale path. */
   if (HAL_ADC_PollForConversion(&hadc, ADC_POLL_TIMEOUT_MS) != HAL_OK)
   {
-    SEGGER_RTT_printf(0, "ADC: TIMEOUT on channel %lu - read failed\r\n",
+    SONDE_LOG("ADC: TIMEOUT on channel %lu - read failed\r\n",
                       (unsigned long)channel);
     HAL_ADC_Stop(&hadc);
     return 0;

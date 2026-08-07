@@ -19,6 +19,7 @@
 #include "reset_cause.h"
 #include "mission_state.h"
 #include "SEGGER_RTT.h"
+#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -67,7 +68,7 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     
     const sensor_t *sensors = (const sensor_t*)sensor_data;
     
-    SEGGER_RTT_WriteString(0, "Encoding 11-byte compact binary packet...\r\n");
+    SONDE_LOG_STR("Encoding 11-byte compact binary packet...\r\n");
     
     // Clear packet structure
     memset(packet, 0, sizeof(CompactTelemetryPacket_t));
@@ -136,7 +137,7 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
              (long)(pressure_centi / 100), labs(pressure_centi % 100),
              humidity_centi / 100, abs(humidity_centi % 100),
              battery_mv, sensors->satellites, power_mode);
-    SEGGER_RTT_WriteString(0, debug_msg);
+    SONDE_LOG_STR(debug_msg);
     
     return true;
 }
@@ -156,7 +157,7 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     
     const sensor_t *sensors = (const sensor_t*)sensor_data;
     
-    SEGGER_RTT_WriteString(0, "Encoding 32-byte high-resolution record...\r\n");
+    SONDE_LOG_STR("Encoding 32-byte high-resolution record...\r\n");
     
     // Clear record structure
     memset(record, 0, sizeof(HighResTelemetryRecord_t));
@@ -224,7 +225,7 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
              record->pressure / 10, record->pressure % 10,
              record->battery_voltage, record->solar_voltage, 
              voltage_slope);
-    SEGGER_RTT_WriteString(0, debug_msg);
+    SONDE_LOG_STR(debug_msg);
     
     return true;
 }
@@ -243,7 +244,7 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
         return false;
     }
     
-    SEGGER_RTT_printf(0, "Encoding 198-byte bulk packet with %d records...\r\n", record_count);
+    SONDE_LOG("Encoding 198-byte bulk packet with %d records...\r\n", record_count);
     
     // Clear packet structure
     memset(packet, 0, sizeof(BulkTelemetryPacket_t));
@@ -260,7 +261,7 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
     // Calculate CRC32 for packet integrity (exclude CRC32 field itself)
     packet->crc32 = CalculateCRC32((const uint8_t*)packet, sizeof(BulkTelemetryPacket_t) - 4);
     
-    SEGGER_RTT_printf(0, "Bulk packet: Type=%d Records=%d CRC32=0x%08lX\r\n",
+    SONDE_LOG("Bulk packet: Type=%d Records=%d CRC32=0x%08lX\r\n",
                       packet->packet_type, packet->record_count, 
                       packet->crc32);
     
@@ -338,7 +339,7 @@ bool EncodeBulkPacketV3(uint8_t *buf,
     *packed_count = n;
     *out_len = off;
 
-    SEGGER_RTT_printf(0, "Bulk v4: Records=%d Base=%lu Len=%u\r\n", n, (unsigned long)base_seq, off);
+    SONDE_LOG("Bulk v4: Records=%d Base=%lu Len=%u\r\n", n, (unsigned long)base_seq, off);
     return true;
 }
 
@@ -429,25 +430,25 @@ bool PayloadFormat_ValidateSizes(void)
     
     // Check packet sizes
     if (sizeof(CompactTelemetryPacket_t) != 11) {
-        SEGGER_RTT_printf(0, "ERROR: CompactTelemetryPacket_t size = %d bytes (expected 11)\r\n", 
+        SONDE_LOG("ERROR: CompactTelemetryPacket_t size = %d bytes (expected 11)\r\n", 
                           sizeof(CompactTelemetryPacket_t));
         valid = false;
     }
     
     if (sizeof(HighResTelemetryRecord_t) != 32) {
-        SEGGER_RTT_printf(0, "ERROR: HighResTelemetryRecord_t size = %d bytes (expected 32)\r\n",
+        SONDE_LOG("ERROR: HighResTelemetryRecord_t size = %d bytes (expected 32)\r\n",
                           sizeof(HighResTelemetryRecord_t));
         valid = false;
     }
     
     if (sizeof(BulkTelemetryPacket_t) != 198) {
-        SEGGER_RTT_printf(0, "ERROR: BulkTelemetryPacket_t size = %d bytes (expected 198)\r\n",
+        SONDE_LOG("ERROR: BulkTelemetryPacket_t size = %d bytes (expected 198)\r\n",
                           sizeof(BulkTelemetryPacket_t));
         valid = false;
     }
     
     if (valid) {
-        SEGGER_RTT_WriteString(0, "Payload format sizes validated: 11/32/198 bytes\r\n");
+        SONDE_LOG_STR("Payload format sizes validated: 11/32/198 bytes\r\n");
     }
     
     return valid;
