@@ -7,6 +7,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "ms5607.h"
+#include <stdlib.h>  /* F-12 (#67): abs() — was implicitly declared */
 #include "sys_app.h" /* For APP_LOG */
 #include "SEGGER_RTT.h"
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */ /* For RTT debug output */

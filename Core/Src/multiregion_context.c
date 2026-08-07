@@ -1601,7 +1601,7 @@ static bool FlashReadStorage(void)
     g_storage.active_slot = t1.active_slot;
     memcpy(g_storage.contexts, t1.contexts, sizeof(g_storage.contexts));
 
-    Tier2Bank_t t2;
+    Tier2Bank_t t2 = {0};  /* F-17 (#67): silence maybe-uninitialized (false positive, but explicit) */
     if (FlashReadTier2(&t2)) {
         g_t2_sequence = t2.sequence;
         if (t2.active_slot < MAX_REGION_CONTEXTS) {
