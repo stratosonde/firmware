@@ -312,6 +312,8 @@ int main(void)
     extern void Deadman_Check(void);
     Deadman_Check();
 
+    RTC_LivenessCheck();  /* F-14 (#70): frozen time must not look alive */
+
     /* Refresh watchdog to prevent reset (must be called within 32.76 seconds) */
     HAL_IWDG_Refresh(&hiwdg);
   }
@@ -392,6 +394,73 @@ void SystemClock_Config(void)
   {
     /* F-001: CPU/bus clocks not running at the configured rates — fatal. */
     Error_Handler_Fatal(FAULT_CODE_CLOCK_CONFIG);
+  }
+
+  /* F-14 (#70): runtime LSE clock security. The boot-time fallback above only
+   * covers an LSE that never starts; a crystal that DIES in flight (extreme
+   * cold) freezes the RTC and every LoRaMac timer while the main loop keeps
+   * petting the IWDG — alive-looking but time-frozen. Arm the CSS so hardware
+   * detects the failure and vectors to HAL_RCCEx_LSECSS_Callback() below. */
+  if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE)
+  {
+    HAL_RCCEx_EnableLSECSS_IT();
+  }
+}
+
+/* F-14 (#70): LSE->LSI failover, shared by the CSS interrupt callback and the
+ * SysTick-based RTC liveness check. Changing the RTC clock source resets the
+ * backup domain (HAL behaviour) — backup-register state (mission state,
+ * deadman, SysTime MSB) is lost, which is acceptable: the alternative is a
+ * sonde with frozen time. The IWDG (LSI-clocked) and the boot-time fallback
+ * are the backstops for anything this path gets wrong. */
+static void LSE_FailoverToLSI(void)
+{
+  RCC_PeriphCLKInitTypeDef rtcClk = {0};
+  rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+  rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+  g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
+  HAL_RCCEx_PeriphCLKConfig(&rtcClk);
+  MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
+  SONDE_LOG_STR("WARNING: LSE died in flight - RTC on LSI (~1% drift)\r\n");
+}
+
+/* F-14 (#70): LSE CSS interrupt callback (fires from TAMP_STAMP_LSECSS_SSRU_IRQn). */
+void HAL_RCCEx_LSECSS_Callback(void)
+{
+  LSE_FailoverToLSI();
+}
+
+/* F-14 (#70): second layer — verify the RTC actually advances against the
+ * MSI-clocked SysTick. Covers failure modes the CSS misses (RTC path broken
+ * with LSE still oscillating). Call from the main loop. NOTE: SysTick stops
+ * in STOP2, so after a sleep the RTC appears to run FAST, never slow — this
+ * can only under-trigger, never false-fire. */
+static void RTC_LivenessCheck(void)
+{
+  static uint32_t last_check_tick = 0;
+  static uint32_t last_rtc_seconds = 0;
+  static uint8_t  stall_count = 0;
+  uint32_t now_tick = HAL_GetTick();
+
+  if (g_rtc_clock_source != RCC_RTCCLKSOURCE_LSE) return;  /* already on LSI */
+  if ((now_tick - last_check_tick) < 1000U) return;        /* check ~1/s */
+  last_check_tick = now_tick;
+
+  RTC_TimeTypeDef t; RTC_DateTypeDef d;
+  HAL_RTC_GetTime(&hrtc, &t, RTC_FORMAT_BIN);
+  HAL_RTC_GetDate(&hrtc, &d, RTC_FORMAT_BIN);  /* date read unlocks shadows */
+  uint32_t rtc_seconds = (uint32_t)t.Hours * 3600U + (uint32_t)t.Minutes * 60U + (uint32_t)t.Seconds;
+
+  if (rtc_seconds != last_rtc_seconds)
+  {
+    last_rtc_seconds = rtc_seconds;
+    stall_count = 0;
+  }
+  else if (++stall_count >= 5U)  /* no RTC advance across ~5 s of SysTick */
+  {
+    SONDE_LOG_STR("ERROR: RTC stalled with LSE selected - forcing LSI failover\r\n");
+    LSE_FailoverToLSI();
+    stall_count = 0;
   }
 }
 

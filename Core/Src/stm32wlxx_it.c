@@ -216,7 +216,7 @@ void TAMP_STAMP_LSECSS_SSRU_IRQHandler(void)
   /* USER CODE END TAMP_STAMP_LSECSS_SSRU_IRQn 0 */
   HAL_RTCEx_SSRUIRQHandler(&hrtc);
   /* USER CODE BEGIN TAMP_STAMP_LSECSS_SSRU_IRQn 1 */
-
+  HAL_RCCEx_LSECSS_IRQHandler();  /* F-14 (#70): LSE clock security dispatch */
   /* USER CODE END TAMP_STAMP_LSECSS_SSRU_IRQn 1 */
 }
 
