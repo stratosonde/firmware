@@ -364,7 +364,6 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -417,7 +416,6 @@ W25Q_StatusTypeDef W25Q_FastRead(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[5];
     
@@ -470,7 +468,6 @@ W25Q_StatusTypeDef W25Q_PageProgram(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -533,7 +530,6 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint32_t bytes_to_write;
     uint32_t page_offset;
@@ -576,7 +572,6 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hw25q, uint32_t addr)
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -627,7 +622,6 @@ W25Q_StatusTypeDef W25Q_EraseBlock32K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -678,7 +672,6 @@ W25Q_StatusTypeDef W25Q_EraseBlock64K(W25Q_HandleTypeDef *hw25q, uint32_t addr)
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd[4];
     
@@ -729,7 +722,6 @@ W25Q_StatusTypeDef W25Q_EraseChip(W25Q_HandleTypeDef *hw25q)
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t cmd = W25Q_CMD_CHIP_ERASE;
     
@@ -839,7 +831,6 @@ W25Q_StatusTypeDef W25Q_IsErased(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     if (hw25q == NULL || !hw25q->initialized) {
         return W25Q_ERROR_INIT;
     }
-{
     W25Q_StatusTypeDef status;
     uint8_t buf[64];  /* Read in chunks */
     uint32_t chunk;
