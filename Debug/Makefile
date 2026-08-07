@@ -75,8 +75,13 @@ all: main-build
 main-build: Radio_Sonde_E5_HF_EU.elf secondary-outputs
 
 # Tool invocations
-Radio_Sonde_E5_HF_EU.elf Radio_Sonde_E5_HF_EU.map: $(OBJS) $(USER_OBJS) C:\working\sonde\firmware\STM32WLE5JCIX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Radio_Sonde_E5_HF_EU.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\working\sonde\firmware\STM32WLE5JCIX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Radio_Sonde_E5_HF_EU.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+# Linker script via a portable RELATIVE path — the CubeMX-generated absolute
+# Windows path (C:\...) broke Linux make ("multiple target patterns" from the
+# drive-letter colon) and broke any checkout at a different location.
+LDSCRIPT ?= ../STM32WLE5JCIX_FLASH.ld
+
+Radio_Sonde_E5_HF_EU.elf Radio_Sonde_E5_HF_EU.map: $(OBJS) $(USER_OBJS) $(LDSCRIPT) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Radio_Sonde_E5_HF_EU.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"$(LDSCRIPT)" --specs=nosys.specs -Wl,-Map="Radio_Sonde_E5_HF_EU.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
