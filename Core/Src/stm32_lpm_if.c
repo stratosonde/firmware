@@ -194,6 +194,7 @@ void PWR_EnterStopMode(void)
   /* ADC uses PB4 (ADC_CHANNEL_3) for battery voltage measurement */
   /* Prevent leakage current through ADC pin during sleep */
   HAL_ADC_DeInit(&hadc);
+  { extern void SYS_ADC_NoteDeinit(void); SYS_ADC_NoteDeinit(); }  /* A-001 (#31): reset per-cycle ADC/VDDA state */
   
   GPIO_InitStruct.Pin = GPIO_PIN_4;  // PB4 = ADC_IN3 (Battery voltage)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -203,9 +204,12 @@ void PWR_EnterStopMode(void)
   __HAL_RCC_DMA1_CLK_DISABLE();
   __HAL_RCC_DMAMUX1_CLK_DISABLE();
   
-  /* === STOP2 Power Optimization: Disable VREFINT === */
-  /* Internal voltage reference consumes ~10-20µA when enabled */
-  HAL_SYSCFG_DisableVREFBUF();
+  /* === STOP2 Power Optimization: VREFINT note ===
+   * R17 (#31): HAL_SYSCFG_DisableVREFBUF removed. VREFBUF is the EXTERNAL VREF+
+   * buffer, not VREFINT — our ratiometric VDDA path uses VREFINT + factory cal
+   * and never touches VREFBUF. Worse, on this module VREF+ is bonded to VDDA,
+   * so enabling the 2.5 V buffer would fight the supply. VREFBUF stays at its
+   * power-on state (disabled) everywhere. */
   
   /* === Additional GPIO Power Optimization === */
   /* Set all unused/inactive pins to ANALOG mode to minimize leakage */
@@ -374,10 +378,10 @@ void PWR_ExitStopMode(void)
     }
   }
 
-  /* FW-15: restore VREFBUF (internal voltage reference) on wake. The
-   * ratiometric VDDA path in SYS_GetBatteryLevel reads VREFINT after every
-   * STOP2 wake; leaving it disabled here silently degrades battery reads. */
-  HAL_SYSCFG_EnableVREFBUF();
+  /* R17 (#31): VREFBUF enable removed — see the sleep-entry note. The FW-15
+   * comment conflated VREFBUF (external VREF+ buffer) with VREFINT (internal
+   * channel, used by the ratiometric VDDA path). VREFINT needs no enable
+   * here; the ADC channel-read path enables it via the channel config. */
 
   /* Re-initialize UART1 only if GPS is powered */
   /* Prevents parasitic power when GPS is off */

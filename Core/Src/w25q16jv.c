@@ -301,8 +301,10 @@ W25Q_StatusTypeDef W25Q_WaitReady(W25Q_HandleTypeDef *hw25q, uint32_t timeout_ms
             return W25Q_OK;  /* Device ready */
         }
         
-        /* Small delay to avoid hammering the SPI bus */
-        HAL_Delay(1);
+        /* R39 (#31): __WFI() between polls instead of a 1 ms NOP-spin — the
+         * core sleeps until ANY interrupt (SysTick at 1 kHz bounds the stall
+         * to ~1 ms, same cadence as before at a fraction of the energy). */
+        __WFI();
         
     } while ((HAL_GetTick() - start_tick) < timeout_ms);
     

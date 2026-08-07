@@ -21,6 +21,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "adc_if.h"
 #include "sys_app.h"
+#include "SEGGER_RTT.h"  /* F-014 timeout visibility (#31) */
 
 /* USER CODE BEGIN Includes */
 
@@ -70,6 +71,23 @@ static uint32_t ADC_ReadChannels(uint32_t channel);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
+
+/* R16/F-014/A-001 (#31): ADC housekeeping state.
+ * s_adc_ready: init+calibrate happen ONCE per wake cycle (the LPM pre-sleep
+ * path deinits the ADC and calls SYS_ADC_NoteDeinit). s_vdda_mv: VDDA cached
+ * per cycle — battery and solar conversions no longer each re-read VREFINT. */
+static bool s_adc_ready = false;
+static uint16_t s_vdda_mv = 0;
+
+#define ADC_POLL_TIMEOUT_MS  10U   /* F-014: bounded poll — a faulted ADC must
+                                    * never wedge the work cycle (was HAL_MAX_DELAY) */
+
+/* Called by the LPM pre-sleep path after HAL_ADC_DeInit (stm32_lpm_if.c). */
+void SYS_ADC_NoteDeinit(void)
+{
+  s_adc_ready = false;
+  s_vdda_mv = 0;
+}
 
 /* Exported functions --------------------------------------------------------*/
 /* USER CODE BEGIN EF */
@@ -144,6 +162,13 @@ uint16_t SYS_GetBatteryLevel(void)
   uint16_t batteryLevelmV = 0;
   uint32_t measuredLevel = 0;
 
+  /* A-001 (#31): VDDA is cached per wake cycle — the battery and solar
+   * conversions both consume it; one VREFINT read serves all three users. */
+  if (s_vdda_mv != 0)
+  {
+    return s_vdda_mv;
+  }
+
   measuredLevel = ADC_ReadChannels(ADC_CHANNEL_VREFINT);
 
   if (measuredLevel == 0)
@@ -167,6 +192,7 @@ uint16_t SYS_GetBatteryLevel(void)
     }
   }
 
+  s_vdda_mv = batteryLevelmV;   /* A-001 (#31): cache for this wake cycle */
   return batteryLevelmV;
   /* USER CODE BEGIN SYS_GetBatteryLevel_2 */
 
@@ -250,12 +276,17 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
   uint32_t ADCxConvertedValues = 0;
   ADC_ChannelConfTypeDef sConfig = {0};
 
-  MX_ADC_Init();
-
-  /* Start Calibration */
-  if (HAL_ADCEx_Calibration_Start(&hadc) != HAL_OK)
+  /* A-001 (#31): init + calibrate once per wake cycle, not per channel read.
+   * The LPM pre-sleep path deinits and calls SYS_ADC_NoteDeinit. */
+  if (!s_adc_ready)
   {
-    Error_Handler();
+    MX_ADC_Init();
+    /* Start Calibration */
+    if (HAL_ADCEx_Calibration_Start(&hadc) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    s_adc_ready = true;
   }
 
   /* Configure Regular Channel */
@@ -272,15 +303,20 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
     /* Start Error */
     Error_Handler();
   }
-  /** Wait for end of conversion */
-  HAL_ADC_PollForConversion(&hadc, HAL_MAX_DELAY);
+  /** Wait for end of conversion — F-014 (#31): BOUNDED poll (was
+   *  HAL_MAX_DELAY: a faulted ADC wedged the work cycle forever). On timeout
+   *  return 0; every caller treats 0 as read-failure and uses its stale path. */
+  if (HAL_ADC_PollForConversion(&hadc, ADC_POLL_TIMEOUT_MS) != HAL_OK)
+  {
+    SEGGER_RTT_printf(0, "ADC: TIMEOUT on channel %lu - read failed\r\n",
+                      (unsigned long)channel);
+    HAL_ADC_Stop(&hadc);
+    return 0;
+  }
 
-  /** Wait for end of conversion */
   HAL_ADC_Stop(&hadc);   /* it calls also ADC_Disable() */
 
   ADCxConvertedValues = HAL_ADC_GetValue(&hadc);
-
-  HAL_ADC_DeInit(&hadc);
 
   return ADCxConvertedValues;
   /* USER CODE BEGIN ADC_ReadChannels_2 */
