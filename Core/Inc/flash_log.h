@@ -160,6 +160,7 @@ typedef struct {
     uint32_t record_count;      /**< Cached total record count */
     uint32_t next_sequence;     /**< Next record sequence number */
     uint32_t last_transmitted_sequence; /**< Sequence number of last transmitted record */
+    uint32_t header_generation; /**< F-007/R12 (#50): monotonic header generation, incremented every write */
     uint8_t active_header;      /**< Active header slot (0 or 1) */
 } FlashLog_HandleTypeDef;
 
@@ -240,13 +241,9 @@ uint32_t FlashLog_GetAvailableRecords(FlashLog_HandleTypeDef *hlog);
   */
 bool FlashLog_HasWrapped(FlashLog_HandleTypeDef *hlog);
 
-/**
-  * @brief  Erase all log data (factory reset)
-  * @param  hlog: Pointer to flash log handle
-  * @retval FlashLog_StatusTypeDef
-  * @warning This erases ALL logged data and cannot be undone!
-  */
-FlashLog_StatusTypeDef FlashLog_EraseAll(FlashLog_HandleTypeDef *hlog);
+/* FlashLog_EraseAll DELETED (D11, #52): grep-verified uncalled, and dangerous
+ * by construction — 512 sector erases with no IWDG service and no watermark
+ * reset. Field recovery uses the debugger; no brick functions in the tree. */
 
 /**
   * @brief  Sync header to flash (force header update)

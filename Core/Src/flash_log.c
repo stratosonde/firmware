@@ -234,6 +234,24 @@ static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header)
         return false;
     }
     
+    /* F-021 (#55): beyond magic+CRC, header field CONTENTS must be plausible
+     * before a header is trusted — a CRC-valid but semantically impossible
+     * header must not steer the log. */
+    if (header->write_addr < FLASH_LOG_DATA_START || header->write_addr >= FLASH_LOG_DATA_END ||
+        (header->write_addr % FLASH_LOG_RECORD_SIZE) != 0) {
+        return false;  /* write frontier outside the data region or unaligned */
+    }
+    if (header->oldest_addr < FLASH_LOG_DATA_START || header->oldest_addr >= FLASH_LOG_DATA_END ||
+        (header->oldest_addr % FLASH_LOG_RECORD_SIZE) != 0) {
+        return false;
+    }
+    if (header->record_count > FLASH_LOG_MAX_RECORDS) {
+        return false;  /* more records than the ring can hold */
+    }
+    if (header->last_transmitted_seq > header->record_count) {
+        return false;  /* watermark ahead of the frontier is impossible */
+    }
+
     /* Validate CRC32 */
     calculated_crc = FlashLog_CRC32((const uint8_t *)header, 
                                     sizeof(FlashLog_Header_t) - sizeof(uint32_t));
@@ -256,7 +274,11 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     header.version = FLASH_LOG_HEADER_VERSION;
     header.write_addr = hlog->write_addr;
     header.record_count = hlog->record_count;
-    header.sequence = hlog->record_count;  /* Use record count as sequence */
+    /* F-007/R12 (#50): real monotonic generation — record_count was NOT a
+     * freshness counter (a watermark-only SyncHeader left two valid headers
+     * with equal "freshness" and different watermarks; the tie-break could
+     * resurrect an older watermark → duplicate retransmission). */
+    header.sequence = hlog->header_generation;
     header.oldest_addr = hlog->oldest_addr;
     header.flags = 0;
     header.last_transmitted_seq = hlog->last_transmitted_sequence;
@@ -282,7 +304,9 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     if (status != W25Q_OK) {
         return FLASH_LOG_ERROR_FLASH;
     }
-    
+
+    hlog->header_generation++;  /* F-007/R12 (#50): monotonic per successful write */
+
     return FLASH_LOG_OK;
 }
 
@@ -349,18 +373,22 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     valid_b = FlashLog_ValidateHeader(&header_b);
     
     if (valid_a && valid_b) {
-        /* Both valid - use the one with higher sequence */
-        if (header_a.sequence > header_b.sequence) {
+        /* Both valid — F-007/R12 (#50): sequence is now a real generation
+         * counter; pick the newest with a wrap-safe compare. */
+        bool a_newer = ((int32_t)(header_a.sequence - header_b.sequence) > 0);
+        if (a_newer) {
             hlog->write_addr = header_a.write_addr;
             hlog->record_count = header_a.record_count;
             hlog->oldest_addr = header_a.oldest_addr;
             hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
+            hlog->header_generation = header_a.sequence + 1;
             hlog->active_header = 0;
         } else {
             hlog->write_addr = header_b.write_addr;
             hlog->record_count = header_b.record_count;
             hlog->oldest_addr = header_b.oldest_addr;
             hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
+            hlog->header_generation = header_b.sequence + 1;
             hlog->active_header = 1;
         }
     } else if (valid_a) {
@@ -369,6 +397,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         hlog->record_count = header_a.record_count;
         hlog->oldest_addr = header_a.oldest_addr;
         hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
+        hlog->header_generation = header_a.sequence + 1;
         hlog->active_header = 0;
     } else if (valid_b) {
         /* Only B valid */
@@ -376,6 +405,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         hlog->record_count = header_b.record_count;
         hlog->oldest_addr = header_b.oldest_addr;
         hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
+        hlog->header_generation = header_b.sequence + 1;
         hlog->active_header = 1;
     } else {
         /* No valid headers - initialize fresh */
@@ -426,9 +456,10 @@ static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog
 {
     FlashLog_Record_t probe;
 
-    if (hlog->record_count == 0) {
-        return FLASH_LOG_OK;
-    }
+    /* F-008 (#49): no early return on record_count == 0 — a fresh count-0
+     * header followed by 1-9 uncheckpointed records and a power cut would
+     * orphan them (write_addr reused, records overwritten). The scan from
+     * DATA_START is bounded (<= HEADER_UPDATE_INTERVAL probes) and safe. */
 
     for (uint32_t i = 0; i < HEADER_UPDATE_INTERVAL; i++) {
         if (W25Q_Read(hlog->hw25q, hlog->write_addr,
@@ -488,7 +519,7 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     
     /* Header */
     record.magic = FLASH_LOG_RECORD_MAGIC;
-    record.sequence = hlog->next_sequence++;
+    record.sequence = hlog->next_sequence;  /* F-010 (#52): incremented only after write success below */
     record.timestamp = timestamp;
     
     /* Environmental sensors */
@@ -526,7 +557,8 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
         return FLASH_LOG_ERROR_FLASH;
     }
     
-    /* Update write pointer */
+    /* Update write pointer (F-010: sequence consumed only now, after success) */
+    hlog->next_sequence++;
     hlog->write_addr += FLASH_LOG_RECORD_SIZE;
     hlog->record_count++;
     
@@ -660,35 +692,6 @@ bool FlashLog_HasWrapped(FlashLog_HandleTypeDef *hlog)
     }
     
     return (hlog->record_count > FLASH_LOG_MAX_RECORDS);
-}
-
-FlashLog_StatusTypeDef FlashLog_EraseAll(FlashLog_HandleTypeDef *hlog)
-{
-    W25Q_StatusTypeDef status;
-    uint32_t sector;
-    
-    if (hlog == NULL || !hlog->initialized) {
-        return FLASH_LOG_ERROR_PARAM;
-    }
-    
-    /* Erase all sectors (this takes time!) */
-    for (sector = 0; sector < W25Q_SECTOR_COUNT; sector++) {
-        uint32_t addr = sector * W25Q_SECTOR_SIZE;
-        status = W25Q_EraseSector(hlog->hw25q, addr);
-        if (status != W25Q_OK) {
-            return FLASH_LOG_ERROR_FLASH;
-        }
-    }
-    
-    /* Reset state */
-    hlog->write_addr = FLASH_LOG_DATA_START;
-    hlog->record_count = 0;
-    hlog->oldest_addr = FLASH_LOG_DATA_START;
-    hlog->next_sequence = 0;
-    hlog->active_header = 0;
-    
-    /* Write fresh header */
-    return FlashLog_WriteHeader(hlog);
 }
 
 FlashLog_StatusTypeDef FlashLog_SyncHeader(FlashLog_HandleTypeDef *hlog)
