@@ -1,9 +1,0 @@
-../Core/Src/ms5607.c:527:29:MS5607_ReadADC	32	static
-../Core/Src/ms5607.c:410:29:MS5607_RecoverI2C.isra	8	static
-../Core/Src/ms5607.c:436:29:MS5607_ReadProm	40	static
-../Core/Src/ms5607.c:147:22:MS5607_Reset	24	static
-../Core/Src/ms5607.c:167:22:MS5607_ReadCalibration	8	static
-../Core/Src/ms5607.c:33:22:MS5607_Init	40	static
-../Core/Src/ms5607.c:221:22:MS5607_ReadPressureAndTemperature	64	static
-../Core/Src/ms5607.c:367:22:MS5607_SetPressureOSR	0	static
-../Core/Src/ms5607.c:388:22:MS5607_SetTemperatureOSR	0	static

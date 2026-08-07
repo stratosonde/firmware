@@ -1,3 +1,0 @@
-../Core/Src/multiregion_h3.c:75:17:H3Region_ToLoRaMacRegion	3
-../Core/Src/multiregion_h3.c:96:17:MultiRegion_DetectFromGPS_H3	4
-../Core/Src/multiregion_h3.c:180:6:MultiRegion_ProfileH3Performance	10

@@ -1,4 +1,0 @@
-arm-none-eabi-gcc -o "Radio_Sonde_E5_HF_EU.elf" @"objects.list"   -mcpu=cortex-m4 -T"C:\working\sonde\firmware\STM32WLE5JCIX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Radio_Sonde_E5_HF_EU.map" -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
-process_begin: CreateProcess(NULL, arm-none-eabi-gcc -o Radio_Sonde_E5_HF_EU.elf @objects.list -mcpu=cortex-m4 -TC:\working\sonde\firmware\STM32WLE5JCIX_FLASH.ld --specs=nosys.specs -Wl,-Map=Radio_Sonde_E5_HF_EU.map -Wl,--gc-sections -static --specs=nano.specs -mfloat-abi=soft -mthumb -Wl,--start-group -lc -lm -Wl,--end-group, ...) failed.
-make (e=2): The system cannot find the file specified.
-make: *** [makefile:79: Radio_Sonde_E5_HF_EU.elf] Error 2

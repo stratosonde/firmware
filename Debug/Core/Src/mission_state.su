@@ -1,7 +1,0 @@
-../Core/Src/mission_state.c:31:13:MissionState_Persist	0	static
-../Core/Src/mission_state.c:37:6:MissionState_Init	32	static
-../Core/Src/mission_state.c:82:16:MissionState_Get	0	static
-../Core/Src/mission_state.c:87:6:MissionState_IsCommissioning	0	static
-../Core/Src/mission_state.c:92:6:MissionState_EnterFlight	8	static
-../Core/Src/mission_state.c:102:6:MissionState_Update	24	static
-../Core/Src/mission_state.c:135:9:MissionState_GetStatusBits	0	static

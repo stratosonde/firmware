@@ -1,3 +1,0 @@
-../Core/Src/sys_sensors.c:119:6:EnvSensors_MarkGnssStale	1
-../Core/Src/sys_sensors.c:160:9:EnvSensors_Read	15
-../Core/Src/sys_sensors.c:315:9:EnvSensors_Init	4

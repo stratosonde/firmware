@@ -1,2 +1,0 @@
-../Core/Src/reset_cause.c:15:6:ResetCause_CaptureBoot	6
-../Core/Src/reset_cause.c:48:9:ResetCause_Get	1

@@ -1,4 +1,0 @@
-../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:351:5:_faceIjkToBaseCell	8	static
-../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:364:5:_faceIjkToBaseCellCCWrot60	8	static
-../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:506:6:_isBaseCellPentagon	0	static
-../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:516:6:_baseCellIsCwOffset	0	static
