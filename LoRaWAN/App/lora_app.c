@@ -1420,11 +1420,18 @@ static void SendTxData(void)
         // first, so MarkRecordsTransmitted advances the watermark correctly)
         FlashLog_Record_t flash_records[6];
         uint32_t record_count;
-        
-        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog, 
-                                                                            flash_records, 
-                                                                            6, 
-                                                                            &record_count);
+        uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
+
+        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
+                                                                            flash_records,
+                                                                            6,
+                                                                            &record_count,
+                                                                            &skipped_count);
+        if (skipped_count > 0) {
+          /* DDR-0007: a skipped record is visible, not silent */
+          SEGGER_RTT_printf(0, "Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
+                            (unsigned long)skipped_count);
+        }
         
         if (flash_status == FLASH_LOG_OK && record_count > 0) {
           SEGGER_RTT_printf(0, "Retrieved %lu unsent records from flash\r\n", record_count);
@@ -1446,7 +1453,14 @@ static void SendTxData(void)
           }
 
           if (packed_count == 0) {
-            SEGGER_RTT_WriteString(0, "No records convertible - skipping bulk packet\r\n");
+            /* R21 (#51): nothing convertible. Retire any corrupt skips NOW so
+             * a corrupt run can't wedge bulk transfer by being re-probed
+             * forever; good records are left for the next cycle. */
+            if (skipped_count > 0) {
+              SEGGER_RTT_printf(0, "Retiring %lu corrupt record(s) with no TX (anti-wedge)\r\n",
+                                (unsigned long)skipped_count);
+              FlashLog_MarkRecordsTransmitted(&hflashlog, skipped_count);
+            }
             g_tx_state = TX_STATE_COMPLETE;
             break;
           }
@@ -1475,8 +1489,16 @@ static void SendTxData(void)
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
               
-              // C4 FIX: Defer marking until OnTxData confirms actual TX
-              g_bulk_pending_mark = record_count;
+              /* F-005/R21 (#51): mark exactly what was CONSUMED from the
+               * entry watermark — packed (sent) + skipped (corrupt) — so the
+               * watermark lands exactly past the batch. Conversion is
+               * currently infallible (R19); the exact-identity ack lands with
+               * the confirmed-delivery rework (#34). */
+              if (packed_count != record_count) {
+                SEGGER_RTT_printf(0, "WARN: packed %u of %lu read - marking only packed+skipped\r\n",
+                                  packed_count, (unsigned long)record_count);
+              }
+              g_bulk_pending_mark = packed_count + skipped_count;
               
               SEGGER_RTT_printf(0, "Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);

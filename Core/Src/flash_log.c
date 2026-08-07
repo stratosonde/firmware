@@ -112,17 +112,27 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog)
 FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
                                                      FlashLog_Record_t *records,
                                                      uint32_t max_count,
-                                                     uint32_t *actual_count)
+                                                     uint32_t *actual_count,
+                                                     uint32_t *skipped_count)
 {
     FlashLog_StatusTypeDef status;
     uint32_t unsent_count, i;
     uint32_t sequence_to_read;
-    
+
+    /* R13 (#51): bound the scan — a long corrupt run must not spin thousands
+     * of SPI reads in one call. The watermark persists, so the next call
+     * resumes exactly where this one stopped. */
+    #define FLASH_LOG_MAX_PROBES_PER_CALL  256U
+    uint32_t probes = 0;
+
     if (hlog == NULL || !hlog->initialized || records == NULL || actual_count == NULL) {
         return FLASH_LOG_ERROR_PARAM;
     }
-    
+
     *actual_count = 0;
+    if (skipped_count != NULL) {
+        *skipped_count = 0;
+    }
     
     /* BUG 1.7 FIX: Clamp watermark after ring-buffer wraparound.
      * If unsent backlog exceeds capacity (e.g. long ocean gap), the oldest-unsent
@@ -157,14 +167,24 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
      * records actually sent, so the watermark lands exactly past every
      * consumed sequence (good + skipped). */
     sequence_to_read = hlog->last_transmitted_sequence;
-    while ((*actual_count) < max_count && sequence_to_read < hlog->next_sequence) {
+    while ((*actual_count) < max_count &&
+           sequence_to_read < hlog->next_sequence &&
+           probes < FLASH_LOG_MAX_PROBES_PER_CALL) {
         /* Convert sequence to ReadRecord offset (newest-relative) */
         uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
+        probes++;
 
         status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);
         if (status != FLASH_LOG_OK) {
-            /* Corrupt/torn record: skip it permanently, advance watermark */
-            hlog->last_transmitted_sequence = sequence_to_read + 1;
+            /* F-006/R13 (#51): corrupt/torn record — count it, but do NOT
+             * advance the watermark here. Skip + good reads compose with the
+             * caller's count-based mark ONLY if marking happens from the
+             * entry watermark: caller marks (packed + skipped) after TX
+             * confirm, landing the watermark exactly past every consumed
+             * sequence. Never silent (DDR-0007): the count is returned. */
+            if (skipped_count != NULL) {
+                (*skipped_count)++;
+            }
             sequence_to_read++;
             continue;
         }

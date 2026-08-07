@@ -297,7 +297,8 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog);
 FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
                                                      FlashLog_Record_t *records,
                                                      uint32_t max_count,
-                                                     uint32_t *actual_count);
+                                                     uint32_t *actual_count,
+                                                     uint32_t *skipped_count);
 
 /**
   * @brief  Mark records as transmitted to avoid retransmission
