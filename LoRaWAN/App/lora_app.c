@@ -50,6 +50,10 @@
 #include "reset_cause.h"      /* F13a: deadman breadcrumb register */
 #include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0003) */
 #include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
+#include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
+#include "RegionEU868.h"
+#include "RegionAS923.h"
+#include "RegionAU915.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -602,27 +606,31 @@ void LoRaWAN_Init(void)
   */
 static int8_t DatarateFromSF(uint8_t sf)
 {
-  LoRaMacRegion_t region = LmHandlerParams.ActiveRegion;
-
-  if (sf == 10) {
-    /* SF10: US915/AU915 DR_0, EU868/AS923 DR_2 */
-    switch (region) {
-      case LORAMAC_REGION_US915:
-      case LORAMAC_REGION_AU915:  return DR_0;
-      case LORAMAC_REGION_EU868:
-      case LORAMAC_REGION_AS923:  return DR_2;
-      default:                    return DR_0;
-    }
-  } else if (sf == 7) {
-    /* SF7@125kHz: US915/AU915 DR_3, EU868/AS923 DR_5 */
-    switch (region) {
-      case LORAMAC_REGION_US915:
-      case LORAMAC_REGION_AU915:  return DR_3;
-      case LORAMAC_REGION_EU868:
-      case LORAMAC_REGION_AS923:  return DR_5;
-      default:                    return DR_3;
+  /* R03/F-026 (#32): table-driven — search the ACTIVE region's own
+   * Datarates*[] table for the SF. The old per-region switch hardcoded the
+   * US915 mapping for AU915, but in-tree DataratesAU915 = {12,11,10,9,8,7,..}
+   * (SF10 = DR_2, SF7 = DR_5), so every AU915 bulk uplink was rejected by the
+   * MAC. Entries of 0 (unused) and 50 (FSK) are skipped; first match wins. */
+  const uint8_t *table;
+  uint8_t table_len;
+  switch (LmHandlerParams.ActiveRegion) {
+    case LORAMAC_REGION_US915:
+      table = DataratesUS915; table_len = sizeof(DataratesUS915); break;
+    case LORAMAC_REGION_EU868:
+      table = DataratesEU868; table_len = sizeof(DataratesEU868); break;
+    case LORAMAC_REGION_AS923:
+      table = DataratesAS923; table_len = sizeof(DataratesAS923); break;
+    case LORAMAC_REGION_AU915:
+      table = DataratesAU915; table_len = sizeof(DataratesAU915); break;
+    default:
+      return LORAWAN_DEFAULT_DATA_RATE;
+  }
+  for (uint8_t dr = 0; dr < table_len; dr++) {
+    if (table[dr] == sf) {
+      return (int8_t)dr;
     }
   }
+  SEGGER_RTT_printf(0, "DatarateFromSF: SF%u not in region table - default\r\n", sf);
   return LORAWAN_DEFAULT_DATA_RATE;
 }
 
