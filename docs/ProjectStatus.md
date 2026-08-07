@@ -1,7 +1,7 @@
 # Stratosonde Firmware — Project Status
 
 **The one page that answers "what is done and what is not."**
-Last updated: 2026-08-04 — 2026-08-04 review integrated (R45–R51 → issues #42–#48) · Gate 4 batch split (#39 → #49–#59) · **all work tracking lives in GitHub issues**; historical ledgers/reviews/audits deleted from the repo (git history retains them; per-finding detail is reproduced in the issue bodies).
+Last updated: 2026-08-07 — **2026-08-06/07 session: CI green (tracked build + Linux fixes); 8 issues landed (#33, #34, #35, #57, #36, #29, #31, #47) + #56 firmware half — wire formats heartbeat v2 / archive v4, confirmed delivery per DDR-0011, flash record v4, GNSS parser batch, sensor/flash silent-failure fixes, STOP2 wake latches, ADC/power batch, SONDE_LOG flight gate.** All CODE-DONE / BENCH-PENDING per the status model (host-test-verified where noted; no hardware artifacts yet).
 
 ## Status model
 
@@ -22,7 +22,7 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 | Why things are the way they are (design rationale) | `docs/decisions/` — DDR-0001…DDR-0012 |
 | Per-finding verification detail (F-001…F-030, R01…R51, N-01…N-04) | **GitHub issues** — each open finding's evidence + fix is reproduced in its issue body (#22–#59) |
 | Historical ledgers, reviews, audits (F1–F28, FW-1…FW-22, T1–T4, H3-1…H3-9, bench B1–B8, combined verification ledger) | **Git history only** — deleted from the tree 2026-08-04; last commit containing them is `eaaa1db` |
-| Wire formats | `docs/PayloadFormats.md` — ⚠ known-stale until Gate 3 ⑬ (R40–R42, N-01); `docs/LoRaWANApplicationProtocol.md` is the target spec |
+| Wire formats | `docs/PayloadFormats.md` — **REGENERATED 2026-08-06** (heartbeat v2 LE, archive v1-v4 with v4 current, golden vectors from CI); `docs/LoRaWANApplicationProtocol.md` §6/§7 normative |
 | Expansion / Qwiic architecture | `docs/QwiicApplicationArchitecture.md` (package index) |
 | Docs index | `docs/README.md` |
 
@@ -32,23 +32,24 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
   R01+R02 backup-register ownership map (`Core/Inc/backup_regs.h`) · R24+R23 `$PCAS11,2` pedestrian-mode deletion + NMEA checksum corrections · F-011 GNSS DMA head-wrap fix · R30/D6 per-region join timeout + flight-entry gating · R08 RTC clock-source failover honored by `HAL_RTC_MspInit` · F-001 fatal/recoverable `Error_Handler` split.
 - **Earlier workorder (2026-08-01/02):** T1 two-tier session storage, T2 data honesty, T3 mission state machine, T4 flash ring rewrite, F1–F28 and FW-1…FW-22 fixes — row-by-row detail in git history (`ProductionReadinessAssessment.md`, last present @ `eaaa1db`); code-fixed, legacy bench gates B1–B8 🟡.
 - **h3lite region engine:** H3-1…H3-7, H3-9 host-verified (H3-8 open → #56).
+- **2026-08-06/07 session (all 🟡 bench-pending; evidence comment on each issue; CI green):** #22–#25, #28, #30, #32–#38, #42, #44–#55, #57–#59, #29, #31, #47 closed; #56 firmware + generator halves. Highlights: #33 heartbeat v2 / archive v4 wire formats + golden vectors · #34 confirmed delivery (DDR-0011) · #35 flash record v4 · #57 GNSS parser batch · #36 sensor/flash silent failures · #29 STOP2 wake latches · #31 ADC/power batch · #47 SONDE_LOG flight gate. CI: tracked Debug build fixed for Linux; host tests 157 checks; `se-identity-select.h` zero-key CI fallback.
 
 ## 2. Code done, bench pending 🟡
 
 - **Gate 1 bench gates (#26):** GPS-fix backup-register dump (R01/R02) · LSE kill (R08) · NDTR=0 fault injection (F-011) · join-timeout soak (R30) · airborne-mode persistence on hardware (R24) · tri-constellation/1 Hz apply (R23).
 - **Legacy bench gates:** B1–B8, IWDG option bits, end-to-end energy budget (detail in git history @ `eaaa1db`; legacy bench issues #12, #20, #21).
 
-## 3. Open work ⬜ — one line per gate, detail in the issues
+## 3. Open work ⬜ — one line per item, detail in the issues
 
-| Gate | Scope | Issues |
-|---|---|---|
-| **1 — flight-blocker residuals** | R23 runtime NMEA checksum · F-001 false-success prints · R30/D6 finer points · F-011 absolute DMA counters · **R45 flash timestamps boot-relative not UTC (P0, ~1 line)** | #22, #23, #24, #25, **#42** (+ bench #26) |
-| **2 — power budget** | R25/D7 GNSS standby TTF measurement (**first — highest-value bench test**) · R26 GSV off · R07 wake-source latches · R09 LED gating · R17/R39/R16 VREFBUF/W25Q/ADC | #27, #28, #29, #30, #31 |
-| **3 — data integrity & coverage** | R03 AU915 DR mapping · payload rework ⑬ (D1–D4, D9 ✅) · confirmed delivery (DDR-0011) · R06+D5 altitude/history fields · R28+R29 silent failures · R10 brownout floor · F-017 key prints · **R46 AS923 channel-plan runtime-settability** | #32, #33, #34, #35, #36, #37, #38, **#43** |
-| **4 — persistence & robustness** | F-008 frontier scan · F-007/R12 header generation · F-006/R13 + F-005/R21 scan/ack pair · F-009/R14/D11 EraseAll + F-010 · config group · F-016 NVM context · F-021 header semantics · R11+H3-8 restricted region · R20/R31–R34 GNSS parser · F-029 STOP2 reinit · F-023/D12, F-028/D8, F-027, F-030 | #49–#59 |
-| **5 — docs & matrix** | R44 sweep + `PayloadFormats.md` regeneration (after Gate 3) · readiness-matrix artifact rule · A-003/A-005/A-006 · **R47 SendTxData decide/execute split** | #40, **#44** |
-| **6 — expansion (Qwiic)** | Settle DDR-0009…0012 open decisions · rail/session state machine · transport parser + tests · first-class persistence · best-effort spool · FPort 12/13 · archive-opportunity state machine · reference apps | #41 |
-| **Project health** | **R48 LICENSE (quick win)** · R49 host tests + CI + reproducible build · R50 SONDE_LOG flight gate · R51 minor batch (strcmp→lookup table, vendor API name) | **#45, #46, #47, #48** |
+| Item | Scope |
+|---|---|
+| **#27** (bench, first) | R25/D7 GNSS standby TTF measurement — highest-value bench test; gates D7 |
+| **#26** (bench) | Gate 1 artifacts + 2026-08-06/07 session bench checks (confirmed-delivery behavior, restricted-region archive, STOP2 chunk re-entry, W25Q SR1 log, ADC timeout path) |
+| **#20, #12, #21** (bench) | Current by state · flash durability (now exercises generation counter + scan-from-zero) · 24 h soak |
+| **#56** (partial) | NK GeoJSON → `RESTRICTED.geojson` → regenerate table + host-verify Pyongyang/ocean points (firmware + generator halves done) |
+| **#40** | R44 doc sweep (many module docs predate v2/v4 wire formats, record v4, SONDE_LOG, CI) + readiness-matrix artifact rule. PayloadFormats.md / LoRaWANApplicationProtocol.md / FlashLogging.md already regenerated 2026-08-06 |
+| **#41** | Gate 6 Qwiic expansion decisions + implementation |
+| **#43, #60, #61** | Post-flight: AS923 sub-group runtime-settability · MS5607 + SHT31 characterization |
 
 ## Ordering hazards (don't unmask bugs while fixing neighbors)
 
