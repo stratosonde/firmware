@@ -174,7 +174,9 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     if (sensors->gnss_valid) {
         record->latitude = sensors->latitude;    // Keep original binary format
         record->longitude = sensors->longitude;  // Keep original binary format
-        record->altitude = (uint16_t)sensors->altitudeGps;  // Convert to uint16_t
+        record->altitude = (sensors->altitudeGps < 0) ? 0 :
+                           (sensors->altitudeGps > 65535) ? 65535 :
+                           (uint16_t)sensors->altitudeGps;  /* D5/#35: clamp int32 m to wire u16 */
     } else {
         // Use zeros for invalid GPS data
         record->latitude = 0;
@@ -359,7 +361,9 @@ bool ConvertFlashLogToHighRes(const void *flash_record,
     highres_record->timestamp = flash_rec->timestamp;
     highres_record->latitude = flash_rec->latitude;
     highres_record->longitude = flash_rec->longitude;
-    highres_record->altitude = (uint16_t)flash_rec->altitude_gps;
+    highres_record->altitude = (flash_rec->altitude_gps < 0) ? 0 :
+                               (flash_rec->altitude_gps > 65535) ? 65535 :
+                               (uint16_t)flash_rec->altitude_gps;  /* D5/#35: clamp int32 */
     
     // Convert floating point to scaled integers
     highres_record->temperature = (int16_t)(flash_rec->temperature * 10.0f);  // 0.1°C
@@ -368,15 +372,20 @@ bool ConvertFlashLogToHighRes(const void *flash_record,
     
     // Battery voltage
     highres_record->battery_voltage = flash_rec->battery_mv;
-    highres_record->solar_voltage = 0;  // Not stored in FlashLog_Record_t yet
-    highres_record->voltage_slope = voltage_slope;
+    /* D5/F-025/R19 (#35): history is self-describing — solar/slope/mode come
+     * from the flash record itself (record v4), not from the current cycle's
+     * live values passed as parameters. */
+    highres_record->solar_voltage = flash_rec->solar_mv;
+    highres_record->voltage_slope = flash_rec->voltage_slope;
+    (void)voltage_slope;  /* superseded by flash-record value (kept for API compat) */
+    (void)power_mode;
     
     // GPS metadata
     highres_record->satellites = flash_rec->satellites;
     highres_record->hdop = flash_rec->gnss_hdop_x10;  // Already scaled by 10
     
-    // Power mode and flags
-    highres_record->power_mode = (uint8_t)power_mode;
+    // Power mode and flags (D5/#35: mode from the flash record — honest history)
+    highres_record->power_mode = flash_rec->power_mode;
     highres_record->flags = PackStatusFlags((bool)flash_rec->gnss_valid, 
                                             flash_rec->satellites, 
                                             power_mode);

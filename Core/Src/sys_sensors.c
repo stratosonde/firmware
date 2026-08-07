@@ -275,7 +275,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     /* Convert decimal degrees to scaled integer format for Cayenne LPP */
     sensor_data->latitude = (int32_t)((hgnss.data.latitude * MAX_GPS_POS) / 90.0f);
     sensor_data->longitude = (int32_t)((hgnss.data.longitude * MAX_GPS_POS) / 180.0f);
-    sensor_data->altitudeGps = (int16_t)hgnss.data.altitude;
+    sensor_data->altitudeGps = (int32_t)(hgnss.data.altitude + (hgnss.data.altitude >= 0.0f ? 0.5f : -0.5f));  /* D5/#35: int32 metres */
     sensor_data->satellites = hgnss.data.satellites;
     sensor_data->gnss_fix_quality = hgnss.data.fix_quality;
     sensor_data->gnss_hdop = hgnss.data.hdop;

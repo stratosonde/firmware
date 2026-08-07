@@ -36,40 +36,44 @@ The Flash Logging Module provides persistent storage for telemetry data when LoR
 
 ## Data Structures
 
-### High-Resolution Telemetry Record
+### Flash record (64 B, record layout v4 — 2026-08-06, D5/#35)
+
+Authoritative definition: `Core/Inc/flash_log.h` (`FlashLog_Record_t`, header version 4).
+All multibyte fields little-endian; CRC32 over the first 60 bytes.
 
 ```c
-typedef struct {
-    uint32_t timestamp;           // UTC timestamp
-    int32_t latitude;             // Full resolution latitude
-    int32_t longitude;            // Full resolution longitude
-    uint16_t altitude;            // Altitude in meters
-    int16_t temperature;          // Temperature in 0.1°C
-    uint16_t humidity;            // Humidity in 0.1%
-    uint16_t pressure;            // Pressure in 0.1 hPa
-    uint16_t packet_index;        // Sequence number (0-65535)
-    uint8_t satellites;           // Number of satellites
-    uint8_t hdop;                 // Horizontal dilution of precision
-    uint8_t battery;              // Battery level in %
-    uint8_t flags;                // Status flags
-    uint16_t crc;                 // CRC for data validation
-} HighResTelemetryRecord_t;
+typedef struct __attribute__((packed)) {
+    uint32_t magic;             // 0xFEEDDA7A
+    uint32_t sequence;          // monotonic, consumed only after write success
+    uint32_t timestamp;         // UTC epoch seconds (GNSS-disciplined; boot-relative before first fix)
+    float    pressure;          // mbar
+    float    temperature;       // degC
+    float    humidity;          // %
+    int32_t  latitude;          // binary (scaled 8388607/90)
+    int32_t  longitude;         // binary (scaled 8388607/180)
+    int32_t  altitude_gps;      // metres (v4: widened from int16)
+    uint8_t  satellites;
+    uint8_t  gnss_fix_quality;
+    uint8_t  gnss_hdop_x10;
+    uint8_t  gnss_valid;
+    uint16_t battery_mv;
+    uint16_t solar_mv;          // v4: was never archived before (F-025)
+    int16_t  voltage_slope;     // mV/hour at write time (v4)
+    uint8_t  power_mode;        // operating mode at write time (v4)
+    uint8_t  flags;             // stale bits: b0 press, b1 temp, b2 hum, b3 gnss
+    uint8_t  reserved[12];
+    uint32_t crc32;
+} FlashLog_Record_t;            // exactly 64 bytes (_Static_assert)
 ```
 
-### Low-Resolution Telemetry Packet (11 bytes)
+`altitude_bar` was deleted in v4 (never assigned; the backend computes barometric
+altitude from pressure+temperature). One version bump covers F-024/F-025/R19.
 
-```c
-typedef struct {
-    uint8_t timestamp[2];         // Compressed timestamp (minutes since epoch)
-    uint8_t latitude[2];          // 100m resolution latitude
-    uint8_t longitude[2];         // 100m resolution longitude
-    uint8_t altitude;             // Compressed altitude
-    uint8_t temperature;          // Compressed temperature
-    uint8_t pressure;             // Compressed pressure
-    uint8_t status;               // Battery, satellites, flags
-    uint8_t packet_index;         // LSB of sequence number (0-255)
-} LowResTelemetryPacket_t;
-```
+### Wire record (32 B) — HighResTelemetryRecord_t
+
+The 32-byte record carried in FPort 11 archive packets. Authoritative definition:
+`Core/Inc/payload_format.h`; byte layout and decoder: `docs/PayloadFormats.md`
+(archive v3).
 
 ## Metadata Structure
 

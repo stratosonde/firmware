@@ -50,8 +50,10 @@ extern "C" {
 
 /** @brief Header version (increment if structure changes)
  *  v3 (T4): headers moved to separate sectors 0/1, data starts at sector 2.
- *  Old v2 headers fail validation -> clean init (acceptable pre-launch). */
-#define FLASH_LOG_HEADER_VERSION  3
+ *  v4 (D5/#35): record layout — altitude_gps int32, altitude_bar deleted,
+ *  solar_mv/voltage_slope/power_mode added. Old v3 headers fail validation
+ *  -> clean init (acceptable pre-launch). */
+#define FLASH_LOG_HEADER_VERSION  4
 
 /** @brief Record size in bytes (must be power of 2 for efficiency) */
 #define FLASH_LOG_RECORD_SIZE     64
@@ -103,25 +105,25 @@ typedef struct __attribute__((packed)) {
     float temperature;          /**< Temperature in degC */
     float humidity;             /**< Relative humidity in % */
     
-    /* GNSS data (18 bytes) */
+    /* GNSS data (16 bytes) */
     int32_t latitude;           /**< Latitude in binary format (scaled by 8388607/90) */
     int32_t longitude;          /**< Longitude in binary format (scaled by 8388607/180) */
-    int16_t altitude_gps;       /**< GPS altitude in meters */
-    int16_t altitude_bar;       /**< Barometric altitude in meters * 10 */
+    int32_t altitude_gps;       /**< GPS altitude in meters (D5/#35: int32; >32767 m float altitudes fit) */
+    /* altitude_bar DELETED (D5/#35): never assigned; ground computes it */
     uint8_t satellites;         /**< Number of satellites */
     uint8_t gnss_fix_quality;   /**< Fix quality (0=none, 1=GPS, 2=DGPS) */
     uint8_t gnss_hdop_x10;      /**< HDOP * 10 (0-255 = 0.0-25.5) */
     uint8_t gnss_valid;         /**< GNSS valid flag */
-    uint8_t reserved1;          /**< Reserved for alignment */
-    uint8_t reserved2;          /**< Reserved for alignment */
-    
-    /* Power and status (4 bytes) */
+
+    /* Power and status (8 bytes) */
     uint16_t battery_mv;        /**< Battery voltage in millivolts */
+    uint16_t solar_mv;          /**< Solar panel voltage in millivolts (D5/F-025: was never archived) */
+    int16_t voltage_slope;      /**< Battery slope mV/hour at write time (D5: honest history) */
+    uint8_t power_mode;         /**< Operating mode enum at write time (D5) */
     uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale */
-    uint8_t reserved3;          /**< Reserved for future use */
-    
-    /* Reserved for expansion (14 bytes) */
-    uint8_t reserved[14];       /**< Future expansion space */
+
+    /* Reserved for expansion (12 bytes) */
+    uint8_t reserved[12];       /**< Future expansion space */
     
     /* Integrity (4 bytes) */
     uint32_t crc32;             /**< CRC32 of all preceding bytes (60 bytes) */
@@ -190,9 +192,11 @@ FlashLog_StatusTypeDef FlashLog_DeInit(FlashLog_HandleTypeDef *hlog);
   * @retval FlashLog_StatusTypeDef
   * @note   Automatically handles sector wraparound
   */
-FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog, 
+FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
                                             const sensor_t *sensor_data,
-                                            uint32_t timestamp);
+                                            uint32_t timestamp,
+                                            int16_t voltage_slope,
+                                            uint8_t power_mode);
 
 /**
   * @brief  Read the most recent record from flash (LIFO)

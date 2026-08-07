@@ -516,9 +516,11 @@ FlashLog_StatusTypeDef FlashLog_DeInit(FlashLog_HandleTypeDef *hlog)
     return FLASH_LOG_OK;
 }
 
-FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog, 
+FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
                                             const sensor_t *sensor_data,
-                                            uint32_t timestamp)
+                                            uint32_t timestamp,
+                                            int16_t voltage_slope,
+                                            uint8_t power_mode)
 {
     FlashLog_Record_t record;
     W25Q_StatusTypeDef status;
@@ -550,15 +552,23 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     /* GNSS data */
     record.latitude = sensor_data->latitude;
     record.longitude = sensor_data->longitude;
-    record.altitude_gps = sensor_data->altitudeGps;
-    record.altitude_bar = sensor_data->altitudeBar;
+    record.altitude_gps = sensor_data->altitudeGps;  /* D5/#35: int32 */
+    /* altitude_bar deleted (D5/#35) — ground computes it */
     record.satellites = sensor_data->satellites;
     record.gnss_fix_quality = sensor_data->gnss_fix_quality;
     record.gnss_hdop_x10 = (uint8_t)(sensor_data->gnss_hdop * 10.0f);
     record.gnss_valid = sensor_data->gnss_valid ? 1 : 0;
-    
-    /* Battery */
+
+    /* Power + status (D5/#35: solar/slope/mode archived at write time — F-025/R19) */
     record.battery_mv = (uint16_t)(sensor_data->battery_voltage * 1000.0f);
+    {
+        float solar_mv_f = sensor_data->solar_voltage * 1000.0f;
+        if (solar_mv_f < 0.0f) solar_mv_f = 0.0f;
+        if (solar_mv_f > 65535.0f) solar_mv_f = 65535.0f;
+        record.solar_mv = (uint16_t)(solar_mv_f + 0.5f);
+    }
+    record.voltage_slope = voltage_slope;
+    record.power_mode = power_mode;
 
     /* FW-7 (DDR-0007): archive carries the reading's own freshness */
     record.flags = (sensor_data->press_stale ? 0x01 : 0)

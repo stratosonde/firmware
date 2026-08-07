@@ -43,8 +43,9 @@ typedef struct
   float humidity;         /*!< in % */
   int32_t latitude;       /*!< latitude converted to binary */
   int32_t longitude;      /*!< longitude converted to binary */
-  int16_t altitudeGps;    /*!< in m */
-  int16_t altitudeBar;    /*!< in m * 10 */
+  int32_t altitudeGps;    /*!< in m (D5/#35: widened int16->int32; float altitude >32767 m overflowed) */
+  /* altitudeBar DELETED (D5/#35): never assigned, ground computes barometric
+   * altitude from pressure+temperature (documented design). */
   /**more may be added*/
   /* USER CODE BEGIN sensor_t */
   uint8_t satellites;     /*!< number of satellites */

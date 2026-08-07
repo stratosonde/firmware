@@ -851,7 +851,7 @@ bool MultiRegion_ClearAllContexts(void)
  */
 static void SendPostJoinDataPackets(uint8_t num_packets)
 {
-    sensor_t sensor_data;
+    sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
     
     SEGGER_RTT_printf(0, "\r\n--- Sending %d post-join data packets ---\r\n", num_packets);
     

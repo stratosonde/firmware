@@ -69,7 +69,7 @@ static sensor_t make_nominal_sensors(void)
     s.latitude = (int32_t)(45.0 * 8388607.0 / 90.0);   /* 45 deg N */
     s.longitude = (int32_t)(-114.0 * 8388607.0 / 180.0); /* 114 deg W */
     s.altitudeGps = 700;
-    s.altitudeBar = 7050;
+    /* altitudeBar deleted (D5/#35) */
     s.satellites = 9;
     s.gnss_fix_quality = 1;
     s.gnss_hdop = 1.1f;
@@ -263,20 +263,33 @@ static void test_flashlog_conversion(void)
     fr.humidity = 12.3f;
     fr.pressure = 250.0f;
     fr.battery_mv = 4800;
+    fr.solar_mv = 5100;        /* D5/F-025 (#35): archived solar */
+    fr.voltage_slope = -7;     /* D5 (#35): archived slope */
+    fr.power_mode = MODE_REDUCED;  /* D5 (#35): archived mode */
     fr.satellites = 7;
     fr.gnss_hdop_x10 = 15;
     fr.gnss_valid = 1;
 
     HighResTelemetryRecord_t hr;
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr, -5, MODE_REDUCED));
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr, -5, MODE_NORMAL));  /* params superseded by record values */
     CHECK_EQ_I(hr.timestamp, 1754500999u);
     CHECK_EQ_I(hr.latitude, 111111);
     CHECK_EQ_I(hr.longitude, -222222);
     CHECK_EQ_I(hr.altitude, 9000);
     CHECK_EQ_I(hr.temperature, -455);
     CHECK_EQ_I(hr.battery_voltage, 4800);
+    CHECK_EQ_I(hr.solar_voltage, 5100);       /* from the record, not 0 (F-025) */
+    CHECK_EQ_I(hr.voltage_slope, -7);         /* from the record, not the param */
     CHECK_EQ_I(hr.hdop, 15);
-    CHECK_EQ_I(hr.power_mode, MODE_REDUCED);
+    CHECK_EQ_I(hr.power_mode, MODE_REDUCED);  /* from the record, not the param */
+
+    /* D5: int32 flash altitude clamps to the u16 wire field */
+    fr.altitude_gps = 40000;   /* float altitude beyond int16 */
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr, 0, MODE_NORMAL));
+    CHECK_EQ_I(hr.altitude, 40000);
+    fr.altitude_gps = -50;
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr, 0, MODE_NORMAL));
+    CHECK_EQ_I(hr.altitude, 0);
 }
 
 

@@ -186,7 +186,7 @@ int16_t GetTemperatureLevel(void)
 {
   int16_t temperatureLevel = 0;
 
-  sensor_t sensor_data;
+  sensor_t sensor_data = {0};  /* #35: zero-init */
 
   EnvSensors_Read(&sensor_data);
   temperatureLevel = (int16_t)(sensor_data.temperature);

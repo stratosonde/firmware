@@ -891,7 +891,7 @@ static void SendTxData(void)
   static VoltageSlope_t voltage_slope = {0};
 
   // Read current sensor data for temperature
-  sensor_t sensor_data;
+  sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
   EnvSensors_Read(&sensor_data);
   MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
   float temperature_c = sensor_data.temperature;
@@ -1263,7 +1263,8 @@ static void SendTxData(void)
    * Before the first GPS fix this falls back to boot-relative seconds —
    * honest, monotonic, and distinguishable (small values) from epoch. */
   now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
-  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp);
+  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp,
+                                                           slope_mv_per_hour, (uint8_t)current_mode);
   if (log_status == FLASH_LOG_OK) {
     uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
     SEGGER_RTT_printf(0, "Flash log: Written record %lu (total records: %lu)\r\n",
