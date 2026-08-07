@@ -594,23 +594,11 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
         SONDE_LOG("RX2 Freq:     %lu Hz\r\n", ctx->rx2_frequency);
         SONDE_LOG("RX2 DR:       DR%d\r\n", ctx->rx2_datarate);
         
-        // Session keys (full 16 bytes)
-        SONDE_LOG_STR("AppSKey:      ");
-        for (int i = 0; i < 16; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", ctx->app_s_key[i]);
-            SONDE_LOG_STR(hex);
-        }
-        SONDE_LOG_STR("\r\n");
-        
-        SONDE_LOG_STR("NwkSKey:      ");
-        for (int i = 0; i < 16; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", ctx->nwk_s_key[i]);
-            SONDE_LOG_STR(hex);
-        }
-        SONDE_LOG_STR("\r\n");
-        
+        /* F-R2 (#75): AppSKey/NwkSKey hex dumps REMOVED OUTRIGHT — session
+         * keys must never appear on the serial log, in any build. (#38 gated
+         * them to COMMISSIONING, #47 compile-gates logging; neither removed
+         * them from source. Now they are gone, not just hidden.) */
+
         // CRC validation
         SONDE_LOG("Context CRC:  0x%04X (validated)\r\n", ctx->crc16);
         SONDE_LOG_STR("------------------------------------\r\n\r\n");
@@ -1324,19 +1312,7 @@ bool MultiRegion_InitializeRegionFromNetworkServer(
     if (result) {
         SONDE_LOG("%s: DevAddr=0x%08lX initialized\r\n", 
                           RegionToString(region), dev_addr);
-        SONDE_LOG_STR("AppSKey: ");
-        for (int i = 0; i < 16; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", ctx->app_s_key[i]);
-            SONDE_LOG_STR(hex);
-        }
-        SONDE_LOG_STR("\r\nNwkSKey: ");
-        for (int i = 0; i < 16; i++) {
-            char hex[4];
-            snprintf(hex, sizeof(hex), "%02X ", ctx->nwk_s_key[i]);
-            SONDE_LOG_STR(hex);
-        }
-        SONDE_LOG_STR("\r\n");
+        /* F-R2 (#75): key hex dumps removed outright (see SwitchToRegion). */
         APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: %s context initialized from Chirpstack\r\n", 
                 RegionToString(region));
     }
