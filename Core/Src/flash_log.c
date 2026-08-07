@@ -265,9 +265,15 @@ static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header)
         (header->oldest_addr % FLASH_LOG_RECORD_SIZE) != 0) {
         return false;
     }
-    if (header->record_count > FLASH_LOG_MAX_RECORDS) {
-        return false;  /* more records than the ring can hold */
-    }
+    /* F-02 (#66): record_count is a MONOTONIC total-written counter and
+     * legitimately exceeds FLASH_LOG_MAX_RECORDS once the ring wraps
+     * (flash_log.h: "may exceed MAX if wrapped"; the write path at
+     * FlashLog_WriteRecord increments it unbounded and GetRecordCount()/
+     * HasWrapped() already handle > MAX). The ceiling check added by F-021
+     * (#55) rejected exactly those legitimate wrapped headers: ~day 113 at
+     * 5-min cadence BOTH headers failed validation and the next reboot wiped
+     * the record index and TX watermark. The watermark relation below is the
+     * meaningful plausibility constraint on record_count. */
     if (header->last_transmitted_seq > header->record_count) {
         return false;  /* watermark ahead of the frontier is impossible */
     }
