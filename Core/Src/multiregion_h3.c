@@ -40,29 +40,51 @@ static const char* LoRaMacRegion_ToString(LoRaMacRegion_t region);
 /**
  * @brief  Map H3Lite RegionId to LoRaMacRegion_t enum
  */
+/* R51: lookup table instead of a strcmp ladder. Pairs with #43's
+ * sub-group-as-data work (deferred post-flight). The _Static_assert pins the
+ * entry count so an accidental edit/merge deletion fails at compile time;
+ * the #46 host harness should additionally enumerate getRegionName() across
+ * all RegionIds so an upstream h3lite rename fails loudly in tests instead
+ * of silently falling through to "keep current region" in flight. */
+typedef struct {
+    const char *name;
+    LoRaMacRegion_t region;
+} H3RegionMapEntry_t;
+
+static const H3RegionMapEntry_t h3_region_map[] = {
+    { "US915",   LORAMAC_REGION_US915 },
+    { "EU868",   LORAMAC_REGION_EU868 },
+    { "AS923-1",  LORAMAC_REGION_AS923 },
+    { "AS923-1B", LORAMAC_REGION_AS923 },
+    { "AS923-1C", LORAMAC_REGION_AS923 },
+    { "AS923-2",  LORAMAC_REGION_AS923 },
+    { "AS923-3",  LORAMAC_REGION_AS923 },
+    { "AS923-4",  LORAMAC_REGION_AS923 },
+    { "AU915",   LORAMAC_REGION_AU915 },
+    { "CN470",   LORAMAC_REGION_CN470 },
+    { "KR920",   LORAMAC_REGION_KR920 },
+    { "IN865",   LORAMAC_REGION_IN865 },
+    { "RU864",   LORAMAC_REGION_RU864 },
+    { "EU433",   LORAMAC_REGION_EU433 },
+};
+
+#define H3_REGION_MAP_COUNT  (sizeof(h3_region_map) / sizeof(h3_region_map[0]))
+_Static_assert(H3_REGION_MAP_COUNT == 14,
+               "h3_region_map drift: expected 14 name->region entries");
+
 LoRaMacRegion_t H3Region_ToLoRaMacRegion(RegionId h3Region)
 {
     const char* name = getRegionName(h3Region);
-    
-    // Map h3lite region names to LoRaMac regions
-    if (strcmp(name, "US915") == 0) return LORAMAC_REGION_US915;
-    if (strcmp(name, "EU868") == 0) return LORAMAC_REGION_EU868;
-    if (strcmp(name, "AS923-1") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AS923-1B") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AS923-1C") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AS923-2") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AS923-3") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AS923-4") == 0) return LORAMAC_REGION_AS923;
-    if (strcmp(name, "AU915") == 0) return LORAMAC_REGION_AU915;
-    if (strcmp(name, "CN470") == 0) return LORAMAC_REGION_CN470;
-    if (strcmp(name, "KR920") == 0) return LORAMAC_REGION_KR920;
-    if (strcmp(name, "IN865") == 0) return LORAMAC_REGION_IN865;
-    if (strcmp(name, "RU864") == 0) return LORAMAC_REGION_RU864;
-    if (strcmp(name, "EU433") == 0) return LORAMAC_REGION_EU433;
+
+    for (uint32_t i = 0; i < H3_REGION_MAP_COUNT; i++) {
+        if (strcmp(name, h3_region_map[i].name) == 0) {
+            return h3_region_map[i].region;
+        }
+    }
     /* RESTRICTED (ID 15, repurposed from the CD900-1A test plan slot) is
      * handled upstream in lora_app.c, which blocks transmission before this
      * mapping is consulted; it intentionally has no LoRaMac region. */
-    
+
     // Unknown region - keep current
     APP_LOG(TS_ON, VLEVEL_M, "H3: Unknown region '%s', keeping current\r\n", name);
     return MultiRegion_GetActiveRegion();

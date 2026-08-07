@@ -1197,7 +1197,7 @@ bool MultiRegion_PreJoinAllRegions(void)
 /**
  * @brief Initialize a region context from Chirpstack session keys
  */
-bool MultiRegion_InitializeRegionFromChirpstack(
+bool MultiRegion_InitializeRegionFromNetworkServer(
     LoRaMacRegion_t region,
     uint32_t dev_addr,
     const uint8_t *app_s_key,
