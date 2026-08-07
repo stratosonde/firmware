@@ -36,7 +36,7 @@ uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c) {
         {-20, 500},    // Approximate
         {-30, 600},    // Approximate
         {-40, 700},    // Approximate
-        {-50, 400},    // Approximate
+        {-50, 450},    // R10 (#37): was 400 — non-monotonic between -40(700) and -55(430)
         {-55, 430},    // 5070 + 430 = 5500
         {-56, 660},    // 4840 + 660 = 5500
         {-57, 690},    // 4810 + 690 = 5500
@@ -148,14 +148,18 @@ uint16_t PredictTimeToVoltage(uint16_t current_voltage_mv,
 
 OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
                                                    uint16_t current_voltage,
-                                                   uint16_t time_to_critical) {
+                                                   uint16_t time_to_critical,
+                                                   uint16_t raw_voltage_mv) {
 
     // VOLTAGE-BASED FLOOR: Emergency low voltage (LTO threshold)
     // BUG 1.5 FIX: This MUST be first — at sunrise (positive slope, near-dead battery),
     // the slope branches would select NORMAL/CONSERVATIVE and re-enable GPS + frequent TX,
     // causing brownout. Below the absolute floor = SURVIVAL, regardless of slope.
-    if (current_voltage < 4300) {
-        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V (LTO critical) -> SURVIVAL\r\n");
+    // R10 (#37): the floor reads the RAW voltage. Feeding it the normalized
+    // value let up to +2700 mV of cold compensation (at -66C) mask a real
+    // brownout. Normalization is for slope/prediction only.
+    if (raw_voltage_mv < 4300) {
+        SEGGER_RTT_WriteString(0, "PREDICT: V<4.3V raw (LTO critical) -> SURVIVAL\r\n");
         return MODE_SURVIVAL;
     }
 

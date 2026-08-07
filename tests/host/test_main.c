@@ -266,13 +266,26 @@ static void test_power_model(void)
     CHECK_EQ_I(PredictTimeToVoltage(4500, -100, 4500), 0);
 
     /* SelectModeFromPredictions — floor MUST win over positive slope (BUG 1.5) */
-    CHECK_EQ_I(SelectModeFromPredictions(50, 4200, 0xFFFF), MODE_SURVIVAL);
-    CHECK_EQ_I(SelectModeFromPredictions(25, 5000, 0xFFFF), MODE_NORMAL);
-    CHECK_EQ_I(SelectModeFromPredictions(5, 5000, 0xFFFF), MODE_CONSERVATIVE);
-    CHECK_EQ_I(SelectModeFromPredictions(0, 5000, 0xFFFF), MODE_CONSERVATIVE);
-    CHECK_EQ_I(SelectModeFromPredictions(-10, 5000, 0xFFFF), MODE_REDUCED);
-    CHECK_EQ_I(SelectModeFromPredictions(-20, 5000, 10), MODE_RECOVERY);
-    CHECK_EQ_I(SelectModeFromPredictions(-40, 5000, 3), MODE_SURVIVAL);
+    CHECK_EQ_I(SelectModeFromPredictions(50, 4200, 0xFFFF, 4200), MODE_SURVIVAL);
+    CHECK_EQ_I(SelectModeFromPredictions(25, 5000, 0xFFFF, 5000), MODE_NORMAL);
+    CHECK_EQ_I(SelectModeFromPredictions(5, 5000, 0xFFFF, 5000), MODE_CONSERVATIVE);
+    CHECK_EQ_I(SelectModeFromPredictions(0, 5000, 0xFFFF, 5000), MODE_CONSERVATIVE);
+    CHECK_EQ_I(SelectModeFromPredictions(-10, 5000, 0xFFFF, 5000), MODE_REDUCED);
+    CHECK_EQ_I(SelectModeFromPredictions(-20, 5000, 10, 5000), MODE_RECOVERY);
+    CHECK_EQ_I(SelectModeFromPredictions(-40, 5000, 3, 5000), MODE_SURVIVAL);
+
+    /* R10 (#37): compensation must NOT defeat the floor. Raw 4200 mV at -66C
+     * normalizes to 6900 mV — the old normalized-floor path would NOT pick
+     * SURVIVAL. The floor reads raw. */
+    CHECK_EQ_I(SelectModeFromPredictions(50, 6900, 0xFFFF, 4200), MODE_SURVIVAL);
+    /* R10: stale temperature -> no normalization (decide-level regression) */
+    {
+        VoltageSlope_t vs2;
+        memset(&vs2, 0, sizeof(vs2));
+        TransmitPlan_t p2 = DecideTransmitPlan(&vs2, 4200, -66.0f, true, 1000, true, false);
+        CHECK_EQ_I(p2.battery_mv_normalized, 4200);   /* raw, uncompensated */
+        CHECK_EQ_I(p2.power_mode, MODE_SURVIVAL);
+    }
 
     CHECK(strcmp(GetModeName(MODE_SURVIVAL), "SURVIVAL") == 0);
     CHECK(strcmp(GetModeName((OperatingMode_t)99), "UNKNOWN") == 0);

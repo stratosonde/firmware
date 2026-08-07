@@ -44,7 +44,7 @@ typedef struct {
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);
 int16_t  CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32_t now_timestamp);
 uint16_t PredictTimeToVoltage(uint16_t current_voltage_mv, int16_t slope_mv_per_hour, uint16_t target_voltage_mv);
-OperatingMode_t SelectModeFromPredictions(int16_t current_slope, uint16_t current_voltage, uint16_t time_to_critical);
+OperatingMode_t SelectModeFromPredictions(int16_t current_slope, uint16_t current_voltage, uint16_t time_to_critical, uint16_t raw_voltage_mv);
 const char* GetModeName(OperatingMode_t mode);
 
 #ifdef __cplusplus

@@ -119,8 +119,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
 {
     TransmitPlan_t plan;
 
-    /* Temperature compensation: normalize battery voltage to 25C equivalent */
-    plan.battery_mv_normalized = NormalizeBatteryVoltage(battery_mv_raw, temperature_c);
+    /* Temperature compensation: normalize battery voltage to 25C equivalent.
+     * R10 (#37): only with a FRESH temperature — a stale temp feeding
+     * normalization can fabricate confidence; raw voltage is the safe input. */
+    plan.battery_mv_normalized = temp_stale ? battery_mv_raw
+                                            : NormalizeBatteryVoltage(battery_mv_raw, temperature_c);
 
     /* Slope + predictions on the NORMALIZED voltage (LTO: 4.5V crit, 5.5V full) */
     plan.voltage_slope_mv_per_hour =
@@ -139,10 +142,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         plan.time_to_target_h = 0;
     }
 
-    /* Mode selection + application */
+    /* Mode selection + application (R10: floor reads RAW voltage) */
     plan.power_mode = SelectModeFromPredictions(plan.voltage_slope_mv_per_hour,
                                                 plan.battery_mv_normalized,
-                                                time_to_critical);
+                                                time_to_critical,
+                                                battery_mv_raw);
     plan.tx_interval_ms = ApplyOperatingMode(plan.power_mode,
                                              &plan.gps_enabled,
                                              &plan.gps_timeout_ms);
