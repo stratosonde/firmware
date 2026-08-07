@@ -8,7 +8,7 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
-SRCS := test_main.c ../../Core/Src/power_model.c
+SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
 
 test_runner$(EXE): $(SRCS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SRCS) -lm

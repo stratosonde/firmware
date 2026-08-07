@@ -161,6 +161,53 @@ static void test_flashlog_conversion(void)
 }
 
 
+/* R47 (#44): decide-half tests. Config_Get stubbed to NULL -> defaults path. */
+#include "transmit_plan.h"
+#include "config.h"
+const SystemConfig_t *Config_Get(void) { return NULL; }
+
+static void test_decide_transmit_plan(void)
+{
+    VoltageSlope_t vs;
+
+    /* Healthy battery, warm, joined, flight -> full go, GPS on */
+    memset(&vs, 0, sizeof(vs));
+    TransmitPlan_t p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, true, false);
+    CHECK_EQ_I(p.veto, VETO_NONE);
+    CHECK(p.gps_enabled);
+    CHECK_EQ_I(p.gps_timeout_ms, 60000);
+    CHECK_EQ_I(p.battery_mv_normalized, 5224);  /* 22C: +24mV interpolation */
+
+    /* Cold below lockout -> GPS off, veto recorded */
+    memset(&vs, 0, sizeof(vs));
+    p = DecideTransmitPlan(&vs, 5200, -60.0f, false, 1000, true, false);
+    CHECK_EQ_I(p.veto, VETO_TEMP_LOCKOUT);
+    CHECK(!p.gps_enabled);
+
+    /* Stale temperature -> treated as cold, GPS off (fail-safe, F9/T2) */
+    memset(&vs, 0, sizeof(vs));
+    p = DecideTransmitPlan(&vs, 5200, 20.0f, true, 1000, true, false);
+    CHECK_EQ_I(p.veto, VETO_TEMP_STALE);
+    CHECK(!p.gps_enabled);
+
+    /* Brownout floor: normalized floor defeated at -66C is R10's problem;
+     * here raw 4200 at 25C -> SURVIVAL, GPS off, 1h interval */
+    memset(&vs, 0, sizeof(vs));
+    p = DecideTransmitPlan(&vs, 4200, 25.0f, false, 1000, true, false);
+    CHECK_EQ_I(p.power_mode, MODE_SURVIVAL);
+    CHECK(!p.gps_enabled);
+    CHECK_EQ_I(p.tx_interval_ms, 3600000);
+
+    /* FLIGHT + no session -> RF silence veto (DDR-0006); commissioning exempt */
+    memset(&vs, 0, sizeof(vs));
+    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, false);
+    CHECK_EQ_I(p.veto, VETO_RF_SILENCE);
+    memset(&vs, 0, sizeof(vs));
+    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, true);
+    CHECK_EQ_I(p.veto, VETO_NONE);
+}
+
+
 static void test_power_model(void)
 {
     /* NormalizeBatteryVoltage */
@@ -204,6 +251,7 @@ int main(void)
     test_highres_record();
     test_flashlog_conversion();
     test_power_model();
+    test_decide_transmit_plan();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     if (g_failures == 0) {

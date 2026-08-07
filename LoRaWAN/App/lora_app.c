@@ -49,6 +49,7 @@
 #include "mission_state.h"
 #include "reset_cause.h"      /* F13a: deadman breadcrumb register */
 #include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0003) */
+#include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -650,104 +651,9 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
 /* ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ========== */
 /* R49 (#46): NormalizeBatteryVoltage, CalculateVoltageSlope, PredictTimeToVoltage,
  * SelectModeFromPredictions and GetModeName moved verbatim to Core/Src/power_model.c
- * (declared in Core/Inc/power_model.h) so the pure decision logic is host-testable. */
-
-/**
- * @brief Select operating mode using real-time voltage analysis
- * @param current_slope Current voltage slope in mV/hour
- * @param current_voltage Current battery voltage in mV
- * @param time_to_critical Hours until critical voltage (0xFFFF if charging)
- * @return Recommended operating mode
- */
-/**
- * @brief Apply operating mode configuration
- * @param mode Operating mode to apply
- * @param gps_enabled Output parameter for GPS enable state
- * @param gps_timeout_ms Output parameter for GPS timeout
- * @return New transmission interval in milliseconds
- */
-static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint32_t *gps_timeout_ms) {
-    uint32_t interval_ms;
-    
-    // Get configuration pointer (use defaults if not available)
-    const SystemConfig_t *config = Config_Get();
-    if (config == NULL) {
-        // Fallback to hardcoded values if config not available
-        switch(mode) {
-            case MODE_NORMAL:
-                interval_ms = 300000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;
-                break;
-            case MODE_CONSERVATIVE:
-                interval_ms = 600000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;
-                break;
-            case MODE_REDUCED:
-                interval_ms = 900000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            case MODE_RECOVERY:
-                interval_ms = 1800000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            case MODE_SURVIVAL:
-                interval_ms = 3600000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            default:
-                interval_ms = 600000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;  // 60 seconds (was 30s - bug fix)
-                break;
-        }
-    } else {
-        // Use configuration values
-        switch(mode) {
-            case MODE_NORMAL:
-                interval_ms = config->tx_interval_normal;
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_normal * 1000;  // Convert to ms
-                break;
-                
-            case MODE_CONSERVATIVE:
-                interval_ms = config->tx_interval_conservative;
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_conservative * 1000;  // Convert to ms
-                break;
-                
-            case MODE_REDUCED:
-                interval_ms = config->tx_interval_reduced;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-                
-            case MODE_RECOVERY:
-                interval_ms = config->tx_interval_recovery;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-                
-            case MODE_SURVIVAL:
-                interval_ms = config->tx_interval_survival;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-                
-            default:
-                interval_ms = config->tx_interval_conservative;  // Conservative default
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_conservative * 1000;
-                break;
-        }
-    }
-    
-    return interval_ms;
-}
+ * (declared in Core/Inc/power_model.h) so the pure decision logic is host-testable.
+ * R47 (#44): ApplyOperatingMode + the whole decide block moved to
+ * Core/Src/transmit_plan.c (DecideTransmitPlan). */
 
 /* USER CODE END PrFD */
 
@@ -916,79 +822,40 @@ static void SendTxData(void)
   Deadman_MarkProgress();  /* F13a: a work cycle provably started */
   MissionState_Update();   /* FW-3: ASCENT -> FLOAT transition (contract: call each work cycle) */
 
-  /* ========== SIMPLIFIED POWER MANAGEMENT WITH TEMPERATURE COMPENSATION ========== */
+  /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
   static VoltageSlope_t voltage_slope = {0};
-  static OperatingMode_t current_mode = MODE_CONSERVATIVE;
-  static bool gps_enabled_by_power_mgmt = true;
-  static uint32_t gps_timeout_ms = 60000;
-  
+
   // Read current sensor data for temperature
   sensor_t sensor_data;
   EnvSensors_Read(&sensor_data);
   float temperature_c = sensor_data.temperature;
-  
+
   // Read raw voltages
   uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
   uint16_t solar_mv = SYS_GetSolarVoltage();
-  
-  // Temperature compensation: normalize battery voltage to 25°C equivalent
-  uint16_t battery_mv_normalized = NormalizeBatteryVoltage(battery_mv_raw, temperature_c);
-  
+
   // Use RTC-based time that continues during STOP2 sleep
   uint16_t ms_unused;
   uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
-  
-  // Calculate real-time slope using NORMALIZED voltage (temperature-compensated)
-  int16_t slope_mv_per_hour = CalculateVoltageSlope(&voltage_slope, battery_mv_normalized, now_timestamp);
-  
-  // Predict time to targets using NORMALIZED voltage (LTO thresholds: 4.5V critical, 5.5V full)
-  uint16_t time_to_critical = PredictTimeToVoltage(battery_mv_normalized, slope_mv_per_hour, 4500);
-  uint16_t time_to_full = PredictTimeToVoltage(battery_mv_normalized, slope_mv_per_hour, 5500);
-  
-  // Determine signed time to target for telemetry
-  int16_t time_to_target_signed;
-  if (time_to_critical != 0xFFFF) {
-    time_to_target_signed = -(int16_t)time_to_critical;  // Negative = hours to depletion
-  } else if (time_to_full != 0xFFFF) {
-    time_to_target_signed = (int16_t)time_to_full;        // Positive = hours to full charge
-  } else {
-    time_to_target_signed = 0;  // Stable voltage
-  }
-  
-  // Real-time mode selection based on voltage slope and battery state
-  OperatingMode_t predicted_mode = SelectModeFromPredictions(slope_mv_per_hour, battery_mv_normalized, time_to_critical);
-  current_mode = predicted_mode;  // Use predicted mode directly (no historical override)
-  
-  // Apply operating mode configuration
-  uint32_t new_interval = ApplyOperatingMode(current_mode, &gps_enabled_by_power_mgmt, &gps_timeout_ms);
-  
-  // BUG 1.4 FIX: GPS temperature lockout check AFTER ApplyOperatingMode so it has final say.
-  // Previously this ran BEFORE ApplyOperatingMode, which unconditionally set *gps_enabled=true
-  // for NORMAL/CONSERVATIVE modes, overwriting the lockout.
-  const SystemConfig_t *config = Config_Get();
-  int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
-  
-  /* F9/T2 (DDR-0007): stale/unknown temperature is treated as COLD — the GPS
-   * stays locked out. Fail safe, not fail sunny: a temp-sensor glitch must
-   * never fire the GPS during the dawn brownout the lockout exists to prevent. */
-  if (sensor_data.temp_stale || temperature_c < gps_lockout_temp) {
-    gps_enabled_by_power_mgmt = false;
-    /* F27 FIX: integer-only print (no float printf support linked) */
-    int temp_deci = (int)(temperature_c * 10.0f);
-    char temp_msg[96];
-    if (sensor_data.temp_stale) {
-      snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d°C)\r\n",
-               temp_deci / 10, abs(temp_deci % 10));
-    } else {
-      snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %d.%d°C < %d°C (supercap inoperative)\r\n",
-               temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
-    }
-    SEGGER_RTT_WriteString(0, temp_msg);
-  }
-  
+
+  /* R47: mode selection, slope/prediction, GPS temperature lockout and the
+   * RF-silence veto all live in the pure decide half (transmit_plan.c) —
+   * host-testable with zero hardware. The plan records WHY, not just THAT. */
+  TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
+                                           temperature_c, sensor_data.temp_stale != 0,
+                                           now_timestamp,
+                                           LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
+                                           MissionState_IsCommissioning());
+  bool gps_enabled_by_power_mgmt = plan.gps_enabled;
+  uint32_t gps_timeout_ms = plan.gps_timeout_ms;
+  OperatingMode_t current_mode = plan.power_mode;
+  int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
+  int16_t time_to_target_signed = plan.time_to_target_h;
+  uint16_t battery_mv_normalized = plan.battery_mv_normalized;
+
   // Update timer interval if changed
   UTIL_TIMER_Stop(&TxTimer);
-  UTIL_TIMER_SetPeriod(&TxTimer, new_interval);
+  UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms);
   UTIL_TIMER_Start(&TxTimer);
   
   // Log power management status

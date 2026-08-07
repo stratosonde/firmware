@@ -11,6 +11,7 @@
 ./Core/Src/multiregion_h3.o
 ./Core/Src/payload_encode.o
 ./Core/Src/power_model.o
+./Core/Src/transmit_plan.o
 ./Core/Src/SEGGER_RTT.o
 ./Core/Src/sht31.o
 ./Core/Src/stm32_lpm_if.o
