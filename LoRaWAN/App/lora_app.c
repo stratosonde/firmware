@@ -1226,6 +1226,14 @@ static void SendTxData(void)
        * REGION_UNKNOWN means open ocean or uncovered H3 cells — keep current region and
        * transmit normally (standard convention over international waters). Previously this
        * also blocked UNKNOWN, causing the balloon to go silent over every ocean crossing. */
+      /* F-06 (#64), DDR-0013: region selection DELIBERATELY runs on
+       * possibly-stale (last-known) position. Holding the last region across
+       * a GPS gap is intentional and safer than the alternatives: a missed
+       * fix does not mean the sonde teleported, snapping region on a
+       * minutes-old position would be the dangerous action, and going
+       * radio-silent on stale position risks the whole mission. The DDR-0007
+       * GPS-stale bit governs SCIENCE DATA HONESTY, not region selection.
+       * Do not "fix" this without revisiting DDR-0013. */
       RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
       
       if (h3_region_id == REGION_RESTRICTED) {
