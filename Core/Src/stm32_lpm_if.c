@@ -311,43 +311,68 @@ void PWR_ExitStopMode(void)
   /* === PERIPHERAL RE-INITIALIZATION AFTER STOP2 === */
   /* STM32WL loses peripheral configuration in STOP2 mode */
   /* Must restore in proper dependency order */
-  
+
   /* NOTE: SystemClock_Config() REMOVED - STM32WL auto-restores clock after STOP2 */
   /* Calling it was causing 30mA power draw issue */
   /* System wakes on MSI (4MHz) which is sufficient, radio driver handles PLL if needed */
-  
+
+  /* F-029 (#58): every re-init is status-checked — a peripheral that fails to
+   * come back must be VISIBLE, not silently used blind. Failures are counted
+   * per peripheral class and printed; a flash (SPI) re-init failure is the
+   * flight-critical one (the archive depends on it) and gets its own flag. */
+  static uint32_t stop2_reinit_fail_count = 0;
+  bool reinit_failed = false;
+
   /* Re-enable peripheral clocks that were disabled for STOP2 */
   __HAL_RCC_DMA1_CLK_ENABLE();
   __HAL_RCC_DMAMUX1_CLK_ENABLE();
-  
+
   /* Re-initialize DMA before peripherals that use it (UART) */
   MX_DMA_Init();
-  
+
   /* Re-initialize I2C2 - sensors need this to work */
   HAL_I2C_DeInit(&hi2c2);
-  HAL_I2C_Init(&hi2c2);
-  
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+    SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: I2C2\r\n");
+    reinit_failed = true;
+  }
+
   /* Re-initialize SPI2 - external flash needs this */
   HAL_SPI_DeInit(&hspi2);
-  HAL_SPI_Init(&hspi2);
+  if (HAL_SPI_Init(&hspi2) != HAL_OK) {
+    SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: SPI2 (flash archive at risk)\r\n");
+    reinit_failed = true;
+  }
 
   /* FW-14: wake the flash from deep power-down. tRES1 = 3us max per
    * datasheet; W25Q_ReleasePowerDown already delays 1ms. */
   if (hw25q.initialized) {
-    W25Q_ReleasePowerDown(&hw25q);
+    if (W25Q_ReleasePowerDown(&hw25q) != W25Q_OK) {
+      SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: W25Q wake\r\n");
+      reinit_failed = true;
+    }
   }
 
   /* FW-15: restore VREFBUF (internal voltage reference) on wake. The
    * ratiometric VDDA path in SYS_GetBatteryLevel reads VREFINT after every
    * STOP2 wake; leaving it disabled here silently degrades battery reads. */
   HAL_SYSCFG_EnableVREFBUF();
-  
+
   /* Re-initialize UART1 only if GPS is powered */
   /* Prevents parasitic power when GPS is off */
   extern GNSS_HandleTypeDef hgnss;
   if (hgnss.is_powered) {
     HAL_UART_DeInit(&huart1);
-    HAL_UART_Init(&huart1);
+    if (HAL_UART_Init(&huart1) != HAL_OK) {
+      SEGGER_RTT_WriteString(0, "STOP2 REINIT FAIL: UART1 (GNSS)\r\n");
+      reinit_failed = true;
+    }
+  }
+
+  if (reinit_failed) {
+    stop2_reinit_fail_count++;
+    SEGGER_RTT_printf(0, "STOP2 reinit failures this boot: %lu\r\n",
+                      (unsigned long)stop2_reinit_fail_count);
   }
   
   /* USER CODE END ExitStopMode_1 */
