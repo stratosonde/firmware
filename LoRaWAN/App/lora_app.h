@@ -31,19 +31,13 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "LoRaMacInterfaces.h"
+#include "power_model.h"  /* R49: OperatingMode_t + VoltageSlope_t live here now */
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 
-/* Simplified voltage tracking for slope calculation (2-hour window) */
-typedef struct {
-    uint16_t baseline_voltage_mv;   // Voltage at baseline (updated every 2 hours)
-    uint32_t baseline_timestamp;     // Timestamp at baseline
-    uint16_t current_voltage_mv;     // Most recent voltage reading
-    uint32_t current_timestamp;      // Most recent timestamp
-    int16_t  last_slope_mv_per_hour; // FW-6: last valid slope (returned when dt < MIN_SLOPE_DT)
-} VoltageSlope_t;
+/* R49: VoltageSlope_t moved to power_model.h (included above) */
 
 /* USER CODE END ET */
 
@@ -171,13 +165,7 @@ typedef struct {
 #define LORAWAN_DEFAULT_DATA_RATE                   DR_2  /* For larger payloads on US915 */
 
 /* Power Management - Operating Modes */
-typedef enum {
-    MODE_NORMAL = 0,       // 5min interval, GPS enabled
-    MODE_CONSERVATIVE = 1, // 10min interval, GPS enabled
-    MODE_REDUCED = 2,      // 15min interval, GPS disabled
-    MODE_RECOVERY = 3,     // 30min interval, GPS disabled
-    MODE_SURVIVAL = 4      // 60min interval, minimal activity
-} OperatingMode_t;
+/* R49: OperatingMode_t moved to power_model.h (included above) */
 
 /* Power Management - Temperature Constraints */
 #define GPS_TEMPERATURE_LOCKOUT  -55  // °C - Supercap fails below this temperature

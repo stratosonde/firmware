@@ -23,7 +23,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stdbool.h>
-#include "lora_app.h"
+#include "power_model.h"  /* OperatingMode_t (R49: was lora_app.h — much lighter) */
 
 /* Exported defines ----------------------------------------------------------*/
 

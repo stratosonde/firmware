@@ -7,6 +7,12 @@ Debug/
 *.su
 *.d
 *.cyclo
+# ...but keep the build system itself so a fresh clone can build (R49):
+# Debug/Makefile, objects.list, objects.mk, sources.mk and all live subdir.mk
+# are force-added and tracked. New source dirs need `git add -f` on their subdir.mk.
+
+# Host test binaries
+tests/host/test_runner*
 
 # IDE files
 .settings/

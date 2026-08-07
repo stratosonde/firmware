@@ -115,18 +115,18 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     int32_t lat_micro = sensors->gnss_valid ? (int32_t)(sensors->latitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
     int32_t lon_micro = sensors->gnss_valid ? (int32_t)(sensors->longitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
     int16_t temp_centi = (int16_t)(sensors->temperature * 100);
-    int16_t pressure_centi = (int16_t)(sensors->pressure * 100);
+    int32_t pressure_centi = (int32_t)(sensors->pressure * 100);  /* int16 overflowed at >327 hPa (host-test catch) */
     int16_t humidity_centi = (int16_t)(sensors->humidity * 100);
     int16_t battery_mv = (int16_t)(sensors->battery_voltage * 1000);
     
     char debug_msg[200];
     snprintf(debug_msg, sizeof(debug_msg),
-             "Compact: T=%lum Lat=%ld.%06ld Lon=%ld.%06ld Temp=%d.%02dC P=%d.%02d H=%d.%02d%% Bat=%dmV Sats=%d Mode=%d\r\n",
+             "Compact: T=%lum Lat=%ld.%06ld Lon=%ld.%06ld Temp=%d.%02dC P=%ld.%02ld H=%d.%02d%% Bat=%dmV Sats=%d Mode=%d\r\n",
              (unsigned long)timestamp_min,
              (long)(lat_micro / 1000000), (long)labs(lat_micro % 1000000),
              (long)(lon_micro / 1000000), (long)labs(lon_micro % 1000000),
              temp_centi / 100, abs(temp_centi % 100),
-             pressure_centi / 100, abs(pressure_centi % 100),
+             (long)(pressure_centi / 100), labs(pressure_centi % 100),
              humidity_centi / 100, abs(humidity_centi % 100),
              battery_mv, sensors->satellites, power_mode);
     SEGGER_RTT_WriteString(0, debug_msg);
@@ -369,15 +369,16 @@ bool PayloadFormat_ValidateSizes(void)
  */
 static uint16_t GetTimestampMinutes(void)
 {
-    uint16_t ms_unused;
-    uint32_t seconds = TIMER_IF_GetTime(&ms_unused);  // RTC seconds since epoch
-    
+    /* R45: UTC epoch via SysTime (GPS-disciplined), not the boot-relative
+     * RTC calendar — same doctrine as the flash write site (#42). */
+    uint32_t seconds = SysTimeGet().Seconds;
+
     // Convert to minutes (with overflow handling)
     // uint16_t gives us ~45 days of range (65535 minutes = 1092 hours = 45.5 days)
     uint32_t minutes = seconds / 60;
-    
+
     // Handle overflow by wrapping (simple modulo)
-    return (uint16_t)(minutes & 0xFFFF); 
+    return (uint16_t)(minutes & 0xFFFF);
 }
 
 /**
