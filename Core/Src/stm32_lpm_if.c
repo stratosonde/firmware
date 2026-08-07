@@ -30,6 +30,7 @@
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For TCXO control
 #include "w25q16jv.h"  // For external flash deep power-down
 #include "stm32wlxx_ll_pwr.h"  // For LL_PWR_ClearFlag_C1STOP_C1STB
+#include "mission_state.h"  // R09: LED gating
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -301,9 +302,11 @@ void PWR_ExitStopMode(void)
 {
   /* USER CODE BEGIN ExitStopMode_1 */
   
-  /* === DIAGNOSTIC: LED ON while awake === */
-  /* PA0 HIGH = MCU awake and running */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+  /* === DIAGNOSTIC: LED ON while awake — COMMISSIONING only (R09/DDR-0008) ===
+   * In FLIGHT the LED costs power on every 25 s wake for zero benefit. */
+  if (MissionState_IsCommissioning()) {
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+  }
   
   /* === PERIPHERAL RE-INITIALIZATION AFTER STOP2 === */
   /* STM32WL loses peripheral configuration in STOP2 mode */

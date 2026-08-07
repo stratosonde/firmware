@@ -117,6 +117,11 @@ void system_sleep(void)
 }
 void leds_boot_seq(void)
 {
+  /* R09/DDR-0008: dark in flight — the boot blink is a bench/commissioning
+   * signal only; a flight unit rebooting at altitude stays dark. */
+  if (!MissionState_IsCommissioning()) {
+    return;
+  }
   /* Use the actual LED on PA0 for boot sequence */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 1);
   HAL_Delay(500);

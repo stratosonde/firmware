@@ -8,6 +8,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "sht31.h"
 #include "SEGGER_RTT.h"
+#include "mission_state.h"  /* R09: LED gating */
 
 /* Private define ------------------------------------------------------------*/
 /* SHT31 Commands */
@@ -73,8 +74,10 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
   HAL_StatusTypeDef i2c_status;
   uint8_t i2c_retry = 5; // Increase retry count
   
-  /* Turn on LED to indicate initialization start */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET); // Using PA0 for LED
+  /* Turn on LED to indicate initialization start (R09: commissioning only) */
+  if (MissionState_IsCommissioning()) {
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET); // Using PA0 for LED
+  }
   
   SEGGER_RTT_WriteString(0, "  SHT31_Init: Checking device ready...\r\n");
   while (i2c_retry > 0)
@@ -147,8 +150,11 @@ SHT31_StatusTypeDef SHT31_ReadTempAndHumidity(SHT31_HandleTypeDef *hsht31,
                                              int32_t *Temperature, 
                                              int32_t *Humidity)
 {
-  /* Turn on LED to indicate read operation start */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+  /* Turn on LED to indicate read operation start (R09: commissioning only —
+   * this runs every work cycle; in flight it would burn power every wake) */
+  if (MissionState_IsCommissioning()) {
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+  }
   
   /* Check I2C bus state and clear any errors before starting */
   uint32_t i2c_error = HAL_I2C_GetError(hsht31->hi2c);
