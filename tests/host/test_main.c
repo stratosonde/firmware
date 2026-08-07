@@ -141,10 +141,11 @@ static void test_compact_packet(void)
     CHECK_EQ_I(pkt.timestamp_min, (uint16_t)((g_fake_epoch / 60) & 0xFFFF));
 
     /* Golden vector (D9/§13): dump exact LE bytes for backend cross-check.
-     * Must precede the wrap test — the wrap flag is sticky. */
+     * Must precede the wrap test — the wrap flag is sticky. ts=13000 keeps the
+     * minute counter monotone after the 12610 fallback above (wrap detection). */
     {
         sensor_t s3 = make_nominal_sensors();
-        CHECK(EncodeCompactBinaryPacket(&pkt, &s3, 1234, 0, MODE_NORMAL));
+        CHECK(EncodeCompactBinaryPacket(&pkt, &s3, 13000, 0, MODE_NORMAL));
         printf("GOLDEN heartbeat-v2:");
         for (size_t i = 0; i < sizeof(pkt); i++)
             printf(" %02X", ((const uint8_t *)&pkt)[i]);
@@ -209,9 +210,9 @@ static void test_bulk_v3(void)
                ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), 1754500123u);
     /* temperature 0.1°C at record offset 14 -> buf[2+14]=16: 250 = 0x00FA LE */
     CHECK_EQ_I(buf[16] | (buf[17] << 8), 250);
-    /* pressure 0.1hPa at offset 18: 10132.5 -> 10133 or 10132 (float rounding) */
+    /* pressure 0.1hPa at record offset 18 -> buf[2+18]: 10132.5 -> 10133 or 10132 (float rounding) */
     {
-        int p = buf[18] | (buf[19] << 8);
+        int p = buf[20] | (buf[21] << 8);
         CHECK(p == 10132 || p == 10133);
     }
     /* per-record crc16 at bytes 30-31 of the record validates over bytes 0-29 */
