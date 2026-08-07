@@ -1887,6 +1887,11 @@ __attribute__((unused)) static const char* RegionToString(LoRaMacRegion_t region
  */
 void MultiRegion_DisplaySessionKeys(void)
 {
+    /* F-017: session keys are secrets — never print them in FLIGHT.
+     * COMMISSIONING-only (the bench is where Chirpstack setup happens). */
+    if (!MissionState_IsCommissioning()) {
+        return;
+    }
     if (!g_initialized || g_storage.active_slot >= MAX_REGION_CONTEXTS) {
         SEGGER_RTT_WriteString(0, "ERROR: No active region to display\r\n");
         return;

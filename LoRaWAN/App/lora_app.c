@@ -464,9 +464,11 @@ void LoRaWAN_Init(void)
     /* Switch to US915 as starting region */
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
     
-    /* Display session keys for Chirpstack verification */
-    SEGGER_RTT_WriteString(0, "\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
-    MultiRegion_DisplaySessionKeys();
+    /* Display session keys for Chirpstack verification (F-017: commissioning only) */
+    if (MissionState_IsCommissioning()) {
+      SEGGER_RTT_WriteString(0, "\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
+      MultiRegion_DisplaySessionKeys();
+    }
     
   } else {
     
