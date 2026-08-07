@@ -1888,16 +1888,55 @@ static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
   /* USER CODE END OnNvmDataChange_Last */
 }
 
+/* F-016 (#54): two-slot transactional NVM context persistence, matching the
+ * proven Tier-2 ping-pong pattern (T1/FW-1). Slot A = page 126, slot B =
+ * page 127 (the retired legacy store, repurposed). Each slot carries
+ * magic/length/generation/CRC; newest valid generation wins. A torn write
+ * can only kill the slot being written — the other survives. */
+#define NVM_SLOT_MAGIC    0x4E564D43UL  /* "NVMC" */
+#define NVM_SLOT_A_ADDR   LORAWAN_NVM_BASE_ADDRESS
+#define NVM_SLOT_B_ADDR   ((void *)((uint32_t)LORAWAN_NVM_BASE_ADDRESS + FLASH_PAGE_SIZE))
+
+typedef struct {
+  uint32_t magic;
+  uint32_t generation;
+  uint32_t length;
+  uint32_t crc32;      /* over the payload only */
+} NvmSlotHeader_t;
+
+static uint32_t g_nvm_generation = 0;
+
 static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
 {
   /* USER CODE BEGIN OnStoreContextRequest_1 */
 
   /* USER CODE END OnStoreContextRequest_1 */
-  /* store nvm in flash */
-  if (FLASH_IF_Erase(LORAWAN_NVM_BASE_ADDRESS, FLASH_PAGE_SIZE) == FLASH_IF_OK)
-  {
-    FLASH_IF_Write(LORAWAN_NVM_BASE_ADDRESS, (const void *)nvm, nvm_size);
+  if (nvm == NULL || nvm_size == 0 ||
+      nvm_size + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
+    SEGGER_RTT_printf(0, "NVM store REJECTED (size %lu too large or bad ptr)\r\n",
+                      (unsigned long)nvm_size);
+    return;  /* honest failure, no silent drop */
   }
+
+  /* Ping-pong: write the OTHER slot with the next generation */
+  uint32_t slot_addr = (g_nvm_generation % 2 == 0) ? (uint32_t)NVM_SLOT_A_ADDR
+                                                   : (uint32_t)NVM_SLOT_B_ADDR;
+  NvmSlotHeader_t hdr;
+  hdr.magic = NVM_SLOT_MAGIC;
+  hdr.generation = g_nvm_generation + 1;
+  hdr.length = nvm_size;
+  hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, nvm_size);
+
+  if (FLASH_IF_Erase((void *)slot_addr, FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+    SEGGER_RTT_WriteString(0, "NVM store: slot erase FAILED\r\n");
+    return;
+  }
+  if (FLASH_IF_Write((void *)slot_addr, &hdr, sizeof(hdr)) != FLASH_IF_OK ||
+      FLASH_IF_Write((void *)(slot_addr + sizeof(hdr)), nvm, nvm_size) != FLASH_IF_OK) {
+    SEGGER_RTT_WriteString(0, "NVM store: slot write FAILED\r\n");
+    return;
+  }
+  g_nvm_generation = hdr.generation;
   /* USER CODE BEGIN OnStoreContextRequest_Last */
 
   /* USER CODE END OnStoreContextRequest_Last */
@@ -1908,7 +1947,33 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   /* USER CODE BEGIN OnRestoreContextRequest_1 */
 
   /* USER CODE END OnRestoreContextRequest_1 */
-  FLASH_IF_Read(nvm, LORAWAN_NVM_BASE_ADDRESS, nvm_size);
+  /* Newest valid slot wins; validate magic + length + payload CRC */
+  const uint32_t slots[2] = { (uint32_t)NVM_SLOT_A_ADDR, (uint32_t)NVM_SLOT_B_ADDR };
+  int best = -1;
+  NvmSlotHeader_t best_hdr = {0};
+  for (int i = 0; i < 2; i++) {
+    NvmSlotHeader_t hdr;
+    if (FLASH_IF_Read(&hdr, (void *)slots[i], sizeof(hdr)) != FLASH_IF_OK) continue;
+    if (hdr.magic != NVM_SLOT_MAGIC) continue;
+    if (hdr.length != nvm_size) continue;
+    if (hdr.length + sizeof(hdr) > FLASH_PAGE_SIZE) continue;
+    if (best >= 0 && (int32_t)(hdr.generation - best_hdr.generation) <= 0) continue;
+    best = i;
+    best_hdr = hdr;
+  }
+  if (best < 0) {
+    SEGGER_RTT_WriteString(0, "NVM restore: no valid slot (fresh start)\r\n");
+    return;  /* leave nvm untouched — MAC treats as no context */
+  }
+  if (FLASH_IF_Read(nvm, (void *)(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK) {
+    SEGGER_RTT_WriteString(0, "NVM restore: payload read FAILED\r\n");
+    return;
+  }
+  if (FlashLog_CRC32((const uint8_t *)nvm, nvm_size) != best_hdr.crc32) {
+    SEGGER_RTT_WriteString(0, "NVM restore: payload CRC FAILED\r\n");
+    return;
+  }
+  g_nvm_generation = best_hdr.generation;
   /* USER CODE BEGIN OnRestoreContextRequest_Last */
 
   /* USER CODE END OnRestoreContextRequest_Last */
