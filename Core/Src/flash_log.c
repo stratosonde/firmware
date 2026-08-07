@@ -562,11 +562,24 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     /* altitude_bar deleted (D5/#35) — ground computes it */
     record.satellites = sensor_data->satellites;
     record.gnss_fix_quality = sensor_data->gnss_fix_quality;
-    record.gnss_hdop_x10 = (uint8_t)(sensor_data->gnss_hdop * 10.0f);
+    /* F-16 (#71): clamp before casting — NaN or out-of-range float->int is
+     * undefined behaviour. (!(x > 0)) also catches NaN. Mirrors the solar_mv
+     * clamp below. */
+    {
+        float hdop_x10_f = sensor_data->gnss_hdop * 10.0f;
+        if (!(hdop_x10_f > 0.0f)) hdop_x10_f = 0.0f;
+        if (hdop_x10_f > 255.0f) hdop_x10_f = 255.0f;
+        record.gnss_hdop_x10 = (uint8_t)(hdop_x10_f + 0.5f);
+    }
     record.gnss_valid = sensor_data->gnss_valid ? 1 : 0;
 
     /* Power + status (D5/#35: solar/slope/mode archived at write time — F-025/R19) */
-    record.battery_mv = (uint16_t)(sensor_data->battery_voltage * 1000.0f);
+    {  /* F-16 (#71): clamp like solar_mv below — NaN/out-of-range cast is UB */
+        float batt_mv_f = sensor_data->battery_voltage * 1000.0f;
+        if (!(batt_mv_f > 0.0f)) batt_mv_f = 0.0f;
+        if (batt_mv_f > 65535.0f) batt_mv_f = 65535.0f;
+        record.battery_mv = (uint16_t)(batt_mv_f + 0.5f);
+    }
     {
         float solar_mv_f = sensor_data->solar_voltage * 1000.0f;
         if (solar_mv_f < 0.0f) solar_mv_f = 0.0f;

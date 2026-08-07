@@ -42,6 +42,10 @@ extern "C" {
 #define BKP_REG_DEADMAN            RTC_BKP_DR5   /* lora_app.c deadman mark */
 #define BKP_REG_BOOT_ATTEMPTS      RTC_BKP_DR6   /* reset_cause.c consecutive boot counter (F-03/#65) */
 #define BKP_REG_SYSTIME_VALID      RTC_BKP_DR7   /* timer_if.c MSB-ticks validity marker (F-04/#63) */
+#define BKP_REG_LASTPOS_VALID      RTC_BKP_DR8   /* lora_app.c last-position magic (F-15/#72) */
+#define BKP_REG_LASTPOS_LAT        RTC_BKP_DR9   /* lora_app.c last valid latitude (float bits) */
+#define BKP_REG_LASTPOS_LON        RTC_BKP_DR10  /* lora_app.c last valid longitude (float bits) */
+#define BKP_REG_LASTPOS_ALT        RTC_BKP_DR11  /* lora_app.c last valid altitude (float bits) */
 
 #ifdef __cplusplus
 }

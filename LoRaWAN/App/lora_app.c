@@ -804,6 +804,36 @@ static void Deadman_MarkProgress(void)
   ResetCause_ClearBootAttempts();  /* F-03 (#65): a work cycle started — boot was good */
 }
 
+/* F-15 (#72): last-valid position parked in backup registers so a reset does
+ * not restore the compile-time default (Kansas) and feed a garbage position
+ * into region selection via the deliberate F-06 stale-position hold. VALID is
+ * written LAST so a mid-write reset never validates a partial triple. */
+#define LASTPOS_VALID_MAGIC  0x4C415454UL  /* 'LATT' */
+static void LastPos_Store(float lat, float lon, float alt)
+{
+  extern RTC_HandleTypeDef hrtc;
+  union { float f; uint32_t u; } la, lo, al;
+  la.f = lat; lo.f = lon; al.f = alt;
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_LAT, la.u);
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_LON, lo.u);
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_ALT, al.u);
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_VALID, LASTPOS_VALID_MAGIC);
+}
+
+static bool LastPos_Load(float *lat, float *lon, float *alt)
+{
+  extern RTC_HandleTypeDef hrtc;
+  if (HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_VALID) != LASTPOS_VALID_MAGIC) {
+    return false;  /* cold boot or backup wipe — caller applies the default */
+  }
+  union { float f; uint32_t u; } la, lo, al;
+  la.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_LAT);
+  lo.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_LON);
+  al.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_ALT);
+  *lat = la.f; *lon = lo.f; *alt = al.f;
+  return true;
+}
+
 void Deadman_Check(void)
 {
   /* R45: Deadman deliberately keeps boot-relative MCU time (TIMER_IF), NOT
@@ -1023,10 +1053,23 @@ static void SendTxData(void)
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Last known GPS position storage (persistent across transmission cycles) */
-  static float last_valid_lat = 39.8283f;     /* Default: Central US (Kansas) */
-  static float last_valid_lon = -98.5795f;
-  static float last_valid_alt = 500.0f;
+  /* F-15 (#72): on first use after boot, restore from backup registers if a
+   * real fix was parked there; only a true cold boot falls back to the
+   * Kansas default. */
+  static float last_valid_lat, last_valid_lon, last_valid_alt;
   static bool have_previous_fix = false;
+  static bool last_position_loaded = false;
+  if (!last_position_loaded) {
+    last_position_loaded = true;
+    if (LastPos_Load(&last_valid_lat, &last_valid_lon, &last_valid_alt)) {
+      have_previous_fix = true;
+      SONDE_LOG_STR("GPS: last known position restored from backup regs\r\n");
+    } else {
+      last_valid_lat = 39.8283f;   /* Default: Central US (Kansas) */
+      last_valid_lon = -98.5795f;
+      last_valid_alt = 500.0f;
+    }
+  }
   
   /* Declare gps_start - ttf_ms already declared above */
   uint32_t gps_start = 0;
@@ -1116,6 +1159,7 @@ static void SendTxData(void)
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
+        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
         have_previous_fix = true;
         EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
       }
@@ -1147,6 +1191,7 @@ static void SendTxData(void)
       last_valid_lat = hgnss.data.latitude;
       last_valid_lon = hgnss.data.longitude;
       last_valid_alt = hgnss.data.altitude;
+      LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
       have_previous_fix = true;
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
       SysTimeSyncFromGnss();            /* F12 (DDR-0003): epoch seconds */
