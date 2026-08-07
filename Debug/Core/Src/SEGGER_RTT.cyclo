@@ -1,0 +1,14 @@
+../Core/Src/SEGGER_RTT.c:59:17:_WriteNoCheck	2
+../Core/Src/SEGGER_RTT.c:97:6:SEGGER_RTT_Init	1
+../Core/Src/SEGGER_RTT.c:104:10:SEGGER_RTT_Write	4
+../Core/Src/SEGGER_RTT.c:132:10:SEGGER_RTT_WriteString	1
+../Core/Src/SEGGER_RTT.c:136:5:SEGGER_RTT_printf	2
+../Core/Src/SEGGER_RTT.c:150:5:SEGGER_RTT_vprintf	2
+../Core/Src/SEGGER_RTT.c:161:10:SEGGER_RTT_Read	4
+../Core/Src/SEGGER_RTT.c:208:5:SEGGER_RTT_HasKey	1
+../Core/Src/SEGGER_RTT.c:214:5:SEGGER_RTT_GetKey	2
+../Core/Src/SEGGER_RTT.c:222:5:SEGGER_RTT_WaitKey	2
+../Core/Src/SEGGER_RTT.c:230:5:SEGGER_RTT_ConfigUpBuffer	3
+../Core/Src/SEGGER_RTT.c:250:5:SEGGER_RTT_ConfigDownBuffer	3
+../Core/Src/SEGGER_RTT.c:272:5:SEGGER_RTT_SetTerminal	1
+../Core/Src/SEGGER_RTT.c:279:5:SEGGER_RTT_TerminalOut	4

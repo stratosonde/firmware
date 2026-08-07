@@ -1,0 +1,4 @@
+../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:351:5:_faceIjkToBaseCell	5
+../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:364:5:_faceIjkToBaseCellCCWrot60	5
+../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:506:6:_isBaseCellPentagon	2
+../Middlewares/Third_Party/h3lite/src/h3lite_basecells.c:516:6:_baseCellIsCwOffset	3

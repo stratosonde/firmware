@@ -1,0 +1,7 @@
+../LoRaWAN/Target/radio_board_if.c:79:9:RBI_Init	1
+../LoRaWAN/Target/radio_board_if.c:126:9:RBI_DeInit	1
+../LoRaWAN/Target/radio_board_if.c:158:9:RBI_ConfigRFSwitch	5
+../LoRaWAN/Target/radio_board_if.c:217:9:RBI_GetTxConfig	1
+../LoRaWAN/Target/radio_board_if.c:243:9:RBI_IsTCXO	1
+../LoRaWAN/Target/radio_board_if.c:269:9:RBI_IsDCDC	1
+../LoRaWAN/Target/radio_board_if.c:295:9:RBI_GetRFOMaxPowerConfig	1

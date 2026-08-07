@@ -1,0 +1,8 @@
+../Core/Src/sht31.c:387:28:SHT31_SendCommand	24	static
+../Core/Src/sht31.c:357:16:SHT31_CalcCRC8.constprop	0	static
+../Core/Src/sht31.c:149:21:SHT31_ReadTempAndHumidity	40	static
+../Core/Src/sht31.c:253:21:SHT31_ReadSerialNumber	32	static
+../Core/Src/sht31.c:297:21:SHT31_SoftReset	0	static
+../Core/Src/sht31.c:308:21:SHT31_ReadStatus	32	static
+../Core/Src/sht31.c:345:21:SHT31_ClearStatus	0	static
+../Core/Src/sht31.c:53:21:SHT31_Init	32	static

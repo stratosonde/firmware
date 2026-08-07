@@ -1,0 +1,5 @@
+../Middlewares/Third_Party/LoRaWAN/Crypto/lorawan_aes.c:349:13:xor_block	1
+../Middlewares/Third_Party/LoRaWAN/Crypto/lorawan_aes.c:376:13:copy_and_key	1
+../Middlewares/Third_Party/LoRaWAN/Crypto/lorawan_aes.c:513:13:lorawan_aes_set_key	8
+../Middlewares/Third_Party/LoRaWAN/Crypto/lorawan_aes.c:568:13:lorawan_aes_encrypt	3
+../Middlewares/Third_Party/LoRaWAN/Crypto/lorawan_aes.c:597:13:lorawan_aes_cbc_encrypt	3

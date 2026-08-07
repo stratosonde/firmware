@@ -1,0 +1,7 @@
+../Middlewares/Third_Party/h3lite/src/h3lite.c:43:9:latLngToH3.part.0	64	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:26:6:h3liteInit	0	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:43:9:latLngToH3	4	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:84:10:h3ToRegion	24	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:119:10:latLngToRegion	16	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:132:13:getRegionName	0	static
+../Middlewares/Third_Party/h3lite/src/h3lite.c:153:20:findNearestRegions	480	static

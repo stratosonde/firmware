@@ -1,0 +1,6 @@
+../Core/Src/payload_encode.c:500:17:CalculateCRC16.constprop	12	static
+../Core/Src/payload_encode.c:61:6:EncodeCompactBinaryPacket	296	static
+../Core/Src/payload_encode.c:140:6:EncodeHighResTelemetryRecord	312	static
+../Core/Src/payload_encode.c:229:6:EncodeBulkPacketFromRecords	32	static
+../Core/Src/payload_encode.c:264:6:ConvertFlashLogToHighRes	24	static
+../Core/Src/payload_encode.c:335:6:PayloadFormat_ValidateSizes	8	static

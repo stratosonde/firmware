@@ -1,0 +1,5 @@
+../Core/Src/power_model.c:19:10:NormalizeBatteryVoltage	5
+../Core/Src/power_model.c:74:9:CalculateVoltageSlope	4
+../Core/Src/power_model.c:114:10:PredictTimeToVoltage	8
+../Core/Src/power_model.c:149:17:SelectModeFromPredictions	9
+../Core/Src/power_model.c:200:13:GetModeName	2

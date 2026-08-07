@@ -1,0 +1,6 @@
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:66:18:_h3LeadingNonZeroDigit	3
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:80:17:_h3Rotate60ccw	3
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:91:17:_h3Rotate60cw	3
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:123:13:_h3IsPentagon	2
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:150:5:h3NeighborRotations	33
+../Middlewares/Third_Party/h3lite/src/h3lite_neighbor.c:286:5:h3GetRing	13
