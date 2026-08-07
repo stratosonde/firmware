@@ -41,6 +41,7 @@ extern "C" {
 #define BKP_REG_RESET_CAUSE_FAULT  RTC_BKP_DR4   /* reset_cause.c breadcrumb */
 #define BKP_REG_DEADMAN            RTC_BKP_DR5   /* lora_app.c deadman mark */
 #define BKP_REG_BOOT_ATTEMPTS      RTC_BKP_DR6   /* reset_cause.c consecutive boot counter (F-03/#65) */
+#define BKP_REG_SYSTIME_VALID      RTC_BKP_DR7   /* timer_if.c MSB-ticks validity marker (F-04/#63) */
 
 #ifdef __cplusplus
 }

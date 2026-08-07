@@ -822,10 +822,20 @@ void Deadman_Check(void)
   if (MissionState_IsCommissioning()) {
     return;  /* bench: human idle is legitimate */
   }
+  if (now < last) {
+    /* F-05 (#63): time jumped backward (e.g. pre-F-04 MSB stomp or backup
+     * corruption). (now - last) is unsigned and would wrap huge, false-firing
+     * the deadman. Re-seed and continue — never fire on a backward delta. */
+    HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);
+    return;
+  }
   if ((now - last) > DEADMAN_TIMEOUT_S) {
     SONDE_LOG_STR("DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
     HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                         RESET_CAUSE_FAULT_MAGIC | 6U);  /* 6 = deadman */
+    /* F-05 (#63): re-seed BEFORE resetting — otherwise the post-reset boot
+     * sees the same stale timestamp and fires again (deadman reset loop). */
+    HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);
     NVIC_SystemReset();
   }
 }

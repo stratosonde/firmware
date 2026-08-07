@@ -26,7 +26,9 @@
 #include "stm32wlxx_ll_rtc.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "backup_regs.h"  /* F-04 (#63): BKP_REG_SYSTIME_VALID allocation */
+/* F-04 (#63): magic marking the SysTime backup state as valid across warm resets */
+#define TIMER_IF_SYSTIME_VALID_MAGIC  0x53595354UL  /* 'SYST' */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -198,7 +200,17 @@ UTIL_TIMER_Status_t TIMER_IF_Init(void)
     /*Enable Direct Read of the calendar registers (not through Shadow) */
     HAL_RTCEx_EnableBypassShadow(&hrtc);
     /*Initialize MSB ticks*/
-    TIMER_IF_BkUp_Write_MSBticks(0);
+    /* F-04 (#63): zero the MSB ticks ONLY on a true cold boot (backup-domain
+     * content lost). The backup domain survives warm resets; stomping the MSB
+     * to zero after the 32-bit RTC wraps (~48.5 days) would jump the device's
+     * notion of time backward by up to 48.5 days, corrupting TX scheduling,
+     * the deadman, staleness and log timestamps. Validity marker lives in
+     * BKP_REG_SYSTIME_VALID (backup_regs.h allocation map). */
+    if (HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SYSTIME_VALID) != TIMER_IF_SYSTIME_VALID_MAGIC)
+    {
+      TIMER_IF_BkUp_Write_MSBticks(0);
+      HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SYSTIME_VALID, TIMER_IF_SYSTIME_VALID_MAGIC);
+    }
 
     TIMER_IF_SetTimerContext();
 
