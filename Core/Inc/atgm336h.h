@@ -169,7 +169,8 @@ typedef struct
  * setting, last write wins; sending ,2 (pedestrian) after ,5 (airborne<1g)
  * silently re-enabled the 18 km CoCom limit. Its broken checksum was the only
  * thing keeping the unit airborne-capable. */
-#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // GGA + RMC + GSV + VTG
+#define GNSS_CMD_NMEA_CONFIG     "$PCAS03,1,0,0,0,1,1,0,0*03\r\n"  // R26 flight mask: GGA+RMC+VTG, GSV OFF (9600 bps can't carry multi-constellation GSV at 1 Hz)
+#define GNSS_CMD_NMEA_CONFIG_DEBUG "$PCAS03,1,0,0,1,1,1,0,0*02\r\n"  // Commissioning/bench variant with GSV on (satellite-in-view debug)
 #define GNSS_CMD_CONSTELLATION   "$PCAS04,5*1C\r\n"                // Constellation: GPS+GLONASS (was mislabeled as high-alt mode)
 #define GNSS_CMD_AIRBORNE_MODE   "$PCAS11,5*18\r\n"                // Airborne dynamic model — defeats 18km CoCom limit (CRITICAL!)
 #define GNSS_CMD_UPDATE_RATE     "$PCAS02,1000*2E\r\n"             // 1 Hz update rate (R23: checksum fixed)

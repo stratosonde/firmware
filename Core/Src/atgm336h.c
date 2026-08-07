@@ -214,8 +214,9 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
 
   SEGGER_RTT_WriteString(0, "\r\n=== Configuring ATGM336H GNSS Module ===\r\n");
   
-  /* Send NMEA output configuration (GGA + RMC only for efficiency) */
-  SEGGER_RTT_WriteString(0, "Sending: NMEA config (GGA+RMC only)...\r\n");
+  /* R26: flight mask is GGA+RMC+VTG with GSV off (bandwidth); the old
+   * "GGA+RMC only" log string was never true. */
+  SEGGER_RTT_WriteString(0, "Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
   if (GNSS_SendCommand(hgnss, GNSS_CMD_NMEA_CONFIG) != GNSS_OK)
   {
     SEGGER_RTT_WriteString(0, "WARNING: Failed to send NMEA config\r\n");
