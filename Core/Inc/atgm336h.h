@@ -144,6 +144,13 @@ typedef struct
   volatile uint16_t dma_head;          // DMA write position (updated by hardware)
   uint16_t dma_tail;                   // Application read position
   volatile bool dma_data_ready;        // Flag set by DMA interrupts
+  /* F-011 (#25): absolute producer/consumer counters. Producer advances
+   * SIZE/2 per half/full DMA callback; consumer advances per byte read in
+   * GNSS_ProcessDMABuffer. producer - consumer > SIZE = DMA lapped the
+   * consumer = overrun (counted, resynced, surfaced). */
+  volatile uint32_t dma_produced_total;   // Bytes produced by DMA (256-granular)
+  uint32_t dma_consumed_total;            // Bytes consumed by the parser
+  uint32_t dma_overrun_count;             // Cumulative overrun events (health metric)
   
   /* NMEA Sentence Processing */
   char nmea_sentence[GNSS_NMEA_MAX_LENGTH];  // Current NMEA sentence being built
@@ -297,6 +304,12 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd);
   * @retval GNSS status
   */
 GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *body);
+
+/**
+  * @brief  F-011 (#25): cumulative DMA overrun count (health metric).
+  *         Nonzero means the NMEA producer lapped the consumer at least once.
+  */
+uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss);
 
 /**
   * @brief  Calculate NMEA checksum

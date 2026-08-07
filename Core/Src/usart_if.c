@@ -250,6 +250,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   /* USER CODE END HAL_UART_RxCpltCallback_1 */
   if (huart->Instance == USART1)
   {
+    /* F-011 (#25): forward DMA full-complete to the GNSS absolute producer
+     * counter (DMA circular mode raises this callback too) */
+    GNSS_DMA_RxCpltCallback(huart);
     if ((NULL != RxCpltCallback) && (HAL_UART_ERROR_NONE == huart->ErrorCode))
     {
       RxCpltCallback(&charRx, 1, 0);
@@ -259,6 +262,15 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   /* USER CODE BEGIN HAL_UART_RxCpltCallback_2 */
 
   /* USER CODE END HAL_UART_RxCpltCallback_2 */
+}
+
+/* F-011 (#25): DMA half-complete — GNSS absolute producer counter */
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    GNSS_DMA_RxHalfCallback(huart);
+  }
 }
 
 /* USER CODE BEGIN EF */

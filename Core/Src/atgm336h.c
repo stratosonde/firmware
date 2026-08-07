@@ -65,6 +65,9 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
   hgnss->dma_data_ready = false;
+  hgnss->dma_produced_total = 0;
+  hgnss->dma_consumed_total = 0;
+  hgnss->dma_overrun_count = 0;
   
   /* Initialize NMEA sentence processing */
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
@@ -125,10 +128,12 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   /* Disable STOP mode while GNSS is active */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
 
-  /* Reset DMA circular buffer pointers */
+  /* Reset DMA circular buffer pointers (and the F-011 absolute counters) */
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
   hgnss->dma_data_ready = false;
+  hgnss->dma_produced_total = 0;
+  hgnss->dma_consumed_total = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   
   /* Reset NMEA sentence processing */
@@ -583,6 +588,21 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
     last_debug_time = now;
   }
 
+  /* F-011 (#25): overrun detection on the absolute counters. If the DMA
+   * producer (half/full callbacks, 256-granular) has lapped the consumer,
+   * unparsed bytes are already destroyed — count it, drop to the head, and
+   * resync: the parser restarts cleanly at the next '$' (DDR-0007: the gap
+   * is surfaced, never silent). */
+  if ((hgnss->dma_produced_total - hgnss->dma_consumed_total) > GNSS_DMA_BUFFER_SIZE)
+  {
+    hgnss->dma_overrun_count++;
+    SEGGER_RTT_printf(0, "[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
+                      (unsigned long)hgnss->dma_overrun_count);
+    hgnss->dma_tail = hgnss->dma_head;
+    hgnss->dma_consumed_total = hgnss->dma_produced_total;
+    hgnss->nmea_length = 0;  /* discard any partial sentence */
+  }
+
   /* Process all available bytes between tail and head */
   while (hgnss->dma_tail != hgnss->dma_head)
   {
@@ -618,8 +638,9 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
       hgnss->nmea_length = 0; /* Discard sentence and reset */
     }
 
-    /* Advance tail with wraparound */
+    /* Advance tail with wraparound (+ absolute consumer counter, F-011) */
     hgnss->dma_tail = (hgnss->dma_tail + 1) % GNSS_DMA_BUFFER_SIZE;
+    hgnss->dma_consumed_total++;
   }
 
   return GNSS_OK;
@@ -852,8 +873,9 @@ void GNSS_DMA_RxHalfCallback(UART_HandleTypeDef *huart)
   /* Called from usart_if.c HAL_UART_RxHalfCpltCallback */
   if (huart->Instance == USART1 && pHgnss != NULL)
   {
-    /* Minimal ISR - just set data ready flag */
+    /* Minimal ISR - set data ready + advance absolute producer (F-011, #25) */
     pHgnss->dma_data_ready = true;
+    pHgnss->dma_produced_total += GNSS_DMA_BUFFER_SIZE / 2;
   }
 }
 
@@ -862,9 +884,15 @@ void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart)
   /* Called from usart_if.c HAL_UART_RxCpltCallback */
   if (huart->Instance == USART1 && pHgnss != NULL)
   {
-    /* Minimal ISR - just set data ready flag */
+    /* Minimal ISR - set data ready + advance absolute producer (F-011, #25) */
     pHgnss->dma_data_ready = true;
+    pHgnss->dma_produced_total += GNSS_DMA_BUFFER_SIZE / 2;
   }
+}
+
+uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss)
+{
+  return (hgnss != NULL) ? hgnss->dma_overrun_count : 0;
 }
 
 /**
@@ -1265,10 +1293,12 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     SEGGER_RTT_WriteString(0, "[GPS WAKE] UART hardware FIFO flushed\r\n");
   }
   
-  /* STEP 2: Clear software buffers */
+  /* STEP 2: Clear software buffers (and the F-011 absolute counters) */
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
   hgnss->dma_data_ready = false;
+  hgnss->dma_produced_total = 0;
+  hgnss->dma_consumed_total = 0;
   hgnss->nmea_length = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
