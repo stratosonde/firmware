@@ -214,8 +214,18 @@ int main(void)
   }
   
   // Initialize external flash (W25Q16JV) for logging
+  /* F-03 (#65): retry then fly degraded. A cold-stuck flash chip must not
+   * reset-loop the sonde at altitude — a missing archive is recoverable,
+   * a dead radio is total mission loss. This REVERSES the R29 (#36) "never
+   * fly with a dead data store" policy by maintainer decision (see #65). */
   SONDE_LOG_STR("Initializing external flash (W25Q16JV)...\r\n");
-  W25Q_StatusTypeDef w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);  // Use software CS on PB9
+  W25Q_StatusTypeDef w25q_status = W25Q_ERROR;
+  for (int flash_attempt = 0; flash_attempt < 3; flash_attempt++) {
+    w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);  // Use software CS on PB9
+    if (w25q_status == W25Q_OK) break;
+    SONDE_LOG("W25Q16JV init attempt %d failed (status %d)\r\n", flash_attempt + 1, w25q_status);
+    HAL_Delay(100);
+  }
   if (w25q_status == W25Q_OK) {
     uint32_t jedec_id;
     if (W25Q_ReadJEDECID(&hw25q, &jedec_id) == W25Q_OK) {
@@ -224,11 +234,9 @@ int main(void)
       SONDE_LOG_STR("W25Q16JV initialized but JEDEC ID read failed\r\n");
     }
   } else {
-    SONDE_LOG("ERROR: W25Q16JV initialization failed (status %d)!\r\n", w25q_status);
-    /* R29 (#36), F-001 split: without the archive a flight records NO science.
-     * Breadcrumb + reset (fatal) — never fly with a dead data store. The old
-     * path logged the error and flew on with logging silently disabled. */
-    Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
+    /* Degraded: no archive this flight, but the radio flies. Every FlashLog_*
+     * API guards !hlog->initialized, so downstream code is safe. */
+    SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — flying WITHOUT archive\r\n", w25q_status);
   }
   
   // Initialize flash logging system
@@ -246,9 +254,9 @@ int main(void)
       SONDE_LOG("Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
                         used_records, total_capacity, free_records);
     } else {
-      SONDE_LOG("ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
-      /* R29 (#36): same F-001 split as W25Q — no archive, no flight. */
-      Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
+      SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — flying WITHOUT archive\r\n", flashlog_status);
+      /* F-03 (#65): degrade, not reset. hflashlog.initialized stays false;
+       * all FlashLog_* APIs guard on it, so the TX path runs normally. */
     }
   }
   

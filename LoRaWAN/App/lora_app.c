@@ -801,6 +801,7 @@ static void Deadman_MarkProgress(void)
   extern RTC_HandleTypeDef hrtc;
   uint16_t ms_unused;
   HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, TIMER_IF_GetTime(&ms_unused));
+  ResetCause_ClearBootAttempts();  /* F-03 (#65): a work cycle started — boot was good */
 }
 
 void Deadman_Check(void)

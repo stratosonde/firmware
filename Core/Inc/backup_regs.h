@@ -40,6 +40,7 @@ extern "C" {
 #define BKP_REG_MISSION_STATE      RTC_BKP_DR3   /* mission_state.c */
 #define BKP_REG_RESET_CAUSE_FAULT  RTC_BKP_DR4   /* reset_cause.c breadcrumb */
 #define BKP_REG_DEADMAN            RTC_BKP_DR5   /* lora_app.c deadman mark */
+#define BKP_REG_BOOT_ATTEMPTS      RTC_BKP_DR6   /* reset_cause.c consecutive boot counter (F-03/#65) */
 
 #ifdef __cplusplus
 }

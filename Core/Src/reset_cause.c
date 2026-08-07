@@ -41,8 +41,25 @@ void ResetCause_CaptureBoot(void)
         s_reset_cause = RESET_CAUSE_POR_BOR; /* unknown -> safest benign bucket */
     }
 
+    /* F-03 (#65): persistent consecutive-boot counter. Incremented on every
+     * boot; cleared by lora_app.c Deadman_MarkProgress() once a work cycle
+     * provably starts. Any future fatal path can read it to detect and break
+     * a reset loop instead of resetting forever. */
+    uint32_t attempts = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_BOOT_ATTEMPTS);
+    HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_BOOT_ATTEMPTS, attempts + 1U);
+
     /* Clear all reset flags so the next boot reads clean */
     __HAL_RCC_CLEAR_RESET_FLAGS();
+}
+
+uint32_t ResetCause_GetBootAttempts(void)
+{
+    return HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_BOOT_ATTEMPTS);
+}
+
+void ResetCause_ClearBootAttempts(void)
+{
+    HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_BOOT_ATTEMPTS, 0);
 }
 
 uint8_t ResetCause_Get(void)

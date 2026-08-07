@@ -50,6 +50,17 @@ void ResetCause_CaptureBoot(void);
  */
 uint8_t ResetCause_Get(void);
 
+/**
+ * @brief Consecutive boots since the last proven work cycle (F-03/#65).
+ *        Incremented in ResetCause_CaptureBoot; cleared by the first
+ *        Deadman_MarkProgress() of a successful cycle. A fatal path can
+ *        use this to detect and break a reset loop.
+ */
+uint32_t ResetCause_GetBootAttempts(void);
+
+/** @brief Clear the consecutive-boot counter (call on proven progress). */
+void ResetCause_ClearBootAttempts(void);
+
 #ifdef __cplusplus
 }
 #endif
