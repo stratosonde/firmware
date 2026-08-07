@@ -275,8 +275,19 @@ void PWR_EnterStopMode(void)
   {
     /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz, 25s = 51200 counts */
     /* 4th param: WakeUpAutoClr = 0 (no auto-clear, we clear manually) */
-    HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, IWDG_WAKEUP_COUNTS,
-                                 RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0);
+    /* F-09 (#76): if the WUT fails to arm, entering STOP2 here would sleep
+     * with NO scheduled wake. Fall back to a bounded busy-wait (with IWDG
+     * refresh) and exit chunked sleep instead. */
+    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, IWDG_WAKEUP_COUNTS,
+                                     RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0) != HAL_OK)
+    {
+      for (int i = 0; i < 25; i++)
+      {
+        HAL_Delay(1000);
+        HAL_IWDG_Refresh(&hiwdg);
+      }
+      break;
+    }
 
     /* Clear wakeup flags before sleeping */
     __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
@@ -289,10 +300,12 @@ void PWR_EnterStopMode(void)
     /* === Woke up — immediately refresh IWDG === */
     HAL_IWDG_Refresh(&hiwdg);
     Deadman_Check();  /* FW-4: no-op in COMMISSIONING; resets if no work cycle for 3h */
-    if (++chunks > 150) break;  /* FW-4: never sleep forever (belt and braces) */
 
-    /* Deactivate wakeup timer to avoid spurious triggers */
+    /* F-08 (#76): deactivate the wakeup timer BEFORE any exit path. The
+     * chunk-overflow break used to skip this, leaving the WUT armed. */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+
+    if (++chunks > 150) break;  /* FW-4: never sleep forever (belt and braces) */
 
     /* Check what woke us — R07 (#29): callback latches, not EXTI->PR1
      * (direct lines have no pending bits). Alarm A wins over the IWDG chunk
