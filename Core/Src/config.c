@@ -33,6 +33,7 @@ static uint8_t g_config_buffer[CONFIG_FLASH_SIZE] __attribute__((aligned(8), unu
 static uint32_t Config_CRC32(const uint8_t *data, uint32_t length);
 static ConfigStatus_t Config_FlashRead(void);
 static ConfigStatus_t Config_FlashWrite(void);
+static ConfigStatus_t Config_WriteInternal(void);  /* F-002 (#53) */
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -59,8 +60,8 @@ ConfigStatus_t Config_Init(void)
             return status;
         }
         
-        // Save defaults to flash 
-        status = Config_Save();
+        // Save defaults to flash (F-002: internal path — the public flag isn't set yet)
+        status = Config_WriteInternal();
         if (status != CONFIG_OK) {
             SEGGER_RTT_printf(0, "WARNING: Failed to save default config to flash (status: %d)\r\n", status);
             // Continue anyway - we have valid defaults in RAM
@@ -107,37 +108,47 @@ ConfigStatus_t Config_Load(void)
     return CONFIG_OK;
 }
 
-ConfigStatus_t Config_Save(void)
+/* F-002 (#53): internal write path NOT gated on g_config_initialized —
+ * Config_Init must be able to persist first-boot defaults before the flag
+ * is set. Config_Save (public) keeps the gate. */
+static ConfigStatus_t Config_WriteInternal(void)
 {
     ConfigStatus_t status;
-    
-    if (!g_config_initialized) {
-        return CONFIG_ERROR_PARAM;
-    }
-    
-    SEGGER_RTT_WriteString(0, "Saving configuration to flash...\r\n");
-    
+
     // Validate before saving
     status = Config_Validate(&g_config);
     if (status != CONFIG_OK) {
         SEGGER_RTT_printf(0, "Config validation failed before save (status: %d)\r\n", status);
         return status;
     }
-    
-    // Update CRC32 
+
+    // Update CRC32
     g_config.crc32 = Config_CalculateCRC32(&g_config);
-    
+
     // Write to flash
     status = Config_FlashWrite();
     if (status != CONFIG_OK) {
         SEGGER_RTT_printf(0, "Flash write failed (status: %d)\r\n", status);
         return status;
     }
-    
+
     g_flash_write_count++;
-    SEGGER_RTT_WriteString(0, "Configuration saved to flash successfully\r\n");
-    
     return CONFIG_OK;
+}
+
+ConfigStatus_t Config_Save(void)
+{
+    if (!g_config_initialized) {
+        return CONFIG_ERROR_PARAM;
+    }
+
+    SEGGER_RTT_WriteString(0, "Saving configuration to flash...\r\n");
+
+    ConfigStatus_t status = Config_WriteInternal();
+    if (status == CONFIG_OK) {
+        SEGGER_RTT_WriteString(0, "Configuration saved to flash successfully\r\n");
+    }
+    return status;
 }
 
 ConfigStatus_t Config_Validate(const SystemConfig_t *config)
@@ -162,11 +173,11 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
         return CONFIG_ERROR_SIZE;
     }
     
-    // Validate CRC32 (calculate excluding CRC field)
+    // Validate CRC32 (F-003/R35: full zeroed-copy struct, matching CalculateCRC32)
     SystemConfig_t temp_config = *config;
     temp_config.crc32 = 0;
-    uint32_t calculated_crc = Config_CRC32((const uint8_t*)&temp_config, 
-                                           sizeof(SystemConfig_t) - sizeof(uint32_t));
+    uint32_t calculated_crc = Config_CRC32((const uint8_t*)&temp_config,
+                                           sizeof(SystemConfig_t));
     
     if (calculated_crc != config->crc32) {
         g_crc_failure_count++;
@@ -185,7 +196,26 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
     if (config->link_margin_threshold > 63) {
         return CONFIG_ERROR_RANGE;  // LoRaWAN margin is 6-bit field
     }
-    
+
+    /* F-018 (#53): the remaining semantic checks — interval hierarchy and
+     * the power/GPS knobs the flight actually depends on. */
+    if (!(config->tx_interval_normal <= config->tx_interval_conservative &&
+          config->tx_interval_conservative <= config->tx_interval_reduced &&
+          config->tx_interval_reduced <= config->tx_interval_recovery &&
+          config->tx_interval_recovery <= config->tx_interval_survival)) {
+        return CONFIG_ERROR_RANGE;  // mode hierarchy must be monotonic
+    }
+    if (config->tx_interval_survival > 7200000) {
+        return CONFIG_ERROR_RANGE;  // >2h breaks the deadman assumption
+    }
+    if (config->gps_temperature_lockout < -80 || config->gps_temperature_lockout > 0) {
+        return CONFIG_ERROR_RANGE;
+    }
+    if (!(config->battery_critical_threshold < config->battery_low_threshold &&
+          config->battery_low_threshold < config->bulk_battery_min_mv)) {
+        return CONFIG_ERROR_RANGE;  // critical < low < bulk-min ordering
+    }
+
     return CONFIG_OK;
 }
 
@@ -333,9 +363,11 @@ uint32_t Config_CalculateCRC32(const SystemConfig_t *config)
     // Create temporary copy with CRC32 field zeroed
     SystemConfig_t temp_config = *config;
     temp_config.crc32 = 0;
-    
-    // Calculate CRC32 of all fields except CRC32 itself
-    return Config_CRC32((const uint8_t*)&temp_config, sizeof(SystemConfig_t) - sizeof(uint32_t));
+
+    /* F-003/R35 (#53): hash the FULL zeroed-copy struct. crc32 is at offset
+     * 8, so hashing sizeof-4 left the struct tail unprotected — latent until
+     * any tail field changed. Both sides bumped together (CONFIG_VERSION 2). */
+    return Config_CRC32((const uint8_t*)&temp_config, sizeof(SystemConfig_t));
 }
 
 /* Private functions ---------------------------------------------------------*/

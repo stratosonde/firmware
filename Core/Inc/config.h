@@ -28,8 +28,11 @@ extern "C" {
 /** @brief Configuration magic number for validation */
 #define CONFIG_MAGIC_NUMBER           0xC0FF33C0
 
-/** @brief Configuration version (increment when structure changes) */
-#define CONFIG_VERSION                1
+/** @brief Configuration version (increment when structure changes)
+ *  v2 (F-003/R35, #53): CRC32 now covers the FULL struct (zero-copy with
+ *  crc32=0), not sizeof-4 — the crc32 field is at offset 8, so the old
+ *  sizeof-4 hash left the last 4 struct bytes unprotected. */
+#define CONFIG_VERSION                2
 
 /**
   * @brief Configuration flash address
