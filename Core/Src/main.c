@@ -200,9 +200,11 @@ int main(void)
   // Initialize h3lite for region detection
   if (!h3liteInit()) {
     SEGGER_RTT_WriteString(0, "ERROR: H3Lite initialization failed!\r\n");
-    Error_Handler();
+    Error_Handler();  /* F-001: recoverable — returns */
+    /* F-001 residual: no success print on this path — failure stays honest. */
+  } else {
+    SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
   }
-  SEGGER_RTT_WriteString(0, "H3Lite initialized successfully\r\n");
   
   // Initialize external flash (W25Q16JV) for logging
   SEGGER_RTT_WriteString(0, "Initializing external flash (W25Q16JV)...\r\n");
@@ -220,16 +222,23 @@ int main(void)
   }
   
   // Initialize flash logging system
-  SEGGER_RTT_WriteString(0, "Initializing flash logging system...\r\n");
-  FlashLog_StatusTypeDef flashlog_status = FlashLog_Init(&hflashlog, &hw25q);
-  if (flashlog_status == FLASH_LOG_OK) {
-    uint32_t total_capacity, used_records, free_records;
-    FlashLog_GetStats(&hflashlog, &total_capacity, &used_records, &free_records);
-    SEGGER_RTT_printf(0, "Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
-                      used_records, total_capacity, free_records);
+  /* F-001 residual: don't init the log on a dead W25Q handle — a "success"
+   * here would be a false success print. Failure stays honest (DDR-0007);
+   * logging is recoverable-degraded per DDR-0001. */
+  if (w25q_status != W25Q_OK) {
+    SEGGER_RTT_WriteString(0, "Flash logging disabled: W25Q init failed\r\n");
   } else {
-    SEGGER_RTT_printf(0, "ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
-    Error_Handler();
+    SEGGER_RTT_WriteString(0, "Initializing flash logging system...\r\n");
+    FlashLog_StatusTypeDef flashlog_status = FlashLog_Init(&hflashlog, &hw25q);
+    if (flashlog_status == FLASH_LOG_OK) {
+      uint32_t total_capacity, used_records, free_records;
+      FlashLog_GetStats(&hflashlog, &total_capacity, &used_records, &free_records);
+      SEGGER_RTT_printf(0, "Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
+                        used_records, total_capacity, free_records);
+    } else {
+      SEGGER_RTT_printf(0, "ERROR: Flash logging initialization failed (status: %d)!\r\n", flashlog_status);
+      Error_Handler();
+    }
   }
   
   // Validate payload format sizes at compile time
