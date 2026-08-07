@@ -51,13 +51,31 @@ extern "C" {
 #define GPS_SATS_MASK         0x1E  // Bits 1-4: Satellite count (0-15)
 #define POWER_MODE_MASK       0xE0  // Bits 5-7: Power mode (0-7)
 
-/* Status byte (byte 11) bit masks for compact uplink — T2/DDR-0007 */
+/* Status byte (byte 10) bit masks for compact uplink — HEARTBEAT v2 (D2/D4, #33)
+ * v2 replaces v1's condensed reset cause (b3-b4) with the GNSS-disciplined-time
+ * marker (N-03) and the timestamp wrap/epoch bit (D4). Pressure staleness moves
+ * b5 -> b3. Reset cause remains available in the high-res record / flash dump.
+ * v1 vs v2 discrimination is by deployment + golden vectors (LoRaWANApplicationProtocol
+ * §3/§13): the wire layout changed incompatibly at the same length/port. */
 #define STATUS_GPS_STALE_MASK      0x01  // Bit 0: GPS position is last-known-good
 #define STATUS_TEMP_STALE_MASK     0x02  // Bit 1: temperature is last-known-good
 #define STATUS_HUM_STALE_MASK      0x04  // Bit 2: humidity is last-known-good
-#define STATUS_RESET_CAUSE_MASK    0x18  // Bits 3-4: condensed reset cause (reset_cause.h, FW-7: 2-bit)
-#define STATUS_PRESS_STALE_MASK    0x20  // Bit 5: FW-7 pressure is last-known-good
+#define STATUS_PRESS_STALE_MASK    0x08  // Bit 3: pressure is last-known-good (was b5 in v1)
+#define STATUS_TIME_GNSS_MASK      0x10  // Bit 4: RTC disciplined by GNSS this cycle (N-03)
+#define STATUS_TS_WRAP_MASK        0x20  // Bit 5: timestamp_min has wrapped 45.5-day range (D4)
 #define STATUS_MISSION_STATE_MASK  0xC0  // Bits 6-7: mission state (mission_state.h)
+
+/* Heartbeat wire version (v2 = D2/D4 layout; A-005) */
+#define HEARTBEAT_FORMAT_VERSION   2
+
+/* Packed pressure+humidity word (bytes 7-8, little-endian) — D2 (#33):
+ * bits 0-10: pressure in 1 hPa units, 0..2046 valid, 2047 = invalid sentinel.
+ *            Covers 2-1100 hPa (stratospheric-useful; v1 collapsed below 950 hPa).
+ * bits 11-15: humidity in 5% units, 0..20 valid, 31 = invalid sentinel. */
+#define PRESS_HUM_PRESS_MASK       0x07FF
+#define PRESS_HUM_PRESS_INVALID    0x07FF
+#define PRESS_HUM_HUM_SHIFT        11
+#define PRESS_HUM_HUM_INVALID      0x1F
 
 /* Helper macros for status flag extraction */
 #define GET_GPS_FIX_VALID(flags)    (((flags) & GPS_FIX_VALID_MASK) != 0)
@@ -81,23 +99,20 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 
 /**
- * @brief 11-byte compact telemetry packet (SF10, exact fit at US915 DR0)
- * @note Optimized for maximum range transmission at SF10
- * @note Includes battery voltage (required since DevStatusAns is on-demand only)
+ * @brief 11-byte compact telemetry packet — HEARTBEAT v2 (D1/D2/D4, #33)
+ * @note Same 11-byte budget as v1 (exact fit at US915 DR0), fields little-endian.
+ * @note v2 changes: pressure/humidity merged into one packed u16 (stratospheric-
+ *       useful 1 hPa over 0-2046 hPa); status b3-b5 repurposed (see masks above).
  * @note Altitude calculated on ground station from pressure + temperature
- * @note F17/T2 (DDR-0007): status byte restored as byte 11 — LinkCheck rides
- *       FOpts (DDR-0005), so the payload byte is free. Carries stale bits,
- *       condensed reset cause, and mission state.
  */
 typedef struct __attribute__((packed)) {
-    uint16_t timestamp_min;     // Minutes since epoch (2 bytes) - 45 days range
-    int16_t  latitude_100m;     // Latitude in 100m resolution (2 bytes) - ±3276.7 km
-    int16_t  longitude_100m;    // Longitude in 100m resolution (2 bytes) - ±3276.7 km  
+    uint16_t timestamp_min;     // Minutes since mission epoch (2 bytes) - 45.5 day wrap, see STATUS_TS_WRAP
+    int16_t  latitude_100m;     // Latitude scaled to full int16 range (2 bytes)
+    int16_t  longitude_100m;    // Longitude scaled to full int16 range (2 bytes)
     int8_t   temperature_2deg;  // Temperature / 2°C offset +64 (1 byte) - -64°C to +63°C
-    uint8_t  pressure_10hPa;    // Pressure / 10hPa from 950hPa base (1 byte) - 950-2500 hPa
+    uint16_t press_hum;         // Packed pressure (bits 0-10, 1 hPa) + humidity (bits 11-15, 5%)
     uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
-    uint8_t  humidity_5pct;     // Humidity / 5% resolution (1 byte) - 0-100% in 20 steps
-    uint8_t  status;            // Status byte (1 byte) - stale bits + reset cause + mission state
+    uint8_t  status;            // Status byte v2 (1 byte) - stale bits + time markers + mission state
 } CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, DDR-0005)
 
 /**
@@ -146,7 +161,18 @@ typedef struct __attribute__((packed)) {
 
     uint32_t crc32;                   // 4 bytes - Packet integrity
 
-} BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222)
+} BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222) — LEGACY, superseded by v3
+
+/* ---- Bulk wire format v3 (D3, #33): variable-length, packet_type 0x03 ----
+ * Layout: [packet_type=0x03][record_count=n][n × HighResTelemetryRecord_t][crc32]
+ * Length = 2 + 32n + 4. CRC32 (same polynomial as v2) covers everything before it.
+ * The sender packs only complete records and as many as fit the runtime payload
+ * budget (LoRaMacQueryTxPossible — current DR + pending FOpts, protocol §11).
+ * Decoder branches on payload[0] (0x01/0x02 = legacy fixed 198 B, 0x03 = variable). */
+#define BULK_PACKET_TYPE_LEGACY_FIXED   0x02  // BulkTelemetryPacket_t (v2, 198 B fixed)
+#define BULK_PACKET_TYPE_VARIABLE       0x03  // v3: variable-length
+#define BULK_V3_OVERHEAD                6     // type + count + crc32
+#define BULK_V3_MAX_RECORDS             6     // 198 B worst-case budget parity with v2
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
@@ -194,6 +220,28 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
 bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                                  const HighResTelemetryRecord_t *records,
                                  uint8_t record_count);
+
+/**
+ * @brief Encode a variable-length bulk packet (wire v3, packet_type 0x03)
+ * @param buf: output buffer
+ * @param buf_cap: output buffer capacity in bytes
+ * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
+ * @param records: candidate records, FIFO order
+ * @param record_count: number of candidate records
+ * @param packed_count: out — records actually encoded (<= record_count)
+ * @param out_len: out — encoded packet length (2 + 32n + 4)
+ * @retval bool: true if at least one record was encoded
+ * @note Packs only complete records, as many as fit BOTH buf_cap and max_payload.
+ *       Records not packed remain pending for the next cycle (stable identity,
+ *       at-least-once per DDR-0011).
+ */
+bool EncodeBulkPacketV3(uint8_t *buf,
+                        uint16_t buf_cap,
+                        uint16_t max_payload,
+                        const HighResTelemetryRecord_t *records,
+                        uint8_t record_count,
+                        uint8_t *packed_count,
+                        uint16_t *out_len);
 
 /**
  * @brief Decode compact telemetry packet (for ground station)

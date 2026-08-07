@@ -26,22 +26,34 @@ Debug packets (ports 2 and 3) can be disabled via compile-time flags:
 
 ---
 
-## PORT 10: Compact Binary Packet (PRODUCTION)
+## PORT 10: Mission Heartbeat v2 (PRODUCTION)
 
 ### Description
-Ultra-compact 10-byte packet optimized for maximum range transmission at SF10 (DR0). This format leaves room for MAC commands (like LinkCheckReq) in the FOpts field, enabling adaptive transmission strategies.
+Ultra-compact **11-byte** heartbeat for maximum-range transmission (SF10; SF9 in US915/AU915 per D1). **All multibyte fields are little-endian** (D9 — LE is wire truth; earlier revisions of this document incorrectly described big-endian). Wire format version: **v2** (2026-08-06, issue #33). v1 shared port and length but is not decodable as v2 — v1 never flew; discriminate by deployment epoch and the golden vectors in `tests/host/test_main.c`.
 
-### Packet Structure (10 bytes)
+### Packet Structure (11 bytes, heartbeat v2)
 
 | Offset | Field | Type | Size | Resolution | Range | Description |
 |--------|-------|------|------|------------|-------|-------------|
-| 0 | Timestamp | uint16 BE | 2 | 1 minute | 0-45.5 days | Minutes since Unix epoch (wraps) |
-| 2 | Latitude | int16 BE | 2 | ~100m | ±3276.7 km | Latitude in 100m units |
-| 4 | Longitude | int16 BE | 2 | ~100m | ±3276.7 km | Longitude in 100m units |
-| 6 | Temperature | int8 | 1 | 2°C | -64 to +63°C | (value - 64) × 2 |
-| 7 | Pressure | uint8 | 1 | 10 hPa | 950-3500 hPa | 950 + (value × 10) |
-| 8 | Battery | uint8 | 1 | 50 mV | 0-12.75V | value × 0.050 |
-| 9 | Humidity | uint8 | 1 | 5% | 0-100% | value × 5 |
+| 0 | Timestamp | uint16 LE | 2 | 1 minute | 0-45.5 days | Minutes since epoch (wraps; see status bit 5) |
+| 2 | Latitude | int16 LE | 2 | ~300 m | ±90° | Full-range scale: deg = value × 90 / 32767 |
+| 4 | Longitude | int16 LE | 2 | ~550 m | ±180° | Full-range scale: deg = value × 180 / 32767 |
+| 6 | Temperature | uint8 | 1 | 2°C | -64 to +63.5°C | (value - 64) × 2 |
+| 7 | Pressure + Humidity | uint16 LE | 2 | 1 hPa / 5% | 0-2046 hPa / 0-100% | bits 0-10 pressure hPa (2047 = invalid); bits 11-15 humidity 5%-units (31 = invalid) |
+| 9 | Battery | uint8 | 1 | 50 mV | 0-12.75V | value × 0.050 |
+| 10 | Status v2 | uint8 | 1 | — | — | bit table below |
+
+Status v2 bits:
+
+| Bits | Meaning |
+|------|---------|
+| 0 | GPS stale (position is last-known-good) |
+| 1 | Temperature stale |
+| 2 | Humidity stale |
+| 3 | Pressure stale |
+| 4 | RTC GNSS-disciplined this cycle (timestamp is UTC-traceable) |
+| 5 | timestamp has wrapped its 45.5-day uint16 range |
+| 6-7 | Mission state: 0=COMMISSIONING, 1=PRE_FLIGHT, 2=FLIGHT, 3=RECOVERY |
 
 **Note**: Altitude is NOT transmitted - it must be calculated on the backend from pressure + temperature using the barometric formula.
 
@@ -53,28 +65,15 @@ encoded_value = (unix_seconds / 60) & 0xFFFF
 ```
 Wraps every 65,535 minutes (~45.5 days). Use context from previous packets to handle wraparound.
 
-#### Latitude (int16, ~100m resolution)
+#### Latitude / Longitude (int16 LE, full-range scale)
 ```python
 # Encoding (firmware):
-lat_degrees = lat_binary × (90.0 / 8388607.0)
-lat_100m = round(lat_degrees / 0.0009009)  # 0.0009009° ≈ 100m at equator
-encoded_value = clamp(lat_100m, -32768, 32767)
+lat_enc = clamp(round(lat_deg * 32767 / 90),  -32768, 32767)
+lon_enc = clamp(round(lon_deg * 32767 / 180), -32768, 32767)
 
 # Decoding (backend):
-lat_100m = struct.unpack('>h', bytes[2:4])[0]  # signed big-endian
-lat_degrees = lat_100m × 0.0009009
-```
-
-#### Longitude (int16, ~100m resolution)
-```python
-# Encoding (firmware):
-lon_degrees = lon_binary × (180.0 / 8388607.0)
-lon_100m = round(lon_degrees / 0.0009009)
-encoded_value = clamp(lon_100m, -32768, 32767)
-
-# Decoding (backend):
-lon_100m = struct.unpack('>h', bytes[4:6])[0]  # signed big-endian
-lon_degrees = lon_100m × 0.0009009
+lat_deg = struct.unpack('<h', payload[2:4])[0] * 90.0 / 32767.0
+lon_deg = struct.unpack('<h', payload[4:6])[0] * 180.0 / 32767.0
 ```
 
 #### Temperature (int8, 2°C resolution with offset)
@@ -86,13 +85,13 @@ encoded_value = round(temp_celsius / 2.0) + 64
 temp_celsius = (byte_value - 64) × 2.0
 ```
 
-#### Pressure (uint8, 10 hPa resolution from 950 hPa base)
+#### Pressure + Humidity (uint16 LE packed, bytes 7-8)
 ```python
-# Encoding (firmware):
-encoded_value = round((pressure_hPa - 950) / 10.0)
-
-# Decoding (backend):
-pressure_hPa = 950 + (byte_value × 10.0)
+press_hum = struct.unpack('<H', payload[7:9])[0]
+press_raw = press_hum & 0x07FF          # bits 0-10
+hum_raw   = (press_hum >> 11) & 0x1F    # bits 11-15
+pressure_hpa = None if press_raw == 0x07FF else float(press_raw)  # 1 hPa units; stratospheric-useful (v1 collapsed below 950 hPa)
+humidity_pct = None if hum_raw == 0x1F else hum_raw * 5.0         # 5% units
 ```
 
 #### Battery Voltage (uint8, 50 mV resolution)
@@ -101,70 +100,64 @@ pressure_hPa = 950 + (byte_value × 10.0)
 encoded_value = round(voltage_volts / 0.050)
 
 # Decoding (backend):
-voltage_volts = byte_value × 0.050
+voltage_volts = payload[9] * 0.050
 ```
 
-#### Humidity (uint8, 5% resolution)
-```python
-# Encoding (firmware):
-encoded_value = round(humidity_percent / 5.0)
-
-# Decoding (backend):
-humidity_percent = byte_value × 5.0
-```
-
-### Python Decoder Example
+### Python Decoder Example (heartbeat v2)
 
 ```python
 import struct
-from datetime import datetime, timezone
 
-def decode_compact_packet(payload: bytes) -> dict:
-    """
-    Decode 10-byte compact telemetry packet from LoRaWAN Port 10
-    
-    Args:
-        payload: 10-byte packet from LoRaWAN
-        
-    Returns:
-        dict with decoded telemetry data
-    """
-    if len(payload) != 10:
-        raise ValueError(f"Expected 10 bytes, got {len(payload)}")
-    
-    # Unpack all fields (big-endian)
-    timestamp_min, lat_100m, lon_100m = struct.unpack('>Hhh', payload[0:6])
-    temp_raw, pressure_raw, battery_raw, humidity_raw = struct.unpack('BBBB', payload[6:10])
-    
-    # Decode values
-    result = {
+MISSION_STATES = ["COMMISSIONING", "PRE_FLIGHT", "FLIGHT", "RECOVERY"]
+
+def decode_heartbeat_v2(payload: bytes) -> dict:
+    """Decode 11-byte heartbeat v2 from LoRaWAN Port 10 (little-endian)."""
+    if len(payload) != 11:
+        raise ValueError(f"Expected 11 bytes, got {len(payload)}")
+
+    timestamp_min = struct.unpack('<H', payload[0:2])[0]
+    lat_enc, lon_enc = struct.unpack('<hh', payload[2:6])
+    temp_raw = payload[6]
+    press_hum = struct.unpack('<H', payload[7:9])[0]
+    battery_raw = payload[9]
+    status = payload[10]
+
+    press_raw = press_hum & 0x07FF
+    hum_raw = (press_hum >> 11) & 0x1F
+
+    return {
         'timestamp_minutes': timestamp_min,
-        'latitude': lat_100m * 0.0009009,
-        'longitude': lon_100m * 0.0009009,
+        'latitude': lat_enc * 90.0 / 32767.0,
+        'longitude': lon_enc * 180.0 / 32767.0,
         'temperature_c': (temp_raw - 64) * 2.0,
-        'pressure_hpa': 950 + (pressure_raw * 10.0),
+        'pressure_hpa': None if press_raw == 0x07FF else float(press_raw),
         'battery_v': battery_raw * 0.050,
-        'humidity_pct': humidity_raw * 5.0
+        'humidity_pct': None if hum_raw == 0x1F else hum_raw * 5.0,
+        'gps_stale': bool(status & 0x01),
+        'temp_stale': bool(status & 0x02),
+        'hum_stale': bool(status & 0x04),
+        'press_stale': bool(status & 0x08),
+        'time_gnss_disciplined': bool(status & 0x10),
+        'timestamp_wrapped': bool(status & 0x20),
+        'mission_state': MISSION_STATES[(status >> 6) & 0x03],
     }
-    
-    return result
 
 # Example usage
 if __name__ == "__main__":
-    # Example from RTT log: Lat=51.163504 Lon=-114.066276 (Calgary)
-    # This is encoded as compact binary
+    # ts=1234 min, 45.0N, 114.0W, 25C, 1013 hPa, 45%, 5.0V, GNSS-disciplined
     example = bytes([
-        0x00, 0x00,  # Timestamp: 0 minutes (example)
-        0xE6, 0x30,  # Latitude: 58928 × 0.0009009 ≈ 53.09°
-        0x82, 0xA8,  # Longitude: -32088 × 0.0009009 ≈ -28.91°
-        0x4D,        # Temperature: (77-64)×2 = 26°C
-        0x00,        # Pressure: 950+(0×10) = 950 hPa
-        0x70,        # Battery: 112×0.05 = 5.6V
-        0x06         # Humidity: 6×5 = 30%
+        0xD2, 0x04,  # Timestamp: 1234 minutes (LE)
+        0x00, 0x40,  # Latitude: 16384 -> 16384*90/32767 = 45.0 deg (LE)
+        0x50, 0xAE,  # Longitude: -20912 -> -114.48 deg (LE)
+        0x4C,        # Temperature: (76-64)*2 = 24C... (see golden vector for exact)
+        0x00, 0x00,  # press_hum placeholder
+        0x64,        # Battery: 100*0.05 = 5.0V
+        0x10         # Status: GNSS-disciplined time
     ])
-    
-    decoded = decode_compact_packet(example)
-    print("Compact Packet Decoded:")
+    # Authoritative byte-level vectors: tests/host/test_main.c prints
+    # "GOLDEN heartbeat-v2:" from the real firmware encoder.
+    decoded = decode_heartbeat_v2(example)
+    print("Heartbeat v2 decoded:")
     for key, value in decoded.items():
         print(f"  {key}: {value}")
 ```
@@ -201,47 +194,51 @@ print(f"Altitude: {altitude:.1f} m")  # Should be ~1078m (Calgary elevation)
 
 ---
 
-## PORT 11: Bulk Binary Packet (PRODUCTION)
+## PORT 11: Core Science Archive (PRODUCTION)
 
 ### Description
-198-byte packet (v2, FW-20) for efficient bulk transfer of historical data at SF7 (DR2). Contains up to 6 high-resolution records. Transmitted when link quality is good (margin ≥15dB, gateways ≥2) and battery is sufficient (≥5.0V). Records are FIFO order (oldest unsent first).
+Bulk transfer of historical high-resolution records at SF7, sent when link quality is good and battery is sufficient. Records are FIFO order (oldest unsent first). **All multibyte fields are little-endian** (D9 — earlier revisions of this document incorrectly described big-endian; N-01/N-02). The decoder branches on `payload[0]`:
 
-> **FW-20 layout change:** the v1 222-byte layout carried three permanently-zero
-> placeholder fields (Flash Page Addr 4 B, Voltage Trend 10 B, Mode Changes 10 B
-> = 24 B of SF7 airtime per packet). v2 (packet_type 0x02) deletes them and
-> shrinks the packet to 198 B. Ground decoders must branch on `payload[0]`:
-> `0x01` = legacy 222 B v1 (decode below only for archival logs), `0x02` = v2.
+| `payload[0]` | Format | Length |
+|---|---|---|
+| `0x01` | Legacy v1, 222 B fixed (historical only) | 222 |
+| `0x02` | Legacy v2, 198 B fixed (FW-20) | 198 |
+| `0x03` | **Current v3, variable** `2 + 32n + 4` (issue #33) | 38-198 |
 
-### Packet Structure v2 (198 bytes)
+### Packet Structure v3 (variable length)
 
 #### Header (2 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 0 | Packet Type | uint8 | 1 | Format version (0x02 = v2 FIFO, no placeholders) |
-| 1 | Record Count | uint8 | 1 | Number of records (1-6) |
+| 0 | Packet Type | uint8 | 1 | 0x03 = variable-length |
+| 1 | Record Count | uint8 | 1 | n records (1-6) |
 
-#### High-Resolution Records (192 bytes = 6 × 32 bytes)
+n complete 32-byte records follow immediately at offset 2 (same layout as v2, below, but explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `2 + 32n + 4`.
 
-Each record is 32 bytes:
+The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0011).
+
+#### High-Resolution Records (n × 32 bytes)
+
+Each record is 32 bytes, little-endian:
 
 | Offset | Field | Type | Size | Resolution | Range | Description |
 |--------|-------|------|------|------------|-------|-------------|
-| 0 | Timestamp | uint32 BE | 4 | 1 second | Full range | Unix timestamp (seconds) |
-| 4 | Latitude | int32 BE | 4 | 1e-7° | Full | GPS binary format |
-| 8 | Longitude | int32 BE | 4 | 1e-7° | Full | GPS binary format |
-| 12 | Altitude | uint16 BE | 2 | 1 meter | 0-65535m | GPS altitude |
-| 14 | Temperature | int16 BE | 2 | 0.1°C | ±3276.7°C | temp × 10 |
-| 16 | Humidity | uint16 BE | 2 | 0.1% | 0-6553.5% | humidity × 10 |
-| 18 | Pressure | uint16 BE | 2 | 0.1 hPa | 0-6553.5 hPa | pressure × 10 |
-| 20 | Battery Voltage | uint16 BE | 2 | 1 mV | 0-65.535V | Millivolts |
-| 22 | Solar Voltage | uint16 BE | 2 | 1 mV | 0-65.535V | Millivolts |
-| 24 | Voltage Slope | int16 BE | 2 | 1 mV/hour | ±32.767 V/h | Charge rate |
+| 0 | Timestamp | uint32 LE | 4 | 1 second | Full range | Unix timestamp (seconds) |
+| 4 | Latitude | int32 LE | 4 | 1e-7° | Full | GPS binary format |
+| 8 | Longitude | int32 LE | 4 | 1e-7° | Full | GPS binary format |
+| 12 | Altitude | uint16 LE | 2 | 1 meter | 0-65535m | GPS altitude |
+| 14 | Temperature | int16 LE | 2 | 0.1°C | ±3276.7°C | temp × 10 |
+| 16 | Humidity | uint16 LE | 2 | 0.1% | 0-6553.5% | humidity × 10 |
+| 18 | Pressure | uint16 LE | 2 | 0.1 hPa | 0-6553.5 hPa | pressure × 10 |
+| 20 | Battery Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | Millivolts |
+| 22 | Solar Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | Millivolts |
+| 24 | Voltage Slope | int16 LE | 2 | 1 mV/hour | ±32.767 V/h | Charge rate |
 | 26 | Satellites | uint8 | 1 | 1 | 0-255 | GPS satellite count |
 | 27 | HDOP | uint8 | 1 | 0.1 | 0-25.5 | HDOP × 10 |
 | 28 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode |
-| 29 | Flags | uint8 | 1 | bitfield | - | Status flags |
-| 30 | CRC16 | uint16 BE | 2 | - | - | Record integrity check |
+| 29 | Flags | uint8 | 1 | bitfield | - | Status flags (table below) |
+| 30 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-29 |
 
 #### Status Flags (byte 29 of each record)
 
@@ -251,15 +248,15 @@ Each record is 32 bytes:
 | 1-4 | 0x1E | Satellite Count | Satellite count 0-15 (duplicates byte 26) |
 | 5-7 | 0xE0 | Power Mode | Operating mode 0-7 (duplicates byte 28) |
 
-#### Trailer (4 bytes)
+#### Trailer (4 bytes, v3)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 194 | CRC32 | uint32 BE | 4 | Packet integrity check (over bytes 0-193) |
+| 2+32n | CRC32 | uint32 LE | 4 | CRC32/IEEE over bytes 0..(2+32n-1) |
 
-> v1 records started at offset 6; in v2 they start at offset 2 (`2 + i*32`).
-> v1's `flash_page_addr`/`voltage_trend`/`mode_changes` fields are gone —
-> record identity comes from each record's timestamp + sequence.
+### Legacy v2 (packet_type 0x02, fixed 198 B)
+
+Same header with type `0x02`, record count 1-6, six fixed 32-byte record slots at offsets 2..193 (unused slots zero), CRC32 at bytes 194-197 over bytes 0-193. v1 (`0x01`, 222 B) additionally carried three permanently-zero placeholder blocks (Flash Page Addr 4 B at offset 2, Voltage Trend 10 B and Mode Changes 10 B at 198-217) and its records started at offset 6 — retain decoding only while historical data requires it.
 
 ### Power Mode Enum
 
@@ -272,63 +269,67 @@ Each record is 32 bytes:
 | 4 | CRITICAL | Critical battery | 1800s (30 min) |
 | 5 | GPS_LOCKOUT | GPS disabled | As configured |
 
-### Python Decoder Example
+### Python Decoder Example (v3 + legacy)
 
 ```python
 import struct
-from typing import List, Dict
 
-def decode_bulk_packet(payload: bytes) -> dict:
+RECORD_SIZE = 32
+V3_OVERHEAD = 6  # type + count + crc32
+
+def decode_archive_packet(payload: bytes) -> dict:
     """
-    Decode bulk telemetry packet from LoRaWAN Port 11 (v2 198 B; v1 legacy 222 B)
-    
-    Args:
-        payload: bulk packet from LoRaWAN (branch on payload[0]: 0x01 v1, 0x02 v2)
-        
-    Returns:
-        dict with header, records array, metadata, and CRC validation
+    Decode core science archive packet from LoRaWAN Port 11 (LITTLE-ENDIAN).
+
+    Branches on payload[0]:
+      0x03 = v3 variable length: 2 + 32n + 4 bytes (current firmware)
+      0x02 = v2 legacy fixed 198 B
+      0x01 = v1 legacy fixed 222 B (historical only)
     """
-    # FW-20: v2 is 198 B (packet_type 0x02); v1 legacy is 222 B (0x01)
+    if len(payload) < 2:
+        raise ValueError("payload too short")
+
     version = payload[0]
-    if version == 0x02:
-        assert len(payload) == 198, f"Expected 198 bytes (v2), got {len(payload)}"
+    if version == 0x03:
+        count = payload[1]
+        expected = 2 + RECORD_SIZE * count + 4
+        if len(payload) != expected:
+            raise ValueError(f"v3: expected {expected} bytes for {count} records, got {len(payload)}")
         header_len = 2
+        crc_off = len(payload) - 4
+    elif version == 0x02:
+        if len(payload) != 198:
+            raise ValueError(f"v2: expected 198 bytes, got {len(payload)}")
+        count = min(payload[1], 6)
+        header_len = 2
+        crc_off = 194
     elif version == 0x01:
-        assert len(payload) == 222, f"Expected 222 bytes (v1), got {len(payload)}"
+        if len(payload) != 222:
+            raise ValueError(f"v1: expected 222 bytes, got {len(payload)}")
+        count = min(payload[1], 6)
         header_len = 6
+        crc_off = 218
     else:
-        raise ValueError(f"Unknown bulk packet version 0x{version:02X}")
-    
-    result = {}
-    
-    # Parse header
-    result['packet_type'] = version
-    result['record_count'] = payload[1]
-    if version == 0x01:
-        result['flash_page_addr'] = struct.unpack('>I', payload[2:6])[0]
-    
-    # Parse records (up to 6, each 32 bytes)
-    result['records'] = []
-    for i in range(min(result['record_count'], 6)):
-        offset = header_len + (i * 32)
-        record_data = payload[offset:offset+32]
-        
-        # Unpack record
-        timestamp, lat, lon, alt = struct.unpack('>Iiii', record_data[0:14])
-        alt = struct.unpack('>H', record_data[12:14])[0]  # Re-extract as uint16
-        temp, humidity, pressure = struct.unpack('>hhH', record_data[14:20])
-        bat_mv, solar_mv, slope = struct.unpack('>HHh', record_data[20:26])
-        sats, hdop, mode, flags = struct.unpack('BBBB', record_data[26:30])
-        crc16 = struct.unpack('>H', record_data[30:32])[0]
-        
-        # Verify record CRC
-        calc_crc = calculate_crc16(record_data[0:30])
-        crc_valid = (calc_crc == crc16)
-        
-        record = {
+        raise ValueError(f"Unknown archive packet type 0x{version:02X}")
+
+    result = {'packet_type': version, 'record_count': count, 'records': []}
+
+    for i in range(count):
+        rec = payload[header_len + i * RECORD_SIZE: header_len + (i + 1) * RECORD_SIZE]
+        timestamp = struct.unpack('<I', rec[0:4])[0]
+        lat, lon = struct.unpack('<ii', rec[4:12])
+        alt = struct.unpack('<H', rec[12:14])[0]
+        temp = struct.unpack('<h', rec[14:16])[0]
+        humidity, pressure = struct.unpack('<HH', rec[16:20])
+        bat_mv, solar_mv = struct.unpack('<HH', rec[20:24])
+        slope = struct.unpack('<h', rec[24:26])[0]
+        sats, hdop, mode, flags = struct.unpack('BBBB', rec[26:30])
+        crc16 = struct.unpack('<H', rec[30:32])[0]
+
+        result['records'].append({
             'timestamp': timestamp,
-            'latitude': lat * (90.0 / 8388607.0),  # Convert binary to degrees
-            'longitude': lon * (180.0 / 8388607.0),  # Convert binary to degrees
+            'latitude': lat * (90.0 / 8388607.0),
+            'longitude': lon * (180.0 / 8388607.0),
             'altitude_m': alt,
             'temperature_c': temp / 10.0,
             'humidity_pct': humidity / 10.0,
@@ -340,23 +341,11 @@ def decode_bulk_packet(payload: bytes) -> dict:
             'hdop': hdop / 10.0,
             'power_mode': mode,
             'gps_valid': bool(flags & 0x01),
-            'crc16': crc16,
-            'crc16_valid': crc_valid
-        }
-        
-        result['records'].append(record)
-    
-    # Parse trailer + verify packet CRC
-    if version == 0x01:
-        result['voltage_trend'] = list(payload[198:208])
-        result['mode_changes'] = list(payload[208:218])
-        result['crc32'] = struct.unpack('>I', payload[218:222])[0]
-        calc_packet_crc = calculate_crc32(payload[0:218])
-    else:
-        result['crc32'] = struct.unpack('>I', payload[194:198])[0]
-        calc_packet_crc = calculate_crc32(payload[0:194])
-    result['crc32_valid'] = (calc_packet_crc == result['crc32'])
-    
+            'crc16_valid': calculate_crc16(rec[0:30]) == crc16,
+        })
+
+    result['crc32'] = struct.unpack('<I', payload[crc_off:crc_off + 4])[0]
+    result['crc32_valid'] = calculate_crc32(payload[0:crc_off]) == result['crc32']
     return result
 
 def calculate_crc16(data: bytes) -> int:
@@ -365,10 +354,7 @@ def calculate_crc16(data: bytes) -> int:
     for byte in data:
         crc ^= byte
         for _ in range(8):
-            if crc & 0x0001:
-                crc = (crc >> 1) ^ 0xA001
-            else:
-                crc >>= 1
+            crc = (crc >> 1) ^ 0xA001 if crc & 0x0001 else crc >> 1
     return crc
 
 def calculate_crc32(data: bytes) -> int:
@@ -377,53 +363,40 @@ def calculate_crc32(data: bytes) -> int:
     for byte in data:
         crc ^= byte
         for _ in range(8):
-            if crc & 0x00000001:
-                crc = (crc >> 1) ^ 0xEDB88320
-            else:
-                crc >>= 1
+            crc = (crc >> 1) ^ 0xEDB88320 if crc & 0x00000001 else crc >> 1
     return ~crc & 0xFFFFFFFF
 
 # Example usage
 if __name__ == "__main__":
-    # Create example v2 packet (header + 1 record, FW-20 layout)
-    example = bytearray(198)
-    
-    # Header
-    example[0] = 0x02  # Packet type (v2 FIFO, no placeholders)
+    # Authoritative byte-level vectors: tests/host/test_main.c prints
+    # "GOLDEN bulk-v3 (2 records):" from the real firmware encoder.
+    # Build a minimal 1-record v3 packet (2 + 32 + 4 = 38 bytes):
+    example = bytearray(38)
+    example[0] = 0x03  # v3
     example[1] = 0x01  # 1 record
-    
-    # Record 1 (32 bytes at offset 2)
-    struct.pack_into('>I', example, 2, 1737848000)  # Timestamp
-    struct.pack_into('>i', example, 6, 4768932)  # Lat binary
-    struct.pack_into('>i', example, 10, -10633288)  # Lon binary
-    struct.pack_into('>H', example, 14, 1078)  # Altitude
-    struct.pack_into('>h', example, 16, 179)  # Temp: 17.9°C
-    struct.pack_into('>H', example, 18, 301)  # Humidity: 30.1%
-    struct.pack_into('>H', example, 20, 8864)  # Pressure: 886.4 hPa
-    struct.pack_into('>H', example, 22, 5606)  # Battery: 5606 mV
-    struct.pack_into('>H', example, 24, 1189)  # Solar: 1189 mV
-    struct.pack_into('>h', example, 26, 0)  # Slope: 0 mV/h
-    example[28] = 9  # Satellites
-    example[29] = 16  # HDOP: 1.6
-    example[30] = 1  # Power mode: NORMAL
-    example[31] = 0x13  # Flags: GPS valid, 9 sats
-    # Record CRC16 would be calculated here (bytes 32:34)
-    
-    # Packet CRC
-    crc32 = calculate_crc32(bytes(example[0:194]))
-    struct.pack_into('>I', example, 194, crc32)
-    
-    # Decode
-    decoded = decode_bulk_packet(bytes(example))
-    print(f"Bulk packet: {decoded['record_count']} records")
+    struct.pack_into('<I', example, 2, 1737848000)   # Timestamp (LE)
+    struct.pack_into('<i', example, 6, 4768932)      # Lat binary
+    struct.pack_into('<i', example, 10, -10633288)   # Lon binary
+    struct.pack_into('<H', example, 14, 1078)        # Altitude
+    struct.pack_into('<h', example, 16, 179)         # Temp: 17.9 C
+    struct.pack_into('<H', example, 18, 301)         # Humidity: 30.1%
+    struct.pack_into('<H', example, 20, 8864)        # Pressure: 886.4 hPa
+    struct.pack_into('<H', example, 22, 5606)        # Battery: 5606 mV
+    struct.pack_into('<H', example, 24, 1189)        # Solar: 1189 mV
+    struct.pack_into('<h', example, 26, 0)           # Slope: 0 mV/h
+    example[28] = 9    # Satellites
+    example[29] = 16   # HDOP: 1.6
+    example[30] = 1    # Power mode: NORMAL
+    example[31] = 0x13 # Flags: GPS valid, 9 sats
+    struct.pack_into('<H', example, 32, calculate_crc16(bytes(example[2:32])))
+    struct.pack_into('<I', example, 34, calculate_crc32(bytes(example[0:34])))
+
+    decoded = decode_archive_packet(bytes(example))
+    print(f"Archive packet: type 0x{decoded['packet_type']:02X}, {decoded['record_count']} records")
     for i, rec in enumerate(decoded['records']):
-        print(f"\nRecord {i+1}:")
-        print(f"  GPS: {rec['latitude']:.6f}, {rec['longitude']:.6f} @ {rec['altitude_m']}m")
-        print(f"  Temp: {rec['temperature_c']:.1f}°C")
-        print(f"  Pressure: {rec['pressure_hpa']:.1f} hPa")
-        print(f"  Battery: {rec['battery_mv']} mV")
-        print(f"  CRC16: {'OK' if rec['crc16_valid'] else 'FAIL'}")
-    print(f"\nPacket CRC32: {'OK' if decoded['crc32_valid'] else 'FAIL'}")
+        print(f"  Record {i+1}: {rec['latitude']:.6f}, {rec['longitude']:.6f} @ {rec['altitude_m']}m, "
+              f"{rec['temperature_c']:.1f}C, {rec['pressure_hpa']:.1f} hPa, crc16 {'OK' if rec['crc16_valid'] else 'FAIL'}")
+    print(f"  Packet CRC32: {'OK' if decoded['crc32_valid'] else 'FAIL'}")
 ```
 
 ---
@@ -562,6 +535,12 @@ Values outside these ranges indicate sensor errors.
 ---
 
 ## Changelog
+
+### 2026-08-06 (heartbeat v2 / archive v3, issue #33)
+- **Port 10 heartbeat v2**: pressure/humidity merged into one packed uint16 LE (bits 0-10 = 1 hPa units, 0-2046 valid / 2047 invalid sentinel — stratospheric-useful; bits 11-15 = 5% humidity, 31 sentinel). Status byte v2: b3 pressure-stale, b4 RTC GNSS-disciplined (N-03), b5 timestamp-wrap (D4); condensed reset cause removed from the wire. Endianness corrected to little-endian throughout (D9; earlier BE documentation was wrong, N-01).
+- **Port 11 archive v3** (`packet_type 0x03`): variable-length `2 + 32n + 4` with explicit LE serialization; records packed to the runtime payload budget (`LoRaMacQueryTxPossible`). v2 (`0x02`, 198 B) and v1 (`0x01`, 222 B) documented as legacy.
+- **Probe DR (D1)**: heartbeat at SF9 in US915/AU915, SF10 elsewhere.
+- Golden vectors printed by the firmware host tests (`tests/host/test_main.c` → `GOLDEN heartbeat-v2`, `GOLDEN bulk-v3`).
 
 ### 2026-01-25
 - Initial comprehensive documentation

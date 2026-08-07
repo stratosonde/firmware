@@ -30,6 +30,7 @@
 #include "subghz_phy_version.h"
 #include "lora_info.h"
 #include "LmHandler.h"
+#include "LoRaMac.h"  /* LoRaMacQueryTxPossible — runtime payload budget (D3, #33) */
 #include "adc_if.h"
 #include "CayenneLpp.h"
 #include "sys_sensors.h"
@@ -1373,8 +1374,12 @@ static void SendTxData(void)
       if (EncodeCompactBinaryPacket(&compact_packet, &sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
         
-      // F16 FIX: Send at SF10, resolved per-region (was hardcoded DR_0)
-      LmHandlerSetTxDatarate(DatarateFromSF(10));  // SF10 in ANY region
+      /* D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
+       * exact fit there with zero headroom; SF9 buys 42 B for ~2.5 dB link
+       * budget. Elsewhere keep SF10. Resolved per-region via DatarateFromSF. */
+      uint8_t probe_sf = ((LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915) ||
+                          (LmHandlerParams.ActiveRegion == LORAMAC_REGION_AU915)) ? 9 : 10;
+      LmHandlerSetTxDatarate(DatarateFromSF(probe_sf));
       
       // Prepare packet data BEFORE requesting LinkCheck
       LmHandlerAppData_t compactData;
@@ -1473,25 +1478,43 @@ static void SendTxData(void)
             break;
           }
 
-          // Encode bulk packet (FW-20: v2 198 B layout — the always-zero
-          // flash_page/voltage_trend/mode_changes placeholders are gone)
-          BulkTelemetryPacket_t bulk_packet;
+          // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
+          LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
 
-          if (EncodeBulkPacketFromRecords(&bulk_packet, highres_records, packed_count)) {
-            
-            // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
-            LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
-            
+          /* D3 (#33): wire v3 variable-length bulk (packet_type 0x03). Query the
+           * runtime payload budget (current DR + pending FOpts, protocol §11)
+           * and pack only complete records that fit. Records that don't fit
+           * stay pending for the next cycle (stable identity, DDR-0011). */
+          LoRaMacTxInfo_t txInfo;
+          uint16_t max_payload = 0;
+          for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V3_OVERHEAD + try_n * sizeof(HighResTelemetryRecord_t)),
+                                       &txInfo) == LORAMAC_STATUS_OK) {
+              max_payload = (uint16_t)(BULK_V3_OVERHEAD + try_n * sizeof(HighResTelemetryRecord_t));
+              break;
+            }
+          }
+          if (max_payload == 0) {
+            SEGGER_RTT_WriteString(0, "Bulk: no payload budget at current DR - retry next cycle\r\n");
+            g_tx_state = TX_STATE_COMPLETE;
+            break;
+          }
+
+          uint8_t v3_buf[BULK_V3_OVERHEAD + BULK_V3_MAX_RECORDS * sizeof(HighResTelemetryRecord_t)];
+          uint8_t v3_packed = 0;
+          uint16_t v3_len = 0;
+
+          if (EncodeBulkPacketV3(v3_buf, sizeof(v3_buf), max_payload,
+                                 highres_records, packed_count, &v3_packed, &v3_len)) {
+
             LmHandlerAppData_t bulkData;
             bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
-            bulkData.BufferSize = sizeof(BulkTelemetryPacket_t);
-            bulkData.Buffer = (uint8_t*)&bulk_packet;
-            
-            /* FW-14: log actual size, not a stale hardcoded number */
-            SEGGER_RTT_printf(0, "Sending %u-byte bulk packet at SF7 on port %d with %lu records\r\n",
-                              (unsigned)sizeof(BulkTelemetryPacket_t),
-                              LORAWAN_BULK_PORT, (unsigned long)record_count);
-            
+            bulkData.BufferSize = v3_len;
+            bulkData.Buffer = v3_buf;
+
+            SEGGER_RTT_printf(0, "Sending %u-byte bulk v3 packet at SF7 on port %d with %u records\r\n",
+                              v3_len, LORAWAN_BULK_PORT, v3_packed);
+
             LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
             
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
@@ -1499,14 +1522,15 @@ static void SendTxData(void)
               
               /* F-005/R21 (#51): mark exactly what was CONSUMED from the
                * entry watermark — packed (sent) + skipped (corrupt) — so the
-               * watermark lands exactly past the batch. Conversion is
-               * currently infallible (R19); the exact-identity ack lands with
+               * watermark lands exactly past the batch. D3 (#33): v3_packed is
+               * what actually went on the air; records cut by the runtime
+               * payload budget stay pending. The exact-identity ack lands with
                * the confirmed-delivery rework (#34). */
-              if (packed_count != record_count) {
+              if (v3_packed != record_count) {
                 SEGGER_RTT_printf(0, "WARN: packed %u of %lu read - marking only packed+skipped\r\n",
-                                  packed_count, (unsigned long)record_count);
+                                  v3_packed, (unsigned long)record_count);
               }
-              g_bulk_pending_mark = packed_count + skipped_count;
+              g_bulk_pending_mark = v3_packed + skipped_count;
               
               SEGGER_RTT_printf(0, "Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);

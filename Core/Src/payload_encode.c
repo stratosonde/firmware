@@ -36,8 +36,6 @@
 /* Compact packet scaling factors */
 #define TEMPERATURE_SCALE_FACTOR    2     // 2°C resolution
 #define TEMPERATURE_OFFSET          64    // Offset for signed storage in uint8_t
-#define PRESSURE_SCALE_FACTOR       10    // 10hPa resolution  
-#define PRESSURE_BASE_OFFSET        950   // Base pressure (950 hPa)
 #define BATTERY_SCALE_FACTOR        0.050f // 50mV resolution
 #define HUMIDITY_SCALE_FACTOR       5     // 5% resolution
 
@@ -46,9 +44,8 @@ static uint16_t GetTimestampMinutes(void);
 static int16_t ConvertLatitudeToCompact(int32_t binary_latitude);
 static int16_t ConvertLongitudeToCompact(int32_t binary_longitude);
 static int8_t ConvertTemperatureToCompact(float temperature_c);
-static uint8_t ConvertPressureToCompact(float pressure_mbar);
+static uint16_t PackPressureHumidity(float pressure_mbar, float humidity_percent);
 static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts);
-static uint8_t ConvertHumidityToCompact(float humidity_percent);
 static uint8_t PackStatusFlags(bool gps_valid, uint8_t satellites, OperatingMode_t power_mode);
 static uint16_t CalculateCRC16(const uint8_t *data, uint32_t length);
 static uint32_t CalculateCRC32(const uint8_t *data, uint32_t length);
@@ -93,22 +90,32 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     
     // Convert environmental sensors
     packet->temperature_2deg = ConvertTemperatureToCompact(sensors->temperature);
-    packet->pressure_10hPa = ConvertPressureToCompact(sensors->pressure);
-    packet->humidity_5pct = ConvertHumidityToCompact(sensors->humidity);
+    /* D2 (#33): pressure+humidity share one packed u16 — 1 hPa resolution over
+     * 0-2046 hPa (stratospheric-useful; v1 collapsed below 950 hPa) */
+    packet->press_hum = PackPressureHumidity(sensors->pressure, sensors->humidity);
     
     // Convert battery voltage (REQUIRED - DevStatusAns is on-demand only)
     packet->battery_volt_50mv = ConvertBatteryVoltageToCompact(sensors->battery_voltage);
 
-    /* F17/T2 (DDR-0007): status byte restored as byte 11. LinkCheck rides
-     * FOpts (DDR-0005), so the payload byte is free again.
-     * b0 GPS stale, b1 temp stale, b2 humidity stale,
-     * b3-b4 condensed reset cause (FW-7: 2-bit), b5 pressure stale (FW-7),
-     * b6-b7 mission state. */
+    /* Heartbeat v2 status byte (D2/D4, #33):
+     * b0 GPS stale, b1 temp stale, b2 humidity stale, b3 pressure stale,
+     * b4 RTC GNSS-disciplined (N-03), b5 timestamp_min wrapped (D4),
+     * b6-b7 mission state. (v1's condensed reset cause b3-b4 is gone from the
+     * wire; it remains available in flash/bulk records.) */
+    static bool s_ts_wrapped = false;      /* sticky for the mission */
+    static uint16_t s_last_ts_min = 0;
+    if (timestamp_min < s_last_ts_min) {
+        s_ts_wrapped = true;               /* 45.5-day wrap observed */
+    }
+    s_last_ts_min = timestamp_min;
+
+    const bool time_gnss_disciplined = sensors->gnss_valid && !sensors->gnss_stale;
     packet->status = (sensors->gnss_stale ? STATUS_GPS_STALE_MASK : 0)
                    | (sensors->temp_stale ? STATUS_TEMP_STALE_MASK : 0)
                    | (sensors->hum_stale  ? STATUS_HUM_STALE_MASK : 0)
-                   | ((ResetCause_Get() & 0x03) << 3)
                    | (sensors->press_stale ? STATUS_PRESS_STALE_MASK : 0)
+                   | (time_gnss_disciplined ? STATUS_TIME_GNSS_MASK : 0)
+                   | (s_ts_wrapped ? STATUS_TS_WRAP_MASK : 0)
                    | ((MissionState_GetStatusBits() & 0x03) << 6);
     
     // Debug logging with safe integer conversions
@@ -255,6 +262,79 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                       packet->packet_type, packet->record_count, 
                       packet->crc32);
     
+    return true;
+}
+
+/* ---- Explicit little-endian serialization helpers (D9, #33) ----
+ * Wire v3 is explicitly LE-serialized per LoRaWANApplicationProtocol.md §3 —
+ * no raw struct casts on the new format. */
+static void PutU16LE(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void PutU32LE(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+                                               p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+
+/**
+ * @brief Serialize one high-res record as 32 LE bytes (wire v3).
+ *        Field order matches HighResTelemetryRecord_t; crc16 covers bytes 0-29.
+ * @retval number of bytes written (always 32)
+ */
+static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t *r)
+{
+    PutU32LE(out + 0,  r->timestamp);
+    PutU32LE(out + 4,  (uint32_t)r->latitude);
+    PutU32LE(out + 8,  (uint32_t)r->longitude);
+    PutU16LE(out + 12, r->altitude);
+    PutU16LE(out + 14, (uint16_t)r->temperature);
+    PutU16LE(out + 16, r->humidity);
+    PutU16LE(out + 18, r->pressure);
+    PutU16LE(out + 20, r->battery_voltage);
+    PutU16LE(out + 22, r->solar_voltage);
+    PutU16LE(out + 24, (uint16_t)r->voltage_slope);
+    out[26] = r->satellites;
+    out[27] = r->hdop;
+    out[28] = r->power_mode;
+    out[29] = r->flags;
+    PutU16LE(out + 30, CalculateCRC16(out, 30));
+    return 32;
+}
+
+/**
+ * @brief Encode a variable-length bulk packet (wire v3, packet_type 0x03) — D3 (#33)
+ */
+bool EncodeBulkPacketV3(uint8_t *buf,
+                        uint16_t buf_cap,
+                        uint16_t max_payload,
+                        const HighResTelemetryRecord_t *records,
+                        uint8_t record_count,
+                        uint8_t *packed_count,
+                        uint16_t *out_len)
+{
+    if (!buf || !records || !packed_count || !out_len || record_count == 0) {
+        return false;
+    }
+
+    /* Whole records only; budget = min(buf_cap, max_payload) */
+    uint16_t budget = (max_payload < buf_cap) ? max_payload : buf_cap;
+    uint8_t n = (uint8_t)((budget - BULK_V3_OVERHEAD) / sizeof(HighResTelemetryRecord_t));
+    if (n > record_count) n = record_count;
+    if (n > BULK_V3_MAX_RECORDS) n = BULK_V3_MAX_RECORDS;
+    if (n == 0) {
+        *packed_count = 0;
+        return false;
+    }
+
+    buf[0] = BULK_PACKET_TYPE_VARIABLE;
+    buf[1] = n;
+    uint16_t off = 2;
+    for (uint8_t i = 0; i < n; i++) {
+        off += SerializeRecordV3LE(buf + off, &records[i]);
+    }
+    PutU32LE(buf + off, CalculateCRC32(buf, off));
+    off += 4;
+
+    *packed_count = n;
+    *out_len = off;
+
+    SEGGER_RTT_printf(0, "Bulk v3: Records=%d Len=%u\r\n", n, off);
     return true;
 }
 
@@ -431,18 +511,29 @@ static int8_t ConvertTemperatureToCompact(float temperature_c)
 }
 
 /**
- * @brief Convert pressure to compact format with 10hPa resolution from base
+ * @brief Pack pressure (11-bit, 1 hPa) + humidity (5-bit, 5%) — D2 (#33)
+ * Pressure: 0..2046 hPa valid, sentinel 2047 when out of range/NaN.
+ * Humidity: 0..20 (0-100%), sentinel 31 when out of range/NaN.
  */
-static uint8_t ConvertPressureToCompact(float pressure_mbar)
+static uint16_t PackPressureHumidity(float pressure_mbar, float humidity_percent)
 {
-    // Subtract base pressure and scale
-    int16_t relative_pressure = (int16_t)((pressure_mbar - PRESSURE_BASE_OFFSET) / PRESSURE_SCALE_FACTOR);
-    
-    // Clamp to uint8_t range (0-255) = 950-3500 hPa range
-    if (relative_pressure > 255) relative_pressure = 255;
-    if (relative_pressure < 0) relative_pressure = 0;
-    
-    return (uint8_t)relative_pressure;
+    uint16_t press_units;
+    if (isnan(pressure_mbar) || pressure_mbar < 0.0f || pressure_mbar > 2046.0f) {
+        press_units = PRESS_HUM_PRESS_INVALID;
+    } else {
+        press_units = (uint16_t)(pressure_mbar + 0.5f);
+        if (press_units > 2046) press_units = 2046;
+    }
+
+    uint16_t hum_units;
+    if (isnan(humidity_percent) || humidity_percent < 0.0f || humidity_percent > 100.0f) {
+        hum_units = PRESS_HUM_HUM_INVALID;
+    } else {
+        hum_units = (uint16_t)(humidity_percent / HUMIDITY_SCALE_FACTOR + 0.5f);
+        if (hum_units > 20) hum_units = 20;
+    }
+
+    return (uint16_t)((hum_units << PRESS_HUM_HUM_SHIFT) | press_units);
 }
 
 /**
@@ -457,20 +548,6 @@ static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts)
     if (voltage_50mv_units > 255) voltage_50mv_units = 255;
     
     return (uint8_t)voltage_50mv_units;
-}
-
-/**
- * @brief Convert humidity to compact format with 5% resolution
- */
-static uint8_t ConvertHumidityToCompact(float humidity_percent)
-{
-    // Scale to 5% resolution
-    uint8_t humidity_5pct_units = (uint8_t)(humidity_percent / HUMIDITY_SCALE_FACTOR);
-    
-    // Clamp to valid range (0-20) = 0-100%
-    if (humidity_5pct_units > 20) humidity_5pct_units = 20;
-    
-    return humidity_5pct_units;
 }
 
 /**

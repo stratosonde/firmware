@@ -91,23 +91,75 @@ static void test_compact_packet(void)
 
     CHECK_EQ_I(pkt.timestamp_min, 1234);
     CHECK_EQ_I((uint8_t)pkt.temperature_2deg, 76);   /* 25/2 + 64 */
-    CHECK_EQ_I(pkt.pressure_10hPa, 6);               /* (1013.25-950)/10 */
-    CHECK_EQ_I(pkt.humidity_5pct, 9);                /* 45/5 */
+
+    /* D2 (#33): packed pressure+humidity — 1013.25 hPa -> 1013 units, 45% -> 9 units */
+    CHECK_EQ_I(pkt.press_hum & PRESS_HUM_PRESS_MASK, 1013);
+    CHECK_EQ_I(pkt.press_hum >> PRESS_HUM_HUM_SHIFT, 9);
+    /* stratospheric: 30 hPa must survive (v1 collapsed <950 hPa to 0) */
+    s.pressure = 30.0f;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_EQ_I(pkt.press_hum & PRESS_HUM_PRESS_MASK, 30);
+    /* out-of-range -> sentinel 2047 */
+    s.pressure = 3000.0f;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_EQ_I(pkt.press_hum & PRESS_HUM_PRESS_MASK, PRESS_HUM_PRESS_INVALID);
+    s.pressure = NAN;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_EQ_I(pkt.press_hum & PRESS_HUM_PRESS_MASK, PRESS_HUM_PRESS_INVALID);
+    s.pressure = 1013.25f;
+    s.humidity = NAN;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_EQ_I(pkt.press_hum >> PRESS_HUM_HUM_SHIFT, PRESS_HUM_HUM_INVALID);
+    s.humidity = 45.0f;
+
     CHECK_EQ_I(pkt.battery_volt_50mv, 100);          /* 5.0V/0.05 */
     CHECK(pkt.latitude_100m > 16300 && pkt.latitude_100m < 16470);
     CHECK(pkt.longitude_100m < -20700 && pkt.longitude_100m > -20810);
-    CHECK_EQ_I(pkt.status & 0x3F, 0);                /* no stale flags */
+
+    /* v2 status: no stale bits; GNSS-disciplined time bit set (fresh fix) */
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_EQ_I(pkt.status & (STATUS_GPS_STALE_MASK | STATUS_TEMP_STALE_MASK |
+                             STATUS_HUM_STALE_MASK | STATUS_PRESS_STALE_MASK), 0);
+    CHECK(pkt.status & STATUS_TIME_GNSS_MASK);
+    /* stale GPS -> stale bit set, GNSS-time bit clear */
+    s.gnss_stale = true;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK(pkt.status & STATUS_GPS_STALE_MASK);
+    CHECK(!(pkt.status & STATUS_TIME_GNSS_MASK));
+    s.gnss_stale = false;
 
     s.gnss_valid = false;
     CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
     CHECK_EQ_I(pkt.latitude_100m, 0);
     CHECK_EQ_I(pkt.longitude_100m, 0);
+    CHECK(!(pkt.status & STATUS_TIME_GNSS_MASK));
 
     /* Timestamp fallback uses SysTime (R45), not boot-relative RTC */
     g_fake_rtc_seconds = 123;
     g_fake_epoch = 1754500000U;
     CHECK(EncodeCompactBinaryPacket(&pkt, &s, 0, 0, MODE_NORMAL));
     CHECK_EQ_I(pkt.timestamp_min, (uint16_t)((g_fake_epoch / 60) & 0xFFFF));
+
+    /* Golden vector (D9/§13): dump exact LE bytes for backend cross-check.
+     * Must precede the wrap test — the wrap flag is sticky. */
+    {
+        sensor_t s3 = make_nominal_sensors();
+        CHECK(EncodeCompactBinaryPacket(&pkt, &s3, 1234, 0, MODE_NORMAL));
+        printf("GOLDEN heartbeat-v2:");
+        for (size_t i = 0; i < sizeof(pkt); i++)
+            printf(" %02X", ((const uint8_t *)&pkt)[i]);
+        printf("\n");
+    }
+
+    /* D4 (#33): wrap detection — a decreasing 16-bit minute count sets the
+     * sticky wrap flag */
+    {
+        sensor_t s2 = make_nominal_sensors();
+        CHECK(EncodeCompactBinaryPacket(&pkt, &s2, 65000, 0, MODE_NORMAL));
+        CHECK(!(pkt.status & STATUS_TS_WRAP_MASK));
+        CHECK(EncodeCompactBinaryPacket(&pkt, &s2, 10, 0, MODE_NORMAL));
+        CHECK(pkt.status & STATUS_TS_WRAP_MASK);   /* wrapped 65535 -> 10 */
+    }
 }
 
 static void test_highres_record(void)
@@ -132,7 +184,72 @@ static void test_highres_record(void)
     CHECK_EQ_I(rec.timestamp, g_fake_epoch);  /* R45 fallback */
 }
 
-static void test_flashlog_conversion(void)
+static void test_bulk_v3(void)
+{
+    /* D3 (#33): variable-length bulk, packet_type 0x03, explicit LE (D9) */
+    sensor_t s = make_nominal_sensors();
+    HighResTelemetryRecord_t recs[3];
+    for (int i = 0; i < 3; i++) {
+        CHECK(EncodeHighResTelemetryRecord(&recs[i], &s, 1754500123U + (uint32_t)i * 60,
+                                           -12, MODE_NORMAL));
+    }
+
+    uint8_t buf[198];
+    uint8_t packed = 0;
+    uint16_t len = 0;
+
+    /* Full budget: 3 records -> 2 + 96 + 4 = 102 bytes */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 198, recs, 3, &packed, &len));
+    CHECK_EQ_I(packed, 3);
+    CHECK_EQ_I(len, 102);
+    CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_VARIABLE);   /* 0x03 */
+    CHECK_EQ_I(buf[1], 3);
+    /* Record 0 fields, explicit LE */
+    CHECK_EQ_I((uint32_t)buf[2] | ((uint32_t)buf[3] << 8) |
+               ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), 1754500123u);
+    /* temperature 0.1°C at record offset 14 -> buf[2+14]=16: 250 = 0x00FA LE */
+    CHECK_EQ_I(buf[16] | (buf[17] << 8), 250);
+    /* pressure 0.1hPa at offset 18: 10132.5 -> 10133 or 10132 (float rounding) */
+    {
+        int p = buf[18] | (buf[19] << 8);
+        CHECK(p == 10132 || p == 10133);
+    }
+    /* per-record crc16 at bytes 30-31 of the record validates over bytes 0-29 */
+    CHECK_EQ_I(buf[32] | (buf[33] << 8), CalculateCRC16(buf + 2, 30));
+    /* packet crc32 LE over [0, len-4) */
+    {
+        uint32_t wire_crc = (uint32_t)buf[len-4] | ((uint32_t)buf[len-3] << 8) |
+                            ((uint32_t)buf[len-2] << 16) | ((uint32_t)buf[len-1] << 24);
+        CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, len - 4));
+    }
+
+    /* Budget for exactly 2 records (70 B): packs 2, third stays pending */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 70, recs, 3, &packed, &len));
+    CHECK_EQ_I(packed, 2);
+    CHECK_EQ_I(len, 70);
+
+    /* Budget for 1 record (38 B) */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 38, recs, 3, &packed, &len));
+    CHECK_EQ_I(packed, 1);
+    CHECK_EQ_I(len, 38);
+
+    /* Budget too small for even one record (37 B): fails, packs nothing */
+    CHECK(!EncodeBulkPacketV3(buf, sizeof(buf), 37, recs, 3, &packed, &len));
+    CHECK_EQ_I(packed, 0);
+
+    /* Buffer cap smaller than budget: buf_cap wins */
+    CHECK(EncodeBulkPacketV3(buf, 70, 198, recs, 3, &packed, &len));
+    CHECK_EQ_I(packed, 2);
+    CHECK_EQ_I(len, 70);
+
+    /* Golden vector (D9/§13): exact LE bytes, 2-record packet */
+    CHECK(EncodeBulkPacketV3(buf, sizeof(buf), 70, recs, 3, &packed, &len));
+    printf("GOLDEN bulk-v3 (2 records):");
+    for (uint16_t i = 0; i < len; i++) printf(" %02X", buf[i]);
+    printf("\n");
+}
+
+
 {
     FlashLog_Record_t fr;
     memset(&fr, 0, sizeof(fr));
@@ -297,6 +414,7 @@ int main(void)
     test_compact_packet();
     test_highres_record();
     test_flashlog_conversion();
+    test_bulk_v3();
     test_power_model();
     test_decide_transmit_plan();
     test_nmea_checksum_guard();

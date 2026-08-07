@@ -123,37 +123,62 @@ If an acknowledgement is lost but the backend received the packet:
 
 This is intentional.
 
-## 6. FPort 10 — existing mission heartbeat
+## 6. FPort 10 — mission heartbeat v2
 
-Current payload length: 11 bytes.
+Payload length: 11 bytes (unchanged; exact fit at US915 DR0). All multibyte fields little-endian.
 
-| Offset | Size | Field | Current source representation |
+v2 (current firmware, D1/D2/D4, issue #33):
+
+| Offset | Size | Field | Encoding |
 |---:|---:|---|---|
-| 0 | 2 | Timestamp minutes modulo 65536 | `uint16_t` |
-| 2 | 2 | Scaled latitude | `int16_t` |
-| 4 | 2 | Scaled longitude | `int16_t` |
-| 6 | 1 | Temperature code | 2 °C steps with offset |
-| 7 | 1 | Pressure code | Current legacy 950 hPa base conversion |
-| 8 | 1 | Battery code | 50 mV steps |
-| 9 | 1 | Humidity code | 5% steps |
-| 10 | 1 | Status | Stale flags, reset cause, mission state |
+| 0 | 2 | Timestamp minutes modulo 65536 | `uint16_t` LE; wraps every 45.5 days — see status bit 5 |
+| 2 | 2 | Latitude | `int16_t` LE, full-range scale: deg = value × 90 / 32767 |
+| 4 | 2 | Longitude | `int16_t` LE, full-range scale: deg = value × 180 / 32767 |
+| 6 | 1 | Temperature code | 2 °C steps, offset +64 (unsigned byte 0-255 → −64…+63.5 °C) |
+| 7 | 2 | Pressure + humidity packed | `uint16_t` LE: bits 0-10 pressure in 1 hPa (0-2046 valid; 2047 = invalid); bits 11-15 humidity in 5% steps (0-20 valid; 31 = invalid) |
+| 9 | 1 | Battery code | 50 mV steps |
+| 10 | 1 | Status v2 | see bit table below |
+
+Status v2 bits:
+
+| Bits | Meaning |
+|---:|---|
+| 0 | GPS stale (last-known-good position) |
+| 1 | Temperature stale |
+| 2 | Humidity stale |
+| 3 | Pressure stale |
+| 4 | RTC GNSS-disciplined this cycle (N-03) |
+| 5 | `timestamp_min` has wrapped its 45.5-day range (D4) |
+| 6-7 | Mission state (0=COMMISSIONING, 1=PRE_FLIGHT, 2=FLIGHT, 3=RECOVERY) |
+
+v1 → v2 changes: bytes 7-8 were separate legacy pressure code (950 hPa base, collapsed below 950 hPa) and humidity code; status bits 3-4 were a condensed reset cause and bit 5 was pressure-stale. Reset cause is no longer on the wire (it remains in flash/bulk records). v1 and v2 share port and length; discrimination is by deployment epoch plus the golden vectors in §13 — v1 never flew.
 
 The heartbeat is intentionally coarse. It is not the authoritative science record.
 
-### 6.1 Known heartbeat limitations
+### 6.1 Probe data rate (D1)
 
-Before freezing this layout, resolve:
+In US915/AU915 the heartbeat is sent at SF9 (DR1): the SF10/DR0 11-byte budget is an exact fit with zero headroom there; SF9 buys 42 bytes of headroom for ~2.5 dB of link budget. Elsewhere the heartbeat uses SF10. The data rate is resolved per region from spreading-factor intent, never from a hardcoded DR integer.
 
-- Current pressure conversion collapses pressures below 950 hPa to zero and is unsuitable through most balloon ascent and float.
-- The 16-bit Unix-minute value wraps every 45.5 days.
-- Current comments and decoder byte order must be reconciled.
-- Field changes require a version signal or new port.
+## 7. FPort 11 — core science archive
 
-A proposed heartbeat v2 should preserve the 11-byte long-range budget while providing useful stratospheric pressure and unambiguous mission-time reconstruction.
+The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = current variable-length.
 
-## 7. FPort 11 — existing core science archive v2
+### 7.1 Archive v3 (current firmware, D3, issue #33)
 
-Current payload length: 198 bytes.
+Variable length: `2 + 32n + 4` bytes. Header:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 1 | Packet type, `0x03` |
+| 1 | 1 | Record count n, 1-6 |
+
+n complete 32-byte records follow (layout below), explicitly little-endian serialized (§3's explicit-serialization requirement lands with this version). The packet ends with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
+
+The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many oldest complete records as fit. Records cut by the budget remain pending with stable identity (§4, §7.3).
+
+### 7.2 Archive v2 (legacy)
+
+Payload length: 198 bytes fixed.
 
 Header:
 
@@ -192,7 +217,7 @@ Packet trailer:
 
 Legacy packet type `0x01` used 222 bytes and is retained only for backend compatibility.
 
-### 7.1 Core archive identity requirement
+### 7.3 Core archive identity requirement
 
 The backend and firmware need a stable identity for every durable record. Timestamp alone is not sufficient under resets, duplicate timestamps, or clock correction.
 
@@ -349,8 +374,11 @@ The desired strategy differs from the current implementation in several importan
 - Current bulk packets are unconfirmed.
 - Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement.
 - Current queue handling and count-based record marking require transactional repair.
-- Current FPort 10 pressure representation is not useful at stratospheric pressure.
-- Existing byte-order documentation conflicts with direct packed-structure transmission.
+
+Resolved by the heartbeat v2 / archive v3 rework (#33):
+
+- ~~Current FPort 10 pressure representation is not useful at stratospheric pressure~~ — v2 packs 1 hPa over 0-2046 hPa.
+- ~~Existing byte-order documentation conflicts with direct packed-structure transmission~~ — LE is wire truth (D9); archive v3 records are explicitly LE-serialized; heartbeat v2 documented LE.
 
 These are implementation tasks, not merely documentation changes.
 
