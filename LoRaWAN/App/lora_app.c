@@ -1261,20 +1261,30 @@ static void SendTxData(void)
   /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
    * sensor re-read — so position, time, and environment in a record describe
    * the same moment. Timestamp is taken fresh at write time. */
-  SONDE_LOG_STR("Logging high-resolution data to flash...\r\n");
-  /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
-   * delta stored in backup regs), NOT boot-relative RTC calendar time.
-   * Before the first GPS fix this falls back to boot-relative seconds —
-   * honest, monotonic, and distinguishable (small values) from epoch. */
-  now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
-  FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp,
-                                                           slope_mv_per_hour, (uint8_t)current_mode);
-  if (log_status == FLASH_LOG_OK) {
-    uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
-    SONDE_LOG("Flash log: Written record %lu (total records: %lu)\r\n",
-                      record_count, record_count);
+  /* F-07 (#68): only archive genuine, freshly-sampled telemetry records.
+   * OnTxData re-arms this task once per BULK packet (DDR-0011/#34); the bulk
+   * path skips GPS entirely (hgnss.data memset above), so archiving those
+   * passes wrote up to 20 junk records (gnss_valid=0) per bulk cycle —
+   * accelerating ring wrap and burning W25Q + Tier-2 internal-flash erase
+   * cycles (worst case ~33 days to internal-flash endurance). */
+  if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+    SONDE_LOG_STR("Logging high-resolution data to flash...\r\n");
+    /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
+     * delta stored in backup regs), NOT boot-relative RTC calendar time.
+     * Before the first GPS fix this falls back to boot-relative seconds —
+     * honest, monotonic, and distinguishable (small values) from epoch. */
+    now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
+    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp,
+                                                             slope_mv_per_hour, (uint8_t)current_mode);
+    if (log_status == FLASH_LOG_OK) {
+      uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
+      SONDE_LOG("Flash log: Written record %lu (total records: %lu)\r\n",
+                        record_count, record_count);
+    } else {
+      SONDE_LOG("Flash log: Write failed (status: %d)\r\n", log_status);
+    }
   } else {
-    SONDE_LOG("Flash log: Write failed (status: %d)\r\n", log_status);
+    SONDE_LOG_STR("Flash log: bulk retransmit cycle — archive write skipped\r\n");
   }
 
   // Initialize Cayenne LPP payload
