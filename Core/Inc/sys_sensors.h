@@ -98,6 +98,12 @@ int32_t EnvSensors_Init(void);
   */
  int32_t EnvSensors_Read(sensor_t *sensor_data);
 
+/* F-030 (#59): EnvSensors_Read freshness bitmask bits */
+#define ENV_SENSORS_FRESH_TEMP       0x01
+#define ENV_SENSORS_FRESH_HUMIDITY   0x02
+#define ENV_SENSORS_FRESH_PRESSURE   0x04
+#define ENV_SENSORS_FRESH_GNSS       0x08
+
 /**
   * @brief  Mark GNSS position data as stale/fresh (T2 / DDR-0007).
   *         Called by the TX path: true on fix timeout (last-known-good in

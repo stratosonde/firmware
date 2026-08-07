@@ -28,8 +28,15 @@ typedef enum {
 } MissionState_t;
 
 /** @brief Ascent duration before settling to float cadence (timer-based, DDR-0008) */
-#ifndef MISSION_ASCENT_DURATION_MS
-#define MISSION_ASCENT_DURATION_MS   (3UL * 60UL * 60UL * 1000UL)  /* 3 hours */
+/* D8 (#59): float detection is pressure-based, not a timer. Pressure is the
+ * reliable signal at altitude and the determination is effectively
+ * stateless-from-sensor — a cold-snap reset no longer stretches the ascent
+ * cadence indefinitely (F-028 concern eliminated by construction). */
+#ifndef MISSION_FLOAT_DP_HPA
+#define MISSION_FLOAT_DP_HPA        2.0f   /* |ΔP| below this = level flight */
+#endif
+#ifndef MISSION_FLOAT_LEVEL_SAMPLES
+#define MISSION_FLOAT_LEVEL_SAMPLES 3      /* consecutive level cycles = FLOAT */
 #endif
 
 /**
@@ -48,7 +55,7 @@ bool MissionState_IsCommissioning(void);
 void MissionState_EnterFlight(void);
 
 /** @brief Call each work cycle: ASCENT -> FLOAT by timer (DDR-0008). */
-void MissionState_Update(void);
+void MissionState_Update(float pressure_hpa, bool pressure_valid);
 
 /** @brief 2-bit code for the uplink status byte (b6-b7, DDR-0007) */
 uint8_t MissionState_GetStatusBits(void);

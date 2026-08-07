@@ -240,7 +240,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss);
   * @param  timeout: Timeout in milliseconds
   * @retval GNSS status
   */
-GNSS_StatusTypeDef GNSS_GetPosition(GNSS_HandleTypeDef *hgnss, uint32_t timeout);
+/* F-023/D12 (#59): GNSS_GetPosition deleted — dead blocking API. */
 
 /**
   * @brief  Parse NMEA sentence

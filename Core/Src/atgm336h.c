@@ -277,62 +277,8 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   return GNSS_OK;
 }
 
-/**
-  * @brief  Get position data from GNSS module
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  timeout: Timeout in milliseconds
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_GetPosition(GNSS_HandleTypeDef *hgnss, uint32_t timeout)
-{
-  if (hgnss == NULL || !hgnss->is_initialized)
-  {
-    return GNSS_ERROR;
-  }
-
-  if (!hgnss->is_powered)
-  {
-    return GNSS_ERROR;
-  }
-
-  uint32_t start_tick = HAL_GetTick();
-  
-  /* Clear previous data validity */
-  hgnss->data.valid = false;
-
-  SEGGER_RTT_WriteString(0, "GNSS_GetPosition: Waiting for fix (DMA circular buffer)...\r\n");
-
-  /* Wait for valid fix or timeout */
-  /* DMA fills buffer in background, we process it in main loop context */
-  uint32_t loop_count = 0;
-  
-  while ((HAL_GetTick() - start_tick) < timeout)
-  {
-    /* Process DMA buffer data - safe for main loop (no ISR conflicts) */
-    GNSS_ProcessDMABuffer(hgnss);
-      
-    /* Check if we have a valid fix now */
-    if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID)
-    {
-      SEGGER_RTT_WriteString(0, "GNSS: VALID FIX!\r\n");
-      return GNSS_OK;
-    }
-    
-    /* Sleep/Yield to allow background tasks */
-    HAL_Delay(10);
-    
-    /* Print status every 5 loops (~50ms) for short timeouts */
-    loop_count++;
-    if (loop_count % 5 == 0)
-    {
-      SEGGER_RTT_WriteString(0, "[GNSS: Waiting for fix...]\r\n");
-    }
-  }
-
-  SEGGER_RTT_WriteString(0, "\r\nGNSS_GetPosition: TIMEOUT - No valid fix obtained\r\n");
-
-  return GNSS_TIMEOUT;
-}
+/* F-023/D12 (#59): GNSS_GetPosition DELETED — dead blocking API (no callers,
+ * HAL_Delay spin with no IWDG refresh). Don't leave brick functions behind. */
 
 /**
   * @brief  Process received UART data byte by byte (LEGACY - kept for compatibility)

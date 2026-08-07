@@ -877,7 +877,6 @@ static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
   Deadman_MarkProgress();  /* F13a: a work cycle provably started */
-  MissionState_Update();   /* FW-3: ASCENT -> FLOAT transition (contract: call each work cycle) */
 
   /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
   static VoltageSlope_t voltage_slope = {0};
@@ -885,6 +884,7 @@ static void SendTxData(void)
   // Read current sensor data for temperature
   sensor_t sensor_data;
   EnvSensors_Read(&sensor_data);
+  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
   float temperature_c = sensor_data.temperature;
 
   // Read raw voltages

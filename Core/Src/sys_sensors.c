@@ -300,7 +300,15 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
                       hgnss.data.satellites_in_view);
   }
 
-  return 0;
+  /* F-030 (#59): per-sensor freshness bitmask — the top-level return no
+   * longer hides total acquisition failure. 1 bit = fresh live read this
+   * cycle; 0 = stale/never-acquired (the staleness flags carry the detail). */
+  int32_t status = 0;
+  if (!sensor_data->temp_stale)  status |= ENV_SENSORS_FRESH_TEMP;
+  if (!sensor_data->hum_stale)   status |= ENV_SENSORS_FRESH_HUMIDITY;
+  if (!sensor_data->press_stale) status |= ENV_SENSORS_FRESH_PRESSURE;
+  if (!sensor_data->gnss_stale && sensor_data->gnss_valid) status |= ENV_SENSORS_FRESH_GNSS;
+  return status;
   /* USER CODE END EnvSensors_Read */
 }
 

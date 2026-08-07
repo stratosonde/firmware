@@ -23,7 +23,10 @@ extern RTC_HandleTypeDef hrtc;
 #define MISSION_STATE_MASK      0xFFFF0000UL
 
 static MissionState_t s_state = MISSION_COMMISSIONING;
-static uint32_t s_ascent_start_tick = 0;
+/* D8 (#59): pressure-trend float detection state (no timer) */
+static float    s_last_pressure_hpa = 0.0f;
+static uint8_t  s_level_count = 0;
+static bool     s_have_pressure_ref = false;
 
 static void MissionState_Persist(void)
 {
@@ -67,10 +70,6 @@ void MissionState_Init(void)
         s_state = MISSION_COMMISSIONING;
     }
 
-    if (s_state == MISSION_ASCENT) {
-        s_ascent_start_tick = HAL_GetTick();  /* Reboot restarts ascent timer (safe) */
-    }
-
     MissionState_Persist();
 
     SEGGER_RTT_printf(0, "MissionState: %s (bank %s, DR3 %s)\r\n",
@@ -95,21 +94,42 @@ void MissionState_EnterFlight(void)
     /* One-way door: COMMISSIONING -> ASCENT, never back */
     if (s_state == MISSION_COMMISSIONING) {
         s_state = MISSION_ASCENT;
-        s_ascent_start_tick = HAL_GetTick();
         MissionState_Persist();
         SEGGER_RTT_WriteString(0, "MissionState: COMMISSIONING -> FLIGHT (ASCENT)\r\n");
     }
 }
 
-void MissionState_Update(void)
+void MissionState_Update(float pressure_hpa, bool pressure_valid)
 {
-    /* ASCENT -> FLOAT by timer (DDR-0008: cannot be fooled by any sensor) */
-    if (s_state == MISSION_ASCENT &&
-        (HAL_GetTick() - s_ascent_start_tick) >= MISSION_ASCENT_DURATION_MS) {
-        s_state = MISSION_FLOAT;
-        MissionState_Persist();
-        SEGGER_RTT_WriteString(0, "MissionState: ASCENT -> FLOAT\r\n");
+    /* D8 (#59): ASCENT -> FLOAT by pressure trend, not elapsed time.
+     * Float = |ΔP| below threshold for N consecutive work cycles. Stale or
+     * invalid pressure cannot prove float — stay in ASCENT (more uplinks,
+     * the safe direction, DDR-0002). No timer to restart on cold-snap reset. */
+    if (s_state != MISSION_ASCENT) {
+        return;
     }
+    if (!pressure_valid) {
+        s_level_count = 0;
+        s_have_pressure_ref = false;
+        return;
+    }
+
+    if (s_have_pressure_ref) {
+        float dp = pressure_hpa - s_last_pressure_hpa;
+        if (dp < 0.0f) dp = -dp;
+        if (dp < MISSION_FLOAT_DP_HPA) {
+            if (s_level_count < 255) s_level_count++;
+        } else {
+            s_level_count = 0;
+        }
+        if (s_level_count >= MISSION_FLOAT_LEVEL_SAMPLES) {
+            s_state = MISSION_FLOAT;
+            MissionState_Persist();
+            SEGGER_RTT_WriteString(0, "MissionState: ASCENT -> FLOAT (pressure level)\r\n");
+        }
+    }
+    s_last_pressure_hpa = pressure_hpa;
+    s_have_pressure_ref = true;
 }
 
 uint8_t MissionState_GetStatusBits(void)
