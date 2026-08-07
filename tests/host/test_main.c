@@ -250,6 +250,7 @@ static void test_bulk_v3(void)
 }
 
 
+static void test_flashlog_conversion(void)
 {
     FlashLog_Record_t fr;
     memset(&fr, 0, sizeof(fr));
