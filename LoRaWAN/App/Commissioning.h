@@ -46,18 +46,7 @@
  ******************************************************************************
  ******************************************************************************
  */
-/* F6: real keys live in the gitignored se-identity.h (copy se-identity-template.h
- * and fill in). CI / no-keys checkouts fall back to the tracked template with
- * zeroed placeholder keys — compiles everywhere, never flyable. */
-#if defined(__has_include)
-  #if __has_include("se-identity.h")
-    #include "se-identity.h"
-  #else
-    #include "se-identity-template.h"
-  #endif
-#else
-  #include "se-identity.h"
-#endif
+#include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
 #include "LoRaMacVersion.h"
 
 /* USER CODE BEGIN EC1 */

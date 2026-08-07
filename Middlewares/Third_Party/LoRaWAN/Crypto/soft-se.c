@@ -52,16 +52,7 @@
 
 #include "secure-element.h"
 #include "secure-element-nvm.h"
-/* F6: gitignored real keys, tracked zeroed template fallback (see Commissioning.h) */
-#if defined(__has_include)
-  #if __has_include("se-identity.h")
-    #include "se-identity.h"
-  #else
-    #include "se-identity-template.h"
-  #endif
-#else
-  #include "se-identity.h"
-#endif
+#include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
 
 /* Private constants ---------------------------------------------------------*/
 #ifndef LORAWAN_KMS

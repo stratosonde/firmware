@@ -21,7 +21,7 @@
 #include "lora_app.h"
 #include "LmHandler.h"
 #include "LoRaMac.h"
-#include "se-identity.h"
+#include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
 #include "stm32wlxx_hal.h"
 #include "SEGGER_RTT.h"
 #include <string.h>
