@@ -404,9 +404,11 @@ bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss)
   */
 bool GNSS_ValidateCoordinates(float lat, float lon)
 {
+  /* R32 (#57): range-only. (0,0) is a legitimate Gulf of Guinea fix; a no-fix
+   * state is detected by token presence in the parser (have_lat/have_lon) and
+   * by the data.valid flag - never by a magic coordinate value. */
   return (lat >= -90.0f && lat <= 90.0f && 
-          lon >= -180.0f && lon <= 180.0f &&
-          (lat != 0.0f || lon != 0.0f)); // Reject null island (0,0)
+          lon >= -180.0f && lon <= 180.0f);
 }
 
 /**
