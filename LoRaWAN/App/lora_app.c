@@ -907,149 +907,25 @@ static void SysTimeSyncFromGnss(void)
   SONDE_LOG("SysTime disciplined from GPS: %lu epoch seconds\r\n",
                     (unsigned long)epoch);
 }
+/* =============================================================================
+ * F-R1 (#74): SendTxData decomposed into phases. Pure code motion — every
+ * hardware call, delay, log, and decision is byte-for-byte the code that used
+ * to be inlined; only the surrounding braces changed. Deadman_MarkProgress()
+ * remains the FIRST statement of SendTxData (DDR-0001) and the mission-state
+ * early-returns stay top-level.
+ * =============================================================================*/
 
-static void SendTxData(void)
+/**
+ * @brief F-R1 (#74): power-cycle the GNSS, acquire a fix within gps_timeout_ms,
+ *        maintain last-known-good (F-15 backup regs; F8/T2 stale marking), then
+ *        return the GPS to full power-off. Feeds the IWDG during acquisition.
+ * @param gps_timeout_ms acquisition bound from the power plan
+ * @param ttf_ms out: time-to-fix (0 if no fix / wake failed)
+ * @retval true  GPS woke and the cycle ran (fix or documented fallback)
+ * @retval false wake from standby failed — caller must skip region selection
+ */
+static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
 {
-  /* USER CODE BEGIN SendTxData_1 */
-  Deadman_MarkProgress();  /* F13a: a work cycle provably started */
-
-  /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
-  static VoltageSlope_t voltage_slope = {0};
-
-  // Read current sensor data for temperature
-  sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
-  EnvSensors_Read(&sensor_data);
-  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
-  float temperature_c = sensor_data.temperature;
-
-  // Read raw voltages
-  uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
-  uint16_t solar_mv = SYS_GetSolarVoltage();
-
-  // Use RTC-based time that continues during STOP2 sleep
-  uint16_t ms_unused;
-  uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
-
-  /* R47: mode selection, slope/prediction, GPS temperature lockout and the
-   * RF-silence veto all live in the pure decide half (transmit_plan.c) —
-   * host-testable with zero hardware. The plan records WHY, not just THAT. */
-  TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
-                                           temperature_c, sensor_data.temp_stale != 0,
-                                           now_timestamp,
-                                           LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
-                                           MissionState_IsCommissioning());
-  bool gps_enabled_by_power_mgmt = plan.gps_enabled;
-  uint32_t gps_timeout_ms = plan.gps_timeout_ms;
-  OperatingMode_t current_mode = plan.power_mode;
-  int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
-  int16_t time_to_target_signed = plan.time_to_target_h;
-  uint16_t battery_mv_normalized = plan.battery_mv_normalized;
-
-  // Update timer interval if changed
-  UTIL_TIMER_Stop(&TxTimer);
-  UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms);
-  UTIL_TIMER_Start(&TxTimer);
-  
-  // Log power management status
-  /* F27 FIX: integer-only print (no float printf support linked) */
-  int temp_deci_pm = (int)(temperature_c * 10.0f);
-  char pm_msg[256];
-  snprintf(pm_msg, sizeof(pm_msg),
-           "\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
-           temp_deci_pm / 10, abs(temp_deci_pm % 10),
-           battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
-  SONDE_LOG_STR(pm_msg);
-  
-  if (time_to_target_signed < 0) {
-    snprintf(pm_msg, sizeof(pm_msg), "Critical_in=%dh ", abs(time_to_target_signed));
-  } else if (time_to_target_signed > 0) {
-    snprintf(pm_msg, sizeof(pm_msg), "Full_in=%dh ", time_to_target_signed);
-  } else {
-    snprintf(pm_msg, sizeof(pm_msg), "Stable ");
-  }
-  SONDE_LOG_STR(pm_msg);
-  
-  snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
-           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
-  SONDE_LOG_STR(pm_msg);
-  
-  /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
-   * (see below). Previously the record was written here with the PREVIOUS
-   * cycle's position and the CURRENT timestamp — the whole track was
-   * spatially stale by one interval. */
-
-  /* ========== END POWER MANAGEMENT ========== */
-  
-  /* T1 ladder (DDR-0006): rejoin is a COMMISSIONING-ONLY operation.
-   * In FLIGHT, an invalid session means RF silence — keep flying the profile
-   * (GPS + flash logging below), skip only the transmission. */
-  bool rf_silence = false;
-  if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
-  {
-    if (MissionState_IsCommissioning()) {
-      SONDE_LOG_STR("SendTxData: Not joined yet, triggering join retry...\r\n");
-      LmHandlerJoin(ActivationType, true);
-      return; /* Exit - will send data after join succeeds */
-    }
-    rf_silence = true;
-    SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
-  }
-
-  SONDE_LOG_STR("\r\n=== SendTxData START ===\r\n");
-
-  /* ========== GPS POWER-CYCLING MODE ========== */
-  /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
-   * is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
-   * flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
-   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected. */
-  // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
-  
-  /* Declare ttf_ms at function scope so it's available for telemetry */
-  uint32_t ttf_ms = 0;
-  
-  // Check if GPS is disabled by power management or bulk transfer mode
-  // C7a FIX: Skip GPS during bulk transfer - we're sending cached flash data, not live telemetry
-  if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
-    /* GPS disabled - skip acquisition */
-    if (g_tx_state == TX_STATE_BULK_TRANSFER) {
-      SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
-    } else {
-      SONDE_LOG_STR("GPS disabled by power management - skipping acquisition\r\n");
-    }
-    /* R31 (#57): FULL invalidation before/without acquisition — clear all of
-     * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
-     * The GGA parser skips empty tokens, so a partial sentence must never meet
-     * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
-    memset(&hgnss.data, 0, sizeof(hgnss.data));
-    ttf_ms = 0;  // No GPS acquisition performed
-  } else {
-  
-  #ifdef GPS_DISABLED_FOR_TESTING
-  
-  /* Use fake GPS data for testing MCU sleep mode */
-  SONDE_LOG_STR("GPS DISABLED FOR TESTING - using fake coordinates\r\n");
-  
-  /* Simulate GPS fix data */
-  hgnss.data.valid = true;
-  hgnss.data.fix_quality = GNSS_FIX_GPS;
-  hgnss.data.latitude = 39.8283;    // Geographic center of contiguous USA (Kansas)
-  hgnss.data.longitude = -98.5795;
-  hgnss.data.altitude = 500.0f;     // meters (approximate)
-  hgnss.data.satellites = 8;
-  hgnss.data.hdop = 1.2f;
-  
-  ttf_ms = 0;  /* No actual fix acquired */
-  
-  SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
-  
-  #else
-  
-  /* ========== NORMAL GPS COLLECTION ========== */
-  /* Non-blocking GNSS collection - wake from standby, capture fix quickly
-   * GPS module in standby provides hot-start: <1s typical, 5s worst case
-   * With Vbat backup and PMTK161 standby, we get instant fixes
-   * gps_timeout_ms is dynamic (30s or 60s) based on power mode
-   */
   #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
   
   /* Last known GPS position storage (persistent across transmission cycles) */
@@ -1071,14 +947,18 @@ static void SendTxData(void)
     }
   }
   
-  /* Declare gps_start - ttf_ms already declared above */
+  /* gps_start local; ttf_ms is the out-param */
   uint32_t gps_start = 0;
-  ttf_ms = 0;  /* Will be updated when fix is obtained */
+  *ttf_ms = 0;  /* Will be updated when fix is obtained */
   
   SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
-  if (GNSS_WakeFromStandby(&hgnss) == GNSS_OK)
+  if (GNSS_WakeFromStandby(&hgnss) != GNSS_OK)
   {
+    SONDE_LOG_STR("GPS: Wake from standby failed!\r\n");
+    return false;
+  }
+
     /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
     /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
     /* R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
@@ -1105,7 +985,7 @@ static void SendTxData(void)
       if (GNSS_IsFixGoodQuality(&hgnss))
       {
         got_fix = true;
-        ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
+        *ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
         
         /* Convert floats to integers for safe printf (no float support needed) */
         int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);
@@ -1201,8 +1081,17 @@ static void SendTxData(void)
     /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
     GNSS_EnterStandby(&hgnss);
     SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
-    
-    /* Perform H3lite region lookup if we have a valid fix */
+  return true;
+}
+
+/**
+ * @brief F-R1 (#74): H3 region lookup + auto-switch for the current position.
+ *        F-06/DDR-0013: deliberately runs on possibly-stale last-known
+ *        position (see comment inline). REGION_RESTRICTED sets *rf_silence;
+ *        REGION_UNKNOWN keeps the current region and transmits normally.
+ */
+static void SelectRegionAndSession(bool *rf_silence)
+{    /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 
         GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
     {
@@ -1242,7 +1131,7 @@ static void SendTxData(void)
          * use the rf_silence pattern (DDR-0006) — GPS + re-read + flash write
          * proceed below; only the TX state machine is skipped. */
         SONDE_LOG_STR("RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
-        rf_silence = true;
+        *rf_silence = true;
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
@@ -1293,23 +1182,17 @@ static void SendTxData(void)
     {
       SONDE_LOG_STR("H3 Region Lookup: Skipped (no valid GPS fix)\r\n");
     }
-  }
-  else
-  {
-    SONDE_LOG_STR("GPS: Wake from standby failed!\r\n");
-  }
-  
-  #endif  /* GPS_DISABLED_FOR_TESTING */
-  }  /* End of else block for gps_enabled_by_power_mgmt */
+}
 
-  /* Add separator before continuing to telemetry */
-  SONDE_LOG_STR("\r\n");
-  
-  // CRITICAL: Re-read sensor data AFTER GPS acquisition to include fresh GPS fix
-  SONDE_LOG_STR("Re-reading sensor data to capture fresh GPS fix...\r\n");
-  EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
-  SONDE_LOG_STR("Sensor data refreshed with current GPS position\r\n");
-
+/**
+ * @brief F-R1 (#74): archive the freshly-sampled record to the flash ring.
+ *        F11: runs AFTER the GPS fix + post-fix sensor re-read so position,
+ *        time, and environment describe the same moment. F-07 (#68): bulk
+ *        retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
+ */
+static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
+                          int16_t slope_mv_per_hour, OperatingMode_t current_mode)
+{
   /* ========== FLASH LOGGING: Store high-resolution data ========== */
   /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
    * sensor re-read — so position, time, and environment in a record describe
@@ -1326,8 +1209,8 @@ static void SendTxData(void)
      * delta stored in backup regs), NOT boot-relative RTC calendar time.
      * Before the first GPS fix this falls back to boot-relative seconds —
      * honest, monotonic, and distinguishable (small values) from epoch. */
-    now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
-    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, &sensor_data, now_timestamp,
+    *now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
+    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data, *now_timestamp,
                                                              slope_mv_per_hour, (uint8_t)current_mode);
     if (log_status == FLASH_LOG_OK) {
       uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
@@ -1339,27 +1222,37 @@ static void SendTxData(void)
   } else {
     SONDE_LOG_STR("Flash log: bulk retransmit cycle — archive write skipped\r\n");
   }
+}
 
+/**
+ * @brief F-R1 (#74): build the CayenneLPP debug payload. Only transmitted when
+ *        ENABLE_DEBUG_LPP is set (see SendTxData tail); the build itself stays
+ *        unconditional here, exactly as before the extraction.
+ */
+static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
+                                 int16_t slope_mv_per_hour, int16_t time_to_target_signed,
+                                 OperatingMode_t current_mode)
+{
   // Initialize Cayenne LPP payload
   CayenneLppReset();
   SONDE_LOG_STR("CayenneLpp reset\r\n");
   
   // Add temperature data (channel 1)
-  CayenneLppAddTemperature(1, sensor_data.temperature);
+  CayenneLppAddTemperature(1, sensor_data->temperature);
   
   // Add humidity data (channel 2)
-  CayenneLppAddRelativeHumidity(2, sensor_data.humidity);
+  CayenneLppAddRelativeHumidity(2, sensor_data->humidity);
   
   // Add pressure data (channel 3)
-  CayenneLppAddBarometricPressure(3, sensor_data.pressure);
+  CayenneLppAddBarometricPressure(3, sensor_data->pressure);
   
   // Add GPS data (channel 4) - use zeros if GNSS fix is invalid
   float lat, lon, alt;
-  if (sensor_data.gnss_valid) {
+  if (sensor_data->gnss_valid) {
     // Convert from binary format back to decimal degrees for Cayenne
-    lat = (sensor_data.latitude * 90.0f) / 8388607.0f;
-    lon = (sensor_data.longitude * 180.0f) / 8388607.0f;
-    alt = (float)sensor_data.altitudeGps;
+    lat = (sensor_data->latitude * 90.0f) / 8388607.0f;
+    lon = (sensor_data->longitude * 180.0f) / 8388607.0f;
+    alt = (float)sensor_data->altitudeGps;
     
     SONDE_LOG_STR("GNSS data valid\r\n");
   } else {
@@ -1374,19 +1267,19 @@ static void SendTxData(void)
   CayenneLppAddGps(4, lat, lon, alt);
   
   // Add number of satellites as analog input (channel 5) - value 0-255
-  CayenneLppAddAnalogInput(5, (float)sensor_data.satellites);
+  CayenneLppAddAnalogInput(5, (float)sensor_data->satellites);
   
   // Add battery voltage on channel 6 (in volts)
-  CayenneLppAddAnalogInput(6, sensor_data.battery_voltage);
+  CayenneLppAddAnalogInput(6, sensor_data->battery_voltage);
 
   // Add regulator voltage (3.3V rail) on channel 7 (in volts)
-  CayenneLppAddAnalogInput(7, sensor_data.regulator_voltage);
+  CayenneLppAddAnalogInput(7, sensor_data->regulator_voltage);
 
   // Add solar panel voltage on channel 10 (in volts)
-  CayenneLppAddAnalogInput(10, sensor_data.solar_voltage);
+  CayenneLppAddAnalogInput(10, sensor_data->solar_voltage);
   
   // Add GNSS HDOP on channel 8 (Horizontal Dilution of Precision)
-  CayenneLppAddAnalogInput(8, sensor_data.gnss_hdop);
+  CayenneLppAddAnalogInput(8, sensor_data->gnss_hdop);
   
   // Add TTF (Time To Fix) on channel 9 (in seconds, 0.01s resolution)
   // Convert from milliseconds to seconds to avoid int16_t overflow in Cayenne LPP
@@ -1404,13 +1297,23 @@ static void SendTxData(void)
   CayenneLppAddAnalogInput(14, (float)current_mode);
 
   /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
-  int hdop_int = (int)(sensor_data.gnss_hdop * 10);
+  int hdop_int = (int)(sensor_data->gnss_hdop * 10);
   char lpp_msg[120];
   snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n", 
            hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms, 
            slope_mv_per_hour, time_to_target_signed, current_mode);
-  SONDE_LOG_STR(lpp_msg);
-  
+  SONDE_LOG_STR(lpp_msg);}
+
+/**
+ * @brief F-R1 (#74): the adaptive transmit state machine (probe SF10 -> wait
+ *        ACK -> bulk transfer -> complete). DDR-0011 confirmed uplinks; D3
+ *        (#33) v3 variable-length bulk; F-005/F-006 (#51) watermark semantics.
+ *        rf_silence (DDR-0006/R11) parks the machine without transmitting.
+ */
+static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestamp,
+                              int16_t slope_mv_per_hour, OperatingMode_t current_mode,
+                              bool rf_silence)
+{
   /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
@@ -1439,7 +1342,7 @@ static void SendTxData(void)
       CompactTelemetryPacket_t compact_packet;
       uint16_t timestamp_min = (uint16_t)(now_timestamp / 60);  // Convert to minutes
       
-      if (EncodeCompactBinaryPacket(&compact_packet, &sensor_data, timestamp_min, 
+      if (EncodeCompactBinaryPacket(&compact_packet, sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
         
       /* D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
@@ -1646,7 +1549,163 @@ static void SendTxData(void)
       SONDE_LOG_STR("Transmission cycle complete, reset to PROBE_SF10\r\n");
       break;
   }
+}
 
+static void SendTxData(void)
+{
+  /* USER CODE BEGIN SendTxData_1 */
+  Deadman_MarkProgress();  /* F13a: a work cycle provably started */
+
+  /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
+  static VoltageSlope_t voltage_slope = {0};
+
+  // Read current sensor data for temperature
+  sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
+  EnvSensors_Read(&sensor_data);
+  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
+  float temperature_c = sensor_data.temperature;
+
+  // Read raw voltages
+  uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
+  uint16_t solar_mv = SYS_GetSolarVoltage();
+
+  // Use RTC-based time that continues during STOP2 sleep
+  uint16_t ms_unused;
+  uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
+
+  /* R47: mode selection, slope/prediction, GPS temperature lockout and the
+   * RF-silence veto all live in the pure decide half (transmit_plan.c) —
+   * host-testable with zero hardware. The plan records WHY, not just THAT. */
+  TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
+                                           temperature_c, sensor_data.temp_stale != 0,
+                                           now_timestamp,
+                                           LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
+                                           MissionState_IsCommissioning());
+  bool gps_enabled_by_power_mgmt = plan.gps_enabled;
+  uint32_t gps_timeout_ms = plan.gps_timeout_ms;
+  OperatingMode_t current_mode = plan.power_mode;
+  int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
+  int16_t time_to_target_signed = plan.time_to_target_h;
+  uint16_t battery_mv_normalized = plan.battery_mv_normalized;
+
+  // Update timer interval if changed
+  UTIL_TIMER_Stop(&TxTimer);
+  UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms);
+  UTIL_TIMER_Start(&TxTimer);
+  
+  // Log power management status
+  /* F27 FIX: integer-only print (no float printf support linked) */
+  int temp_deci_pm = (int)(temperature_c * 10.0f);
+  char pm_msg[256];
+  snprintf(pm_msg, sizeof(pm_msg),
+           "\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
+           temp_deci_pm / 10, abs(temp_deci_pm % 10),
+           battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
+  SONDE_LOG_STR(pm_msg);
+  
+  if (time_to_target_signed < 0) {
+    snprintf(pm_msg, sizeof(pm_msg), "Critical_in=%dh ", abs(time_to_target_signed));
+  } else if (time_to_target_signed > 0) {
+    snprintf(pm_msg, sizeof(pm_msg), "Full_in=%dh ", time_to_target_signed);
+  } else {
+    snprintf(pm_msg, sizeof(pm_msg), "Stable ");
+  }
+  SONDE_LOG_STR(pm_msg);
+  
+  snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
+           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
+  SONDE_LOG_STR(pm_msg);
+  
+  /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
+   * (see below). Previously the record was written here with the PREVIOUS
+   * cycle's position and the CURRENT timestamp — the whole track was
+   * spatially stale by one interval. */
+
+  /* ========== END POWER MANAGEMENT ========== */
+  
+  /* T1 ladder (DDR-0006): rejoin is a COMMISSIONING-ONLY operation.
+   * In FLIGHT, an invalid session means RF silence — keep flying the profile
+   * (GPS + flash logging below), skip only the transmission. */
+  bool rf_silence = false;
+  if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
+  {
+    if (MissionState_IsCommissioning()) {
+      SONDE_LOG_STR("SendTxData: Not joined yet, triggering join retry...\r\n");
+      LmHandlerJoin(ActivationType, true);
+      return; /* Exit - will send data after join succeeds */
+    }
+    rf_silence = true;
+    SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
+  }
+
+  SONDE_LOG_STR("\r\n=== SendTxData START ===\r\n");
+
+  /* ========== GPS POWER-CYCLING MODE ========== */
+  /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
+   * is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
+   * flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
+   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected. */
+  // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
+  
+  /* Declare ttf_ms at function scope so it's available for telemetry */
+  uint32_t ttf_ms = 0;
+  
+  // Check if GPS is disabled by power management or bulk transfer mode
+  // C7a FIX: Skip GPS during bulk transfer - we're sending cached flash data, not live telemetry
+  if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
+    /* GPS disabled - skip acquisition */
+    if (g_tx_state == TX_STATE_BULK_TRANSFER) {
+      SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
+    } else {
+      SONDE_LOG_STR("GPS disabled by power management - skipping acquisition\r\n");
+    }
+    /* R31 (#57): FULL invalidation before/without acquisition — clear all of
+     * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
+     * The GGA parser skips empty tokens, so a partial sentence must never meet
+     * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
+    memset(&hgnss.data, 0, sizeof(hgnss.data));
+    ttf_ms = 0;  // No GPS acquisition performed
+  } else {
+  
+  #ifdef GPS_DISABLED_FOR_TESTING
+  
+  /* Use fake GPS data for testing MCU sleep mode */
+  SONDE_LOG_STR("GPS DISABLED FOR TESTING - using fake coordinates\r\n");
+  
+  /* Simulate GPS fix data */
+  hgnss.data.valid = true;
+  hgnss.data.fix_quality = GNSS_FIX_GPS;
+  hgnss.data.latitude = 39.8283;    // Geographic center of contiguous USA (Kansas)
+  hgnss.data.longitude = -98.5795;
+  hgnss.data.altitude = 500.0f;     // meters (approximate)
+  hgnss.data.satellites = 8;
+  hgnss.data.hdop = 1.2f;
+  
+  ttf_ms = 0;  /* No actual fix acquired */
+  
+  SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
+  
+  #else  
+  /* F-R1 (#74): acquisition and region selection are extracted phases. */
+  if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {
+    SelectRegionAndSession(&rf_silence);
+  }
+  
+  #endif  /* GPS_DISABLED_FOR_TESTING */
+  }  /* End of else block for gps_enabled_by_power_mgmt */
+  /* Add separator before continuing to telemetry */
+  SONDE_LOG_STR("\r\n");
+  
+  // CRITICAL: Re-read sensor data AFTER GPS acquisition to include fresh GPS fix
+  SONDE_LOG_STR("Re-reading sensor data to capture fresh GPS fix...\r\n");
+  EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
+  SONDE_LOG_STR("Sensor data refreshed with current GPS position\r\n");
+
+  ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode);
+
+  BuildDebugLppPayload(&sensor_data, ttf_ms, slope_mv_per_hour, time_to_target_signed, current_mode);
+
+  RunTxStateMachine(&sensor_data, now_timestamp, slope_mv_per_hour, current_mode, rf_silence);
   /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */
   #if ENABLE_DEBUG_LPP
   static uint32_t tx_count = 0;
