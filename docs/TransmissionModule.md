@@ -82,31 +82,31 @@ flowchart TD
 
 The Stratosonde uses two main packet formats for production:
 
-#### Port 10: Compact Binary Packet (10 bytes)
+#### Port 10: Compact Binary Packet — Heartbeat v2 (11 bytes)
 
-Ultra-compact telemetry optimized for SF10 (maximum range):
+Ultra-compact telemetry optimized for SF10 (maximum range). **All multibyte fields are little-endian** (D9). See [PayloadFormats.md](PayloadFormats.md) for the authoritative field-level spec and decoder.
 
-| Field | Type | Size | Resolution |
-|-------|------|------|------------|
-| Timestamp | uint16 BE | 2 bytes | 1 minute |
-| Latitude | int16 BE | 2 bytes | ~100m |
-| Longitude | int16 BE | 2 bytes | ~100m |
-| Temperature | int8 | 1 byte | 2°C |
-| Pressure | uint8 | 1 byte | 10 hPa |
-| Battery | uint8 | 1 byte | 50 mV |
-| Humidity | uint8 | 1 byte | 5% |
+| Offset | Field | Type | Size | Resolution |
+|--------|-------|------|------|------------|
+| 0 | Timestamp (minutes since epoch) | uint16 LE | 2 bytes | 1 minute (45.5-day wrap, see status b5) |
+| 2 | Latitude | int16 LE | 2 bytes | ~300m (deg = value × 90 / 32767) |
+| 4 | Longitude | int16 LE | 2 bytes | ~550m (deg = value × 180 / 32767) |
+| 6 | Temperature | int8 | 1 byte | 2°C ((value − 64) × 2) |
+| 7 | Pressure + Humidity (packed) | uint16 LE | 2 bytes | bits 0-10: 1 hPa; bits 11-15: 5% |
+| 9 | Battery | uint8 | 1 byte | 50 mV |
+| 10 | Status v2 (stale bits + time markers + mission state) | uint8 | 1 byte | — |
 
-**Note**: Altitude calculated on backend from pressure + temperature. No status byte to leave room for MAC commands (LinkCheckReq) in FOpts field.
+**Note**: Altitude calculated on backend from pressure + temperature. The 11th byte is the heartbeat v2 status byte (GPS/temp/hum/press stale bits, GNSS-disciplined-time marker, timestamp-wrap, mission state); LinkCheckReq rides in FOpts, not the payload.
 
-#### Port 11: Bulk Binary Packet (222 bytes)
+#### Port 11: Core Science Archive Packet (v4, variable length)
 
-High-resolution historical data transfer at SF7:
+High-resolution archive transfer at SF7. Wire format **v4** (`packet_type 0x04`), variable length `6 + 32n + 4` bytes:
 
-- Header: 6 bytes (packet type, record count, flash address)
-- Records: Up to 6 × 32-byte high-resolution records
-- Metadata: 24 bytes (voltage trend, mode history, CRC32)
+- Header: 6 bytes — `packet_type` (1 B = 0x04), `record_count` (1 B = n), `base_seq` (4 B uint32 LE, flash sequence of the first record; record i identity = `base_seq + i`, DDR-0011)
+- Records: n × 32-byte high-resolution records (n ≤ 6), packed to the runtime payload budget (`LoRaMacQueryTxPossible`)
+- Trailer: 4 bytes CRC32 over all preceding bytes
 
-Each 32-byte record includes: full-precision GPS, environmental sensors (0.1° resolution), battery/solar voltages, voltage slope, satellites, HDOP, power mode, and CRC16.
+Each 32-byte record includes: full-precision GPS, environmental sensors (0.1° resolution), battery/solar voltages, voltage slope, satellites, HDOP, power mode, data-honesty flags, and CRC16. Records are ACK-gated (watermark commits only on `McpsConfirm.AckReceived`; backend dedups on (DevEUI, sequence)). Legacy fixed layouts v1 (`0x01`, 222 B) and v2 (`0x02`, 198 B) are documented in [PayloadFormats.md](PayloadFormats.md) for historical decode only.
 
 ### Debug Packets (Development Only)
 
@@ -115,8 +115,8 @@ Each 32-byte record includes: full-precision GPS, environmental sensors (0.1° r
 
 ### Data Compression Strategy
 
-- **GPS coordinates**: 100m resolution for compact, full precision for bulk
-- **Time**: Minute epochs (compact), second epochs (bulk)
+- **GPS coordinates**: full-range int16 scaling for compact (~300m lat / ~550m lon), full 1e-7° precision for archive
+- **Time**: Minute epochs (compact), second epochs (archive)
 - **Sensors**: Scaled/offset to maximize resolution in expected ranges
 - **Multi-tier**: Compact for real-time, bulk for historical backfill
 

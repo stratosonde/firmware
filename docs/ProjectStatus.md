@@ -1,7 +1,7 @@
 # Stratosonde Firmware — Project Status
 
 **The one page that answers "what is done and what is not."**
-Last updated: 2026-08-07 — **2026-08-06/07 session: CI green (tracked build + Linux fixes); 8 issues landed (#33, #34, #35, #57, #36, #29, #31, #47) + #56 firmware half — wire formats heartbeat v2 / archive v4, confirmed delivery per DDR-0011, flash record v4, GNSS parser batch, sensor/flash silent-failure fixes, STOP2 wake latches, ADC/power batch, SONDE_LOG flight gate.** All CODE-DONE / BENCH-PENDING per the status model (host-test-verified where noted; no hardware artifacts yet).
+Last updated: 2026-08-07 — **2026-08-07 refactor batch + doc sweep: WO-0807 firmware refactor landed (#75/#73/#74/#77 — SendTxData decomposed, RestoreSessionToMac extracted, table-driven regions, single H3 lookup/cycle, CayenneLPP gated out of flight builds, flash −3.7 KB) and the Gate 5 R44 doc sweep completed (#40 — PayloadFormats.md / TransmissionModule.md / MultiRegionSupport.md / PowerManagement.md brought in line with the v2/v4 wire formats and current API).** Prior 2026-08-06/07 session: CI green; 8 issues landed (#33, #34, #35, #57, #36, #29, #31, #47) + #56 firmware half. All CODE-DONE / BENCH-PENDING per the status model (host-test-verified where noted; no hardware artifacts yet).
 
 ## Status model
 
@@ -47,7 +47,7 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 | **#26** (bench) | Gate 1 artifacts + 2026-08-06/07 session bench checks (confirmed-delivery behavior, restricted-region archive, STOP2 chunk re-entry, W25Q SR1 log, ADC timeout path) |
 | **#20, #12, #21** (bench) | Current by state · flash durability (now exercises generation counter + scan-from-zero) · 24 h soak |
 | **#56** (partial) | NK GeoJSON → `RESTRICTED.geojson` → regenerate table + host-verify Pyongyang/ocean points (firmware + generator halves done) |
-| **#40** | R44 doc sweep (many module docs predate v2/v4 wire formats, record v4, SONDE_LOG, CI) + readiness-matrix artifact rule. PayloadFormats.md / LoRaWANApplicationProtocol.md / FlashLogging.md already regenerated 2026-08-06 |
+| **#78, #79, #80** (code, split from #40) | A-003 unify two-slot persistence (deferred, non-gating) · A-005 on-wire version for the heartbeat (archive v4 already self-versioning) · A-006 production RTT logging audit + flash/RAM delta measurement |
 | **#41** | Gate 6 Qwiic expansion decisions + implementation |
 | **#43, #60, #61** | Post-flight: AS923 sub-group runtime-settability · MS5607 + SHT31 characterization |
 

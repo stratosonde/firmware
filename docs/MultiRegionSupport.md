@@ -125,33 +125,21 @@ bool MultiRegion_RestoreContexts(void);
 /* Check if a region has a valid joined context */
 bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region);
 
-/* Auto-switch based on GPS location */
-void MultiRegion_AutoSwitchForLocation(float lat, float lon);
+/* Auto-switch based on GPS location (resolves H3 geofence, then delegates) */
+LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon);
+
+/* Auto-switch to an already-detected region — policy only, no geofence lookup.
+ * Use when the H3 region was already resolved this cycle (avoids a redundant lookup). */
+LmHandlerErrorStatus_t MultiRegion_AutoSwitchToRegion(LoRaMacRegion_t target_region);
 ```
 
 ## Implementation Details
 
+> **Note:** The control-flow snippets below are illustrative, not literal source. The authoritative implementation is `Core/Src/multiregion_context.c` / `multiregion_h3.c` (see function names there).
+
 ### Region Detection Logic
 
-```c
-LoRaMacRegion_t MultiRegion_DetectRegionFromGPS(float lat, float lon) {
-    // North America: US915
-    // Rough bounding box for US/Canada/Mexico
-    if (lat > 24.0 && lat < 50.0 && lon > -125.0 && lon < -66.0) {
-        return LORAMAC_REGION_US915;
-    }
-    
-    // Europe: EU868
-    // Rough bounding box for Europe
-    if (lat > 36.0 && lat < 71.0 && lon > -10.0 && lon < 40.0) {
-        return LORAMAC_REGION_EU868;
-    }
-    
-    // Over Atlantic or unknown: keep current region
-    // Don't switch mid-ocean to avoid unnecessary transitions
-    return MultiRegion_GetActiveRegion();
-}
-```
+Region detection uses the **H3Lite geofence engine** (`MultiRegion_DetectFromGPS_H3`, `multiregion_h3.c`), not hand-rolled bounding boxes. GPS coordinates are resolved to an H3 region cell (`latLngToRegion`), then mapped to a `LoRaMacRegion_t` (`H3Region_ToLoRaMacRegion`). Out-of-coverage positions fall back to a nearest-neighbour search (`findNearestRegions`) bounded by `H3_MAX_DISTANCE_KM`; if nothing is within range, the current active region is kept (do not switch mid-ocean). The geofence is resolved **once per transmit cycle** and the result passed down (`MultiRegion_DetectFromH3Region` / `MultiRegion_AutoSwitchToRegion`). See [H3LiteIntegration.md](H3LiteIntegration.md) for the full engine spec.
 
 ### Context Switching Flow
 

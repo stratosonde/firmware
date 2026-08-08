@@ -6,7 +6,7 @@
   * @attention
   *
   * This module defines efficient binary packet formats for LoRaWAN transmission:
-  * - CompactTelemetryPacket_t: 10-byte packet for SF10 (maximum range w/ LinkCheck)
+  * - CompactTelemetryPacket_t: 11-byte heartbeat packet for SF10 (maximum range w/ LinkCheck)
   * - HighResTelemetryRecord_t: 32-byte record for flash storage  
   * - BulkTelemetryPacket_t: 198-byte packet for SF7 bulk transfer (FW-20)
   *
@@ -183,7 +183,7 @@ typedef struct __attribute__((packed)) {
 /* Exported functions --------------------------------------------------------*/
 
 /**
- * @brief Encode compact 10-byte telemetry packet
+ * @brief Encode compact 11-byte heartbeat (v2) telemetry packet
  * @param packet: Destination packet structure
  * @param sensor_data: Source sensor data
  * @param timestamp_min: Timestamp in minutes since epoch

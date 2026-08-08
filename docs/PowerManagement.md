@@ -133,6 +133,8 @@ This creates a **sliding 2-hour window** that adapts to changing conditions.
 
 ## Telemetry Channels
 
+> **Debug-only view (R44):** These CayenneLPP channels ride Port 2, which is **compiled out of flight builds** (`ENABLE_DEBUG_LPP=0`, `payload_format.h`). In production the same quantities travel in the **Port 11 archive record** — `voltage_slope` (int16 mV/h), `power_mode`, and `battery_voltage`/`solar_voltage` fields ([PayloadFormats.md](PayloadFormats.md)). This table documents the bench/debug encoding.
+
 | Channel | Name | Unit | Scaling | Description |
 |---------|------|------|---------|-------------|
 | 11 | Voltage Slope | mV/h | ÷10 | Charging rate (+) or discharge rate (-) |

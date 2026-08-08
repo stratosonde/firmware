@@ -13,7 +13,7 @@ The Stratosonde firmware transmits data using multiple LoRaWAN packet formats op
 | **2** | CayenneLPP | Variable | Human-readable debug format | Development only |
 | **3** | GNSS Detail | Variable | Satellite tracking data | Development only |
 | **10** | Compact Binary | 10 bytes | Production telemetry (SF10) | **PRODUCTION** |
-| **11** | Bulk Binary | 198 bytes (v2) | Historical data transfer (SF7) | **PRODUCTION** |
+| **11** | Bulk Binary | Variable (v4, `0x04`: `6 + 32n + 4`) | Core science archive transfer (SF7) | **PRODUCTION** |
 
 ### Debug Packet Control
 
@@ -455,7 +455,7 @@ Typical size: 40-60 bytes (8-12 satellites with speed data)
 ### Normal Operation Cycle
 
 1. **Initial transmission** (Port 10):
-   - Sends compact 10-byte packet at SF10 (DR0)
+   - Sends compact 11-byte heartbeat (v2) at SF10 (DR0)
    - Includes LinkCheckReq MAC command
    - TX count: 1
 
@@ -465,9 +465,9 @@ Typical size: 40-60 bytes (8-12 satellites with speed data)
 
 3. **Bulk transfer trigger** (Port 11):
    - Activated when: margin ≥15dB AND gateways ≥2 AND battery ≥5.0V
-   - Sends 198-byte bulk packets at SF7 (DR3) (v2, FW-20)
+   - Sends variable-length v4 archive packets (`6 + 32n + 4` bytes) at SF7 (DR3), packed to the runtime payload budget (`LoRaMacQueryTxPossible`); n ≤ 6
    - Up to 20 packets per session
-   - Clears flash backlog
+   - Clears flash backlog (ACK-gated watermark, DDR-0011)
 
 ### Example from RTT Log
 
