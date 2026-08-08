@@ -458,6 +458,174 @@ bool MultiRegion_RestoreContexts(void)
     return g_storage.num_valid > 0;
 }
 
+/* F-R2 (#75): region channel masks as data, not copy-pasted if/else chains. */
+typedef struct {
+    LoRaMacRegion_t region;
+    uint16_t mask[6];
+    uint8_t len;            /* number of valid mask words */
+    const char *note;       /* human-readable description for logs */
+} RegionChannelMask_t;
+
+static const RegionChannelMask_t kChannelMasks[] = {
+    /* Helium sub-band 2: channels 8-15 + 500kHz channel 64 */
+    { LORAMAC_REGION_US915, { 0xFF00, 0x0000, 0x0000, 0x0000, 0x0001, 0x0000 }, 6,
+      "US915 sub-band 2 (ch 8-15 + ch 64)" },
+    /* Standard channels 0-7 */
+    { LORAMAC_REGION_EU868, { 0x00FF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000 }, 1,
+      "EU868 standard channels 0-7" },
+};
+
+/**
+ * @brief Apply the region's channel mask (and default mask) to the MAC.
+ *        During OTAA join the network configures channels; when switching to
+ *        ABP we must restore them. Regions without a table entry keep MAC
+ *        defaults (same as before F-R2).
+ */
+static void ApplyRegionChannelMask(LoRaMacRegion_t region)
+{
+    for (uint32_t i = 0; i < (sizeof(kChannelMasks) / sizeof(kChannelMasks[0])); i++) {
+        if (kChannelMasks[i].region != region) {
+            continue;
+        }
+        MibRequestConfirm_t mib_ch;
+        mib_ch.Type = MIB_CHANNELS_MASK;
+        mib_ch.Param.ChannelsMask = (uint16_t *)kChannelMasks[i].mask;
+        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
+            SONDE_LOG("Channel mask applied: %s\r\n", kChannelMasks[i].note);
+        } else {
+            SONDE_LOG("WARNING: Failed to set channel mask for %s\r\n", RegionToString(region));
+        }
+        mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
+        mib_ch.Param.ChannelsDefaultMask = (uint16_t *)kChannelMasks[i].mask;
+        LoRaMacMibSetRequestConfirm(&mib_ch);
+        return;
+    }
+}
+
+/**
+ * @brief F-R2 (#75): restore a banked session context into the MAC — the
+ *        sequenced ritual formerly inlined in MultiRegion_SwitchToRegion.
+ *        Shared with the commissioning join paths (#73).
+ *
+ *        The fixed HAL_Delay()s are INTENTIONAL: there is no reliable
+ *        ready-predicate for stack/radio settling (LoRaMacIsBusy only covers
+ *        the post-start settle, which is polled below), and this path runs
+ *        mid-flight. Do not convert them to poll loops without a real
+ *        predicate. DevAddr is deliberately programmed twice (before and
+ *        after LoRaMacStart) because MAC start can overwrite it.
+ *
+ *        Session key material is never logged (#75, fdb971f).
+ *
+ * @retval LORAMAC_HANDLER_SUCCESS     session restored and verified
+ * @retval LORAMAC_HANDLER_BUSY_ERROR  MAC still busy after the settle loop
+ */
+static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, LoRaMacRegion_t region)
+{
+    SONDE_LOG("Restoring session context for %s\r\n", RegionToString(region));
+
+    // STEP 1: Reinitialize stack (loads zeros from se-identity.h)
+    LoRaApp_ReInitStack(region);
+    HAL_Delay(100);
+
+    // STEP 2: Configure the handler (this might load from NVM)
+    LmHandlerConfigure(&LmHandlerParams);
+    HAL_Delay(50);
+
+    // STEP 3: NOW set identity and keys AFTER configure (to override NVM restore)
+    LmHandlerSetDevEUI(ctx->dev_eui);
+    LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key);
+    LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key);
+
+    // STEP 4: Set DevAddr and activation via MIB before channel mask
+    MibRequestConfirm_t mib;
+    mib.Type = MIB_DEV_ADDR;
+    mib.Param.DevAddr = ctx->dev_addr;
+    LoRaMacMibSetRequestConfirm(&mib);
+    mib.Type = MIB_NETWORK_ACTIVATION;
+    mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
+    LoRaMacMibSetRequestConfirm(&mib);
+
+    // STEP 5: Restore frame counters and keys into NVM
+    mib.Type = MIB_NVM_CTXS;
+    LoRaMacMibGetRequestConfirm(&mib);
+    LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
+    if (nvm) {
+        nvm->Crypto.FCntList.FCntUp = ctx->uplink_counter;
+        nvm->Crypto.FCntList.NFCntDown = ctx->downlink_counter;
+        nvm->MacGroup1.LastRxMic = ctx->last_rx_mic;
+        nvm->MacGroup2.NetworkActivation = ACTIVATION_TYPE_ABP;
+        /* LmHandlerSetKey() should have done this; belt-and-braces copy kept
+         * from the pre-refactor code. Key material is never logged (#75). */
+        memcpy(nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16);
+        memcpy(nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16);
+
+        SONDE_LOG("Context restored: %s DevAddr=0x%08lX FCntUp=%lu FCntDown=%lu\r\n",
+                  RegionToString(ctx->region), ctx->dev_addr,
+                  ctx->uplink_counter, ctx->downlink_counter);
+    }
+
+    mib.Type = MIB_NETWORK_ACTIVATION;
+    mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
+    LoRaMacMibSetRequestConfirm(&mib);
+
+    // STEP 6: region channel masks, table-driven (F-R2)
+    ApplyRegionChannelMask(region);
+
+    // STEP 7: Start MAC and allow state machine to stabilize
+    LoRaMacStart();
+    HAL_Delay(200);
+
+    // STEP 8: Set DevAddr via MIB AFTER LoRaMacStart() to ensure it persists
+    mib.Type = MIB_DEV_ADDR;
+    mib.Param.DevAddr = ctx->dev_addr;
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: Failed to set DevAddr!\r\n");
+    }
+
+    // STEP 9: Process MAC events to complete initialization
+    for (int i = 0; i < 10; i++) {
+        LmHandlerProcess();
+        HAL_Delay(10);
+    }
+
+    if (LoRaMacIsBusy()) {
+        SONDE_LOG_STR("  WARNING: MAC still busy, giving more time...\r\n");
+        HAL_Delay(500);
+        for (int i = 0; i < 20; i++) {
+            LmHandlerProcess();
+            HAL_Delay(10);
+        }
+    }
+
+    if (LoRaMacIsBusy()) {
+        SONDE_LOG_STR("  ERROR: MAC is busy after initialization!\r\n");
+        return LORAMAC_HANDLER_BUSY_ERROR;
+    }
+
+    // STEP 10: Verify DevAddr and session keys landed in the secure element
+    MibRequestConfirm_t verify_mib;
+    verify_mib.Type = MIB_DEV_ADDR;
+    LoRaMacMibGetRequestConfirm(&verify_mib);
+    if (verify_mib.Param.DevAddr != ctx->dev_addr) {
+        SONDE_LOG("  ERROR: DevAddr mismatch! MAC=0x%08lX, Expected=0x%08lX\r\n",
+                  verify_mib.Param.DevAddr, ctx->dev_addr);
+    }
+
+    verify_mib.Type = MIB_NVM_CTXS;
+    LoRaMacMibGetRequestConfirm(&verify_mib);
+    LoRaMacNvmData_t *verify_nvm = (LoRaMacNvmData_t*)verify_mib.Param.Contexts;
+    if (verify_nvm) {
+        if (memcmp(verify_nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16) != 0) {
+            SONDE_LOG_STR("  ERROR: AppSKey mismatch in secure element!\r\n");
+        }
+        if (memcmp(verify_nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16) != 0) {
+            SONDE_LOG_STR("  ERROR: NwkSKey mismatch in secure element!\r\n");
+        }
+    }
+
+    return LORAMAC_HANDLER_SUCCESS;
+}
+
 /**
  * @brief Switch to a different region context
  */
@@ -514,234 +682,13 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     APP_LOG(TS_ON, VLEVEL_H, "\r\n=== Switching to %s (slot %d) ===\r\n", 
             RegionToString(region), slot);
     
-    // STEP 1: Reinitialize stack (loads zeros from se-identity.h)
-    SONDE_LOG_STR("Step 1: Performing full stack reinit...\r\n");
-    LoRaApp_ReInitStack(region);
-    HAL_Delay(100);
-    
-    // STEP 2: Configure the handler (this might load from NVM)
-    SONDE_LOG_STR("Step 2: Configuring handler for region...\r\n");
-    LmHandlerConfigure(&LmHandlerParams);
-    HAL_Delay(50);
-    
-    // STEP 3: NOW set identity and keys AFTER configure (to override NVM restore)
-    SONDE_LOG_STR("Step 3: Setting DevEUI and session keys (overriding NVM)...\r\n");
-    LmHandlerSetDevEUI(ctx->dev_eui);
-    SONDE_LOG("  DevEUI set: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-            ctx->dev_eui[0], ctx->dev_eui[1], ctx->dev_eui[2], ctx->dev_eui[3],
-            ctx->dev_eui[4], ctx->dev_eui[5], ctx->dev_eui[6], ctx->dev_eui[7]);
-    
-    // Set session keys AFTER configure (critical for multi-region)
-    LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key);
-    LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key);
-    SONDE_LOG_STR("  Session keys set\r\n");
-    
-    // STEP 4: Set DevAddr via MIB before channel mask
-    SONDE_LOG_STR("Step 4: Setting DevAddr and activation...\r\n");
-    MibRequestConfirm_t mib;
-    
-    mib.Type = MIB_DEV_ADDR;
-    mib.Param.DevAddr = ctx->dev_addr;
-    LoRaMacMibSetRequestConfirm(&mib);
-    SONDE_LOG("  DevAddr set: 0x%08lX\r\n", ctx->dev_addr);
-    
-    // Set activation type
-    mib.Type = MIB_NETWORK_ACTIVATION;
-    mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
-    LoRaMacMibSetRequestConfirm(&mib);
-    
-    // STEP 5: Restore frame counters and VERIFY keys in NVM
-    SONDE_LOG_STR("Step 5: Restoring frame counters and verifying keys in NVM...\r\n");
-    mib.Type = MIB_NVM_CTXS;
-    LoRaMacMibGetRequestConfirm(&mib);
-    LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
-    
-    if (nvm) {
-        // Restore frame counters
-        nvm->Crypto.FCntList.FCntUp = ctx->uplink_counter;
-        nvm->Crypto.FCntList.NFCntDown = ctx->downlink_counter;
-        nvm->MacGroup1.LastRxMic = ctx->last_rx_mic;
-        nvm->MacGroup2.NetworkActivation = ACTIVATION_TYPE_ABP;
-        
-        // CRITICAL: Verify keys are correctly loaded in secure element NVM
-        // LmHandlerSetKey() should have done this, but we double-check
-        memcpy(nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16);
-        memcpy(nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16);
-        
-        SONDE_LOG("  Frame counters: FCntUp=%lu, FCntDown=%lu\r\n",
-                          ctx->uplink_counter, ctx->downlink_counter);
-        
-        // ===== COMPREHENSIVE CONTEXT LOGGING =====
-        SONDE_LOG_STR("\r\n----- RESTORED CONTEXT DETAILS -----\r\n");
-        
-        // Core session parameters
-        SONDE_LOG("Region:       %s\r\n", RegionToString(ctx->region));
-        SONDE_LOG("Activation:   %s\r\n", 
-                ctx->activation == ACTIVATION_TYPE_OTAA ? "OTAA" : "ABP");
-        SONDE_LOG("DevAddr:      0x%08lX\r\n", ctx->dev_addr);
-        
-        // Frame counters
-        SONDE_LOG("FCntUp:       %lu\r\n", ctx->uplink_counter);
-        SONDE_LOG("FCntDown:     %lu\r\n", ctx->downlink_counter);
-        SONDE_LOG("LastRxMic:    0x%08lX\r\n", ctx->last_rx_mic);
-        
-        // Radio parameters
-        SONDE_LOG("Datarate:     DR%d\r\n", ctx->datarate);
-        SONDE_LOG("TxPower:      %d dBm\r\n", ctx->tx_power);
-        SONDE_LOG("ADR:          %s\r\n", ctx->adr_enabled ? "ON" : "OFF");
-        
-        // RX2 window
-        SONDE_LOG("RX2 Freq:     %lu Hz\r\n", ctx->rx2_frequency);
-        SONDE_LOG("RX2 DR:       DR%d\r\n", ctx->rx2_datarate);
-        
-        /* F-R2 (#75): AppSKey/NwkSKey hex dumps REMOVED OUTRIGHT — session
-         * keys must never appear on the serial log, in any build. (#38 gated
-         * them to COMMISSIONING, #47 compile-gates logging; neither removed
-         * them from source. Now they are gone, not just hidden.) */
-
-        // CRC validation
-        SONDE_LOG("Context CRC:  0x%04X (validated)\r\n", ctx->crc16);
-        SONDE_LOG_STR("------------------------------------\r\n\r\n");
+    /* F-R2 (#75): the restore ritual lives in RestoreSessionToMac() so the
+     * commissioning join paths (#73) can share it. Fixed HAL_Delay()s there
+     * are intentional — no ready-predicate exists for stack/radio settling. */
+    LmHandlerErrorStatus_t status = RestoreSessionToMac(ctx, region);
+    if (status != LORAMAC_HANDLER_SUCCESS) {
+        return status;
     }
-    
-    // Set activation via MIB as well
-    mib.Type = MIB_NETWORK_ACTIVATION;
-    mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
-    LoRaMacMibSetRequestConfirm(&mib);
-    
-    // STEP 6: Configure region-specific channel masks BEFORE starting MAC
-    SONDE_LOG_STR("Step 6: Configuring region-specific channel masks...\r\n");
-    // During OTAA join, the network configures specific channels (sub-bands for US915)
-    // When switching to ABP, we must restore these channel configurations
-    
-    MibRequestConfirm_t mib_ch;
-    
-    if (region == LORAMAC_REGION_US915) {
-        // Helium uses sub-band 2 (channels 8-15)
-        // Channel mask: 16 bits per bank, bit set = channel enabled
-        uint16_t us915_mask[6] = {
-            0xFF00,  // Bank 0: Channels 0-15, enable 8-15 (sub-band 2)
-            0x0000,  // Bank 1: Channels 16-31, all disabled
-            0x0000,  // Bank 2: Channels 32-47, all disabled
-            0x0000,  // Bank 3: Channels 48-63, all disabled
-            0x0001,  // Bank 4: 500kHz channels 64-71, enable channel 64 (matches sub-band 2)
-            0x0000   // Bank 5: Reserved
-        };
-        
-        mib_ch.Type = MIB_CHANNELS_MASK;
-        mib_ch.Param.ChannelsMask = us915_mask;
-        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
-            SONDE_LOG_STR("US915: Set sub-band 2 (channels 8-15 + channel 64)\r\n");
-        } else {
-            SONDE_LOG_STR("US915: WARNING - Failed to set channel mask\r\n");
-        }
-        
-        // Also set default channels to match
-        mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
-        mib_ch.Param.ChannelsDefaultMask = us915_mask;
-        LoRaMacMibSetRequestConfirm(&mib_ch);
-        
-    } else if (region == LORAMAC_REGION_EU868) {
-        // EU868: Channels 0-2 are default join channels (868.1, 868.3, 868.5 MHz)
-        // After OTAA join, network typically enables channels 3-7 as well
-        // For ABP mode, enable all standard channels (0-7) for data transmission
-        // Channels 3-7: 867.1, 867.3, 867.5, 867.7, 867.9 MHz
-        uint16_t eu868_mask[1] = {0x00FF};  // Binary: 0000 0000 1111 1111 (channels 0-7 enabled)
-        
-        mib_ch.Type = MIB_CHANNELS_MASK;
-        mib_ch.Param.ChannelsMask = eu868_mask;
-        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
-            SONDE_LOG_STR("EU868: Enabled all standard channels 0-7 for data transmission\r\n");
-        } else {
-            SONDE_LOG_STR("EU868: WARNING - Failed to set channel mask\r\n");
-        }
-        
-        mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
-        mib_ch.Param.ChannelsDefaultMask = eu868_mask;
-        LoRaMacMibSetRequestConfirm(&mib_ch);
-    }
-    
-    // STEP 7: Start MAC and allow state machine to stabilize
-    SONDE_LOG_STR("Step 7: Starting MAC and stabilizing...\r\n");
-    LoRaMacStart();
-    HAL_Delay(200);
-    
-    // STEP 8: Set DevAddr via MIB AFTER LoRaMacStart() to ensure it persists
-    SONDE_LOG_STR("Step 8: Re-setting DevAddr after MAC start...\r\n");
-    mib.Type = MIB_DEV_ADDR;
-    mib.Param.DevAddr = ctx->dev_addr;
-    if (LoRaMacMibSetRequestConfirm(&mib) == LORAMAC_STATUS_OK) {
-        SONDE_LOG("  DevAddr confirmed: 0x%08lX\r\n", ctx->dev_addr);
-    } else {
-        SONDE_LOG_STR("  ERROR: Failed to set DevAddr!\r\n");
-    }
-    
-    // STEP 9: Process MAC events to complete initialization
-    SONDE_LOG_STR("Step 9: Processing MAC events to stabilize...\r\n");
-    for (int i = 0; i < 10; i++) {
-        LmHandlerProcess();
-        HAL_Delay(10);
-    }
-    
-    // Verify MAC is not busy before proceeding
-    if (LoRaMacIsBusy()) {
-        SONDE_LOG_STR("  WARNING: MAC still busy, giving more time...\r\n");
-        HAL_Delay(500);
-        for (int i = 0; i < 20; i++) {
-            LmHandlerProcess();
-            HAL_Delay(10);
-        }
-    }
-    
-    // Final MAC state verification
-    if (LoRaMacIsBusy()) {
-        SONDE_LOG_STR("  ERROR: MAC is busy after initialization!\r\n");
-        return LORAMAC_HANDLER_BUSY_ERROR;
-    }
-    SONDE_LOG_STR("  MAC verified idle and ready\r\n");
-    
-    // STEP 10: VERIFY secure element has correct keys and DevAddr
-    SONDE_LOG_STR("Step 10: Verifying secure element state...\r\n");
-    
-    // Verify DevAddr
-    MibRequestConfirm_t verify_mib;
-    verify_mib.Type = MIB_DEV_ADDR;
-    LoRaMacMibGetRequestConfirm(&verify_mib);
-    
-    if (verify_mib.Param.DevAddr != ctx->dev_addr) {
-        SONDE_LOG("  ERROR: DevAddr mismatch! MAC=0x%08lX, Expected=0x%08lX\r\n", 
-                          verify_mib.Param.DevAddr, ctx->dev_addr);
-    } else {
-        SONDE_LOG("  ✓ DevAddr verified: 0x%08lX\r\n", ctx->dev_addr);
-    }
-    
-    // Verify session keys in secure element
-    verify_mib.Type = MIB_NVM_CTXS;
-    LoRaMacMibGetRequestConfirm(&verify_mib);
-    LoRaMacNvmData_t *verify_nvm = (LoRaMacNvmData_t*)verify_mib.Param.Contexts;
-    
-    if (verify_nvm) {
-        bool keys_match = true;
-        
-        // Check AppSKey
-        if (memcmp(verify_nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, 
-                   ctx->app_s_key, 16) != 0) {
-            SONDE_LOG_STR("  ERROR: AppSKey mismatch in secure element!\r\n");
-            keys_match = false;
-        }
-        
-        // Check NwkSKey
-        if (memcmp(verify_nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, 
-                   ctx->nwk_s_key, 16) != 0) {
-            SONDE_LOG_STR("  ERROR: NwkSKey mismatch in secure element!\r\n");
-            keys_match = false;
-        }
-        
-        if (keys_match) {
-            SONDE_LOG_STR("  ✓ Session keys verified correct\r\n");
-        }
-    }
-    
     g_storage.active_slot = slot;
     ctx->last_used = HAL_GetTick();
     
