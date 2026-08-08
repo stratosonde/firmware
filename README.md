@@ -32,3 +32,15 @@ Flight firmware for the Stratosonde — an ultra-lightweight, solar-powered radi
 ## Build
 
 STM32CubeIDE / `arm-none-eabi-gcc` project (`.ioc`: `Radio_Sonde_E5_HF_EU.ioc`). Helper scripts: `build.ps1` / `build.bat`. Reproducible-build and CI work is tracked as [issue #46](https://github.com/stratosonde/firmware/issues/46).
+
+### Flight build (logging stripped)
+
+The default `Debug/` build is a **bench** build: all `SONDE_LOG` RTT output is compiled in. For flight, define `SONDE_FLIGHT_BUILD` (gate in `Core/Inc/sonde_log.h`, #47) to compile every debug/log line out. No committed build target sets this yet (tracked under #46); to produce a flight image from the generated `Debug/` makefiles, inject the define into the compile rules before building:
+
+```sh
+cd Debug
+find . -name subdir.mk -exec sed -i 's/-DDEBUG -DCORE_CM4/-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4/' {} +
+make clean && make -j all
+```
+
+Measured effect (A-006 / #80, arm-none-eabi-gcc 10.3.1, `-Os`): **flash text −22.4 KB** (192,016 → 169,536 B, −11.7%), data/bss unchanged (RTT control-path buffer intentionally retained). Flight build compiles clean; the only warnings are benign "unused variable" for locals referenced solely in compiled-out log lines.
