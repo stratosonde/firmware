@@ -501,6 +501,35 @@ static void ApplyRegionChannelMask(LoRaMacRegion_t region)
         return;
     }
 }
+/* F-R3 (#73): per-region identity + radio defaults as ONE table — replaces
+ * the two copy-pasted DevEUI switches (JoinRegion and
+ * InitializeRegionFromNetworkServer). */
+typedef struct {
+    LoRaMacRegion_t region;
+    uint8_t dev_eui[8];
+    uint8_t datarate;
+    uint32_t rx2_frequency;
+    uint8_t rx2_datarate;
+} RegionIdentity_t;
+
+static const RegionIdentity_t kRegionIdentities[] = {
+    { LORAMAC_REGION_US915, {LORAWAN_DEVICE_EUI_US915}, DR_2, 923300000, DR_8 },
+    { LORAMAC_REGION_EU868, {LORAWAN_DEVICE_EUI_EU868}, DR_0, 869525000, DR_0 },
+    { LORAMAC_REGION_AS923, {LORAWAN_DEVICE_EUI_AS923}, DR_2, 923200000, DR_2 },
+    { LORAMAC_REGION_AU915, {LORAWAN_DEVICE_EUI_AU915}, DR_2, 923300000, DR_8 },
+    { LORAMAC_REGION_IN865, {LORAWAN_DEVICE_EUI_IN865}, DR_0, 866550000, DR_2 },
+    { LORAMAC_REGION_KR920, {LORAWAN_DEVICE_EUI_KR920}, DR_0, 921900000, DR_0 },
+};
+
+static const RegionIdentity_t *FindRegionIdentity(LoRaMacRegion_t region)
+{
+    for (uint32_t i = 0; i < (sizeof(kRegionIdentities) / sizeof(kRegionIdentities[0])); i++) {
+        if (kRegionIdentities[i].region == region) {
+            return &kRegionIdentities[i];
+        }
+    }
+    return NULL;
+}
 
 /**
  * @brief F-R2 (#75): restore a banked session context into the MAC — the
@@ -875,72 +904,29 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
         HAL_Delay(100);
     }
     
-    // CRITICAL: Set region-specific DevEUI AFTER stack reinit (if any)
-    // Use LmHandlerSetDevEUI() instead of MIB (MIB has pointer issues)
-    uint8_t deveui[8];
-    
-    // Choose DevEUI based on region
-    const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
-    const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
-    const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
-    const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
-    const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
-    const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
-    
-    switch (region) {
-        case LORAMAC_REGION_US915:
-            memcpy(deveui, deveui_us915, 8);
-            break;
-        case LORAMAC_REGION_EU868:
-            memcpy(deveui, deveui_eu868, 8);
-            break;
-        case LORAMAC_REGION_AS923:
-            memcpy(deveui, deveui_as923, 8);
-            break;
-        case LORAMAC_REGION_AU915:
-            memcpy(deveui, deveui_au915, 8);
-            break;
-        case LORAMAC_REGION_IN865:
-            memcpy(deveui, deveui_in865, 8);
-            break;
-        case LORAMAC_REGION_KR920:
-            memcpy(deveui, deveui_kr920, 8);
-            break;
-        default:
-            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Unsupported region %d\r\n", region);
-            return LORAMAC_HANDLER_ERROR;
+    /* F-R3 (#73): identity from the shared table. DevEUI is set twice around
+     * LmHandlerConfigure because Configure can restore a stale one from NVM. */
+    const RegionIdentity_t *ident = FindRegionIdentity(region);
+    if (!ident) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Unsupported region %d\r\n", region);
+        return LORAMAC_HANDLER_ERROR;
     }
-    
-    // Use LmHandlerSetDevEUI() API
-    LmHandlerSetDevEUI(deveui);
-    SONDE_LOG("Set DevEUI via LmHandler: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-            deveui[0], deveui[1], deveui[2], deveui[3],
-            deveui[4], deveui[5], deveui[6], deveui[7]);
-    
-    // NOW configure the stack with the correct DevEUI already set
-    SONDE_LOG_STR("Configuring stack for region with DevEUI set...\r\n");
+
+    LmHandlerSetDevEUI((uint8_t *)ident->dev_eui);
     LmHandlerConfigure(&LmHandlerParams);
-    
-    // CRITICAL: Set DevEUI again after Configure (Configure might restore from NVM)
-    LmHandlerSetDevEUI(deveui);  // Set it again using correct API to ensure it sticks
-    SONDE_LOG("Re-set DevEUI after Configure: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-            deveui[0], deveui[1], deveui[2], deveui[3],
-            deveui[4], deveui[5], deveui[6], deveui[7]);
-    
+    LmHandlerSetDevEUI((uint8_t *)ident->dev_eui);
+
     // CRITICAL: Set JoinEUI (AppEUI) - must be set before join
     const uint8_t joineui[] = FORMAT32_KEY(LORAWAN_JOIN_EUI);
     LmHandlerSetAppEUI((uint8_t*)joineui);
-    SONDE_LOG("Set JoinEUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-            joineui[0], joineui[1], joineui[2], joineui[3],
-            joineui[4], joineui[5], joineui[6], joineui[7]);
-    
+
     // CRITICAL: Set AppKey and NwkKey - must be set before join
     const uint8_t appkey[] = FORMAT_KEY(LORAWAN_APP_KEY);
     const uint8_t nwkkey[] = FORMAT_KEY(LORAWAN_NWK_KEY);
     LmHandlerSetKey(APP_KEY, (uint8_t*)appkey);
     LmHandlerSetKey(NWK_KEY, (uint8_t*)nwkkey);
-    SONDE_LOG_STR("Set AppKey and NwkKey\r\n");
-    
+    SONDE_LOG("Identity and join credentials set for %s\r\n", RegionToString(region));
+
     // Reset join success flag before triggering join
     g_multiregion_join_success = false;
     
@@ -1050,56 +1036,28 @@ bool MultiRegion_PreJoinAllRegions(void)
     bool all_success = true;
     uint8_t join_success_count = 0;  /* R30/D6: flight entry requires >= 1 */
 
-    // ========== US915 (ENABLED) ==========
-    SONDE_LOG_STR("\r\n--- Joining US915 ---\r\n");
-    if (MultiRegion_JoinRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
-        APP_LOG(TS_ON, VLEVEL_H, "FAILED: US915 join\r\n");
-        all_success = false;
-    } else {
-        APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: US915 joined\r\n");
-        join_success_count++;
-        // Display session keys for copying to Chirpstack
-        MultiRegion_DisplaySessionKeys();
-    }
-    HAL_Delay(5000);
+    /* F-R3 (#73): the four copy-pasted join blocks are one loop over a table.
+     * EU868/AS923/AU915 stay enabled (F4: global floater needs all 4 banks). */
+    static const LoRaMacRegion_t kPreJoinRegions[] = {
+        LORAMAC_REGION_US915, LORAMAC_REGION_EU868,
+        LORAMAC_REGION_AS923, LORAMAC_REGION_AU915,
+    };
+    const uint8_t num_regions = (uint8_t)(sizeof(kPreJoinRegions) / sizeof(kPreJoinRegions[0]));
 
-    // ========== EU868 (F4 FIX: re-enabled — global floater needs all 4 banks) ==========
-    SONDE_LOG_STR("\r\n--- Joining EU868 ---\r\n");
-    if (MultiRegion_JoinRegion(LORAMAC_REGION_EU868) != LORAMAC_HANDLER_SUCCESS) {
-        APP_LOG(TS_ON, VLEVEL_H, "FAILED: EU868 join\r\n");
-        all_success = false;
-    } else {
-        APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: EU868 joined\r\n");
-        join_success_count++;
-        // Display session keys for copying to Chirpstack
-        MultiRegion_DisplaySessionKeys();
+    for (uint8_t i = 0; i < num_regions; i++) {
+        LoRaMacRegion_t region = kPreJoinRegions[i];
+        SONDE_LOG("\r\n--- Joining %s ---\r\n", RegionToString(region));
+        if (MultiRegion_JoinRegion(region) != LORAMAC_HANDLER_SUCCESS) {
+            APP_LOG(TS_ON, VLEVEL_H, "FAILED: %s join\r\n", RegionToString(region));
+            all_success = false;
+        } else {
+            APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: %s joined\r\n", RegionToString(region));
+            join_success_count++;
+            // Display session keys for copying to Chirpstack
+            MultiRegion_DisplaySessionKeys();
+        }
+        HAL_Delay(5000);
     }
-    HAL_Delay(5000);
-
-    // ========== AS923 (F4 FIX: re-enabled) ==========
-    SONDE_LOG_STR("\r\n--- Joining AS923 ---\r\n");
-    if (MultiRegion_JoinRegion(LORAMAC_REGION_AS923) != LORAMAC_HANDLER_SUCCESS) {
-        APP_LOG(TS_ON, VLEVEL_H, "FAILED: AS923 join\r\n");
-        all_success = false;
-    } else {
-        APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AS923 joined\r\n");
-        join_success_count++;
-        MultiRegion_DisplaySessionKeys();
-    }
-    HAL_Delay(5000);
-
-    // ========== AU915 (F4 FIX: re-enabled) ==========
-    SONDE_LOG_STR("\r\n--- Joining AU915 ---\r\n");
-    if (MultiRegion_JoinRegion(LORAMAC_REGION_AU915) != LORAMAC_HANDLER_SUCCESS) {
-        APP_LOG(TS_ON, VLEVEL_H, "FAILED: AU915 join\r\n");
-        all_success = false;
-    } else {
-        APP_LOG(TS_ON, VLEVEL_H, "SUCCESS: AU915 joined\r\n");
-        join_success_count++;
-        MultiRegion_DisplaySessionKeys();
-    }
-    HAL_Delay(5000);
-
     // Switch back to US915 as starting region
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
 
@@ -1185,56 +1143,17 @@ bool MultiRegion_InitializeRegionFromNetworkServer(
     memcpy(ctx->app_s_key, app_s_key, 16);
     memcpy(ctx->nwk_s_key, nwk_s_key, 16);
     
-    // Set DevEUI based on region
-    const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
-    const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
-    const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
-    const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
-    const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
-    const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
-    
-    switch (region) {
-        case LORAMAC_REGION_US915:
-            memcpy(ctx->dev_eui, deveui_us915, 8);
-            ctx->datarate = DR_2;              // US915 default
-            ctx->rx2_frequency = 923300000;
-            ctx->rx2_datarate = DR_8;
-            break;
-        case LORAMAC_REGION_EU868:
-            memcpy(ctx->dev_eui, deveui_eu868, 8);
-            ctx->datarate = DR_0;              // EU868 default
-            ctx->rx2_frequency = 869525000;
-            ctx->rx2_datarate = DR_0;
-            break;
-        case LORAMAC_REGION_AS923:
-            memcpy(ctx->dev_eui, deveui_as923, 8);
-            ctx->datarate = DR_2;
-            ctx->rx2_frequency = 923200000;
-            ctx->rx2_datarate = DR_2;
-            break;
-        case LORAMAC_REGION_AU915:
-            memcpy(ctx->dev_eui, deveui_au915, 8);
-            ctx->datarate = DR_2;
-            ctx->rx2_frequency = 923300000;
-            ctx->rx2_datarate = DR_8;
-            break;
-        case LORAMAC_REGION_IN865:
-            memcpy(ctx->dev_eui, deveui_in865, 8);
-            ctx->datarate = DR_0;
-            ctx->rx2_frequency = 866550000;
-            ctx->rx2_datarate = DR_2;
-            break;
-        case LORAMAC_REGION_KR920:
-            memcpy(ctx->dev_eui, deveui_kr920, 8);
-            ctx->datarate = DR_0;
-            ctx->rx2_frequency = 921900000;
-            ctx->rx2_datarate = DR_0;
-            break;
-        default:
-            APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Unsupported region\r\n");
-            return false;
+    // F-R3 (#73): identity + radio defaults from the shared table
+    const RegionIdentity_t *ident = FindRegionIdentity(region);
+    if (!ident) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Unsupported region\r\n");
+        return false;
     }
-    
+    memcpy(ctx->dev_eui, ident->dev_eui, 8);
+    ctx->datarate = ident->datarate;
+    ctx->rx2_frequency = ident->rx2_frequency;
+    ctx->rx2_datarate = ident->rx2_datarate;
+
     // Initialize frame counters (will be loaded from flash if they exist)
     ctx->uplink_counter = 0;
     ctx->downlink_counter = 0;
