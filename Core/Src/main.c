@@ -98,6 +98,8 @@ static void MX_GPIO_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_IWDG_Init(void);
+static void LSE_FailoverToLSI(void);   /* F-14 (#70) */
+static void RTC_LivenessCheck(void);   /* F-14 (#70) */
 /* USER CODE BEGIN PFP */
 void system_sleep(void);
 void leds_boot_seq(void);

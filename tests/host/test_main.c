@@ -442,8 +442,8 @@ static void test_power_model(void)
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 5000, 1000), 0);   /* first sample */
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 5010, 1300), 0);   /* dt<600: last slope */
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 5036, 4600), 36);  /* +36mV over 3600s */
-    CHECK_EQ_I(CalculateVoltageSlope(&vs, 4900, 4600), -100); /* F-01 (#62): discharging must be negative (-100mV over 3600s) */
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 5020, 1500), 36);  /* dt<600: repeat last */
+    CHECK_EQ_I(CalculateVoltageSlope(&vs, 4900, 4600), -100); /* F-01 (#62): discharging must be negative (-100mV over 3600s from baseline 5000@1000) */
 
     /* PredictTimeToVoltage */
     CHECK_EQ_I(PredictTimeToVoltage(5000, -100, 4500), 5);
