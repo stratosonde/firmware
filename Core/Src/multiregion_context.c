@@ -135,7 +135,7 @@ static bool FlashWriteTier2(void);
 static int8_t FindContextSlot(LoRaMacRegion_t region);
 static bool CaptureCurrentContext(MinimalRegionContext_t *ctx);
 static bool RestoreContextToMAC(MinimalRegionContext_t *ctx);
-static const char* RegionToString(LoRaMacRegion_t region);
+const char* RegionToString(LoRaMacRegion_t region);
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -729,22 +729,20 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
 }
 
 /**
- * @brief Auto-switch based on GPS location
+ * @brief Auto-switch to an already-detected region (policy only, no geofence lookup)
  */
-LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon)
+LmHandlerErrorStatus_t MultiRegion_AutoSwitchToRegion(LoRaMacRegion_t target_region)
 {
     // Check if auto-switching is enabled
     #if MULTIREGION_AUTO_SWITCH_ENABLED == 0
     // Disabled - just return success
     return LORAMAC_HANDLER_SUCCESS;
     #endif
-    
+
     if (!g_initialized) {
         return LORAMAC_HANDLER_ERROR;
     }
-    
-    // Use H3Lite to detect region
-    LoRaMacRegion_t target_region = MultiRegion_DetectFromGPS_H3(lat, lon);
+
     LoRaMacRegion_t current_region = MultiRegion_GetActiveRegion();
     
     if (target_region == current_region) {
@@ -763,6 +761,21 @@ LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon)
     
     // Perform the switch
     return MultiRegion_SwitchToRegion(target_region);
+}
+
+/**
+ * @brief Auto-switch based on GPS location
+ */
+LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon)
+{
+    /* #77: thin wrapper — the geofence resolution happens here, the policy in
+     * MultiRegion_AutoSwitchToRegion. Callers that already resolved the H3
+     * region this cycle (SelectRegionAndSession) skip this redundant lookup. */
+    #if MULTIREGION_AUTO_SWITCH_ENABLED == 0
+    return LORAMAC_HANDLER_SUCCESS;
+    #endif
+
+    return MultiRegion_AutoSwitchToRegion(MultiRegion_DetectFromGPS_H3(lat, lon));
 }
 
 /**
@@ -1709,7 +1722,7 @@ APP_LOG(TS_ON, VLEVEL_M, "Restored DevEUI: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%0
 /**
  * @brief Convert region enum to string
  */
-__attribute__((unused)) static const char* RegionToString(LoRaMacRegion_t region)
+const char* RegionToString(LoRaMacRegion_t region)
 {
     switch (region) {case LORAMAC_REGION_AS923: return "AS923";
         case LORAMAC_REGION_AU915: return "AU915";

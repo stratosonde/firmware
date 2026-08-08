@@ -1098,11 +1098,12 @@ static void SelectRegionAndSession(bool *rf_silence)
       /* Start timing for H3 region lookup */
       uint32_t h3_start = HAL_GetTick();
       
-      /* Call H3lite region lookup */
-      LoRaMacRegion_t detected_region = MultiRegion_DetectFromGPS_H3(
-          hgnss.data.latitude, 
-          hgnss.data.longitude
-      );
+      /* F-R4 (#77): ONE geofence resolution per cycle — previously three
+       * (DetectFromGPS_H3 for the name print, latLngToRegion for policy, and
+       * another DetectFromGPS_H3 inside AutoSwitchForLocation). */
+      RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
+      LoRaMacRegion_t detected_region = MultiRegion_DetectFromH3Region(
+          h3_region_id, hgnss.data.latitude, hgnss.data.longitude);
       
       /* Calculate elapsed time for H3 lookup */
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
@@ -1123,8 +1124,6 @@ static void SelectRegionAndSession(bool *rf_silence)
        * radio-silent on stale position risks the whole mission. The DDR-0007
        * GPS-stale bit governs SCIENCE DATA HONESTY, not region selection.
        * Do not "fix" this without revisiting DDR-0013. */
-      RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
-      
       if (h3_region_id == REGION_RESTRICTED) {
         /* R11 (#56): don't RETURN here — that discarded the sample entirely.
          * The archive exists precisely for data that can't be transmitted:
@@ -1143,20 +1142,9 @@ static void SelectRegionAndSession(bool *rf_silence)
       int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);  // 6 decimal places
       int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000); // 6 decimal places
       
-      /* Map region enum to string name */
-      const char* region_name = "UNKNOWN";
-      switch(detected_region) {
-        case LORAMAC_REGION_US915: region_name = "US915"; break;
-        case LORAMAC_REGION_EU868: region_name = "EU868"; break;
-        case LORAMAC_REGION_AS923: region_name = "AS923"; break;
-        case LORAMAC_REGION_AU915: region_name = "AU915"; break;
-        case LORAMAC_REGION_CN470: region_name = "CN470"; break;
-        case LORAMAC_REGION_KR920: region_name = "KR920"; break;
-        case LORAMAC_REGION_IN865: region_name = "IN865"; break;
-        case LORAMAC_REGION_RU864: region_name = "RU864"; break;
-        default: region_name = "UNKNOWN"; break;
-      }
-      
+      /* #77: shared RegionToString — the open-coded switch is gone */
+      const char* region_name = RegionToString(detected_region);
+
       /* Output region lookup result to RTT with timing - use snprintf to avoid buffer issues */
       char h3_msg[200];
       snprintf(h3_msg, sizeof(h3_msg), 
@@ -1167,10 +1155,7 @@ static void SelectRegionAndSession(bool *rf_silence)
       SONDE_LOG_STR(h3_msg);
       
       /* Production: Auto-switch region based on H3lite lookup */
-      LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchForLocation(
-          hgnss.data.latitude, 
-          hgnss.data.longitude
-      );
+      LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchToRegion(detected_region);
       
       if (switch_status == LORAMAC_HANDLER_SUCCESS) {
         SONDE_LOG_STR("MultiRegion: Auto-switch completed successfully\r\n");
@@ -1224,6 +1209,7 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
   }
 }
 
+#if ENABLE_DEBUG_LPP
 /**
  * @brief F-R1 (#74): build the CayenneLPP debug payload. Only transmitted when
  *        ENABLE_DEBUG_LPP is set (see SendTxData tail); the build itself stays
@@ -1302,7 +1288,9 @@ static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
   snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n", 
            hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms, 
            slope_mv_per_hour, time_to_target_signed, current_mode);
-  SONDE_LOG_STR(lpp_msg);}
+  SONDE_LOG_STR(lpp_msg);
+}
+#endif  /* ENABLE_DEBUG_LPP */
 
 /**
  * @brief F-R1 (#74): the adaptive transmit state machine (probe SF10 -> wait
@@ -1703,7 +1691,9 @@ static void SendTxData(void)
 
   ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode);
 
+  #if ENABLE_DEBUG_LPP
   BuildDebugLppPayload(&sensor_data, ttf_ms, slope_mv_per_hour, time_to_target_signed, current_mode);
+  #endif
 
   RunTxStateMachine(&sensor_data, now_timestamp, slope_mv_per_hour, current_mode, rf_silence);
   /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */

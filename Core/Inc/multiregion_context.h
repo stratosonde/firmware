@@ -158,6 +158,22 @@ bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region);
 LmHandlerErrorStatus_t MultiRegion_AutoSwitchForLocation(float lat, float lon);
 
 /**
+ * @brief Auto-switch to an already-detected region — policy only, no geofence
+ *        lookup. Use when the H3 region was already resolved this cycle (#77).
+ * @param target_region: Region detected by MultiRegion_DetectFromGPS_H3 /
+ *        MultiRegion_DetectFromH3Region
+ * @retval LmHandlerErrorStatus_t: Switch status (or success if no switch needed)
+ * @note Respects MULTIREGION_AUTO_SWITCH_ENABLED flag
+ */
+LmHandlerErrorStatus_t MultiRegion_AutoSwitchToRegion(LoRaMacRegion_t target_region);
+
+/**
+ * @brief Map a LoRaMac region enum to its short name ("US915", ...).
+ *        Single shared implementation (#77) — do not open-code per file.
+ */
+const char* RegionToString(LoRaMacRegion_t region);
+
+/**
  * @brief Save current active context to flash
  * @retval bool: true if save successful
  */

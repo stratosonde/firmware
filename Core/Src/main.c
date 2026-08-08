@@ -284,12 +284,9 @@ int main(void)
     SONDE_LOG_STR("Continuing with hardcoded defaults...\r\n");
   }
   
-  // Optional: Run H3Lite profiling suite (enable for testing only)
-  #ifdef H3LITE_PROFILING_ENABLED
-  SONDE_LOG_STR("\r\nRunning H3Lite profiling suite...\r\n");
-  MultiRegion_ProfileH3Performance();
-  #endif
-  
+  /* #77: H3Lite bench profiler deleted (never enabled in flight; git history
+   * retains it if a bench re-run is ever needed). */
+
   SONDE_LOG_STR("Starting LoRaWAN...\r\n");
 
   /* Removed system_sleep() call to keep I2C and UART active for debug */

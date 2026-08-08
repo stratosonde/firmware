@@ -40,20 +40,20 @@ extern "C" {
 LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon);
 
 /**
+ * @brief  Detect LoRaWAN region from an already-resolved H3 RegionId (#77)
+ * @param  h3Region: Region ID from latLngToRegion (resolved once per cycle)
+ * @param  lat/lon: coordinates, used only for fallback search + logs
+ * @retval LoRaMacRegion_t: Detected LoRaWAN region (nearest-neighbour fallback applied)
+ */
+LoRaMacRegion_t MultiRegion_DetectFromH3Region(RegionId h3Region, float lat, float lon);
+
+/**
  * @brief  Map H3Lite RegionId to LoRaMacRegion_t enum
  * @param  h3Region: Region ID from h3lite library
  * @retval LoRaMacRegion_t: Corresponding LoRaWAN region enum
  * @note   Used internally but exposed for testing
  */
 LoRaMacRegion_t H3Region_ToLoRaMacRegion(RegionId h3Region);
-
-/**
- * @brief  Profile H3lite performance with test coordinates
- * @retval None
- * @note   Tests timing for in-region, offshore, and ring search scenarios
- *         Outputs comprehensive results via SEGGER_RTT
- */
-void MultiRegion_ProfileH3Performance(void);
 
 #ifdef __cplusplus
 }
