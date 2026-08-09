@@ -765,6 +765,19 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
        * The first packet's records were already committed on its ACK — no loss. */
       g_tx_state = TX_STATE_COMPLETE;
       g_bulk_packets_sent = 0;
+    } else {
+      /* FR-14 (#88): continuation of the burst after packet 1 is owned HERE,
+       * by the LinkCheck evaluation — OnTxData no longer re-arms for
+       * g_bulk_packets_sent == 1 (it runs before this callback; the race
+       * produced a spurious full extra work cycle). */
+      if (FlashLog_HasUnsentData(&hflashlog) &&
+          g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+        SONDE_LOG_STR("OnRxData: link good - re-arming bulk transfer...\r\n");
+        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+      } else {
+        g_tx_state = TX_STATE_COMPLETE;
+        g_bulk_packets_sent = 0;
+      }
     }
   } else if (linkcheck_received) {
     // Link check result for non-archive transmissions (informational)
@@ -1900,9 +1913,15 @@ static void OnTxData(LmHandlerTxParams_t *params)
   
   /* C7b FIX: Continue bulk transfer if active - re-arm send task for next packet.
    * After TX+RX windows complete, if we're still in BULK_TRANSFER with data remaining,
-   * schedule another SendTxData call to send the next bulk packet immediately. */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER && 
-      FlashLog_HasUnsentData(&hflashlog) && 
+   * schedule another SendTxData call to send the next bulk packet immediately.
+   * FR-14 (#88): EXCEPT for the first archive packet — its continuation is
+   * decided by OnRxData's LinkCheck evaluation, which runs after us. Re-arming
+   * here for packet 1 raced that evaluation: a poor-link COMPLETE verdict
+   * reset to PROBE_SF10 while our task was already armed, producing a
+   * spurious full work cycle (GPS power-up, sensor reads, archive write). */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER &&
+      g_bulk_packets_sent > 1 &&
+      FlashLog_HasUnsentData(&hflashlog) &&
       g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
     SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
     UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
