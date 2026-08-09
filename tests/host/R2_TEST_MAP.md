@@ -8,7 +8,7 @@ undocumented "trust me" fixes are not allowed either.
 Run: `make -C tests/host baseline` (EXPECT_UNFIXED=1 — green while fixes are
 pending, fails only on NEW breakage). Post-fix gate: `make -C tests/host all`.
 
-## Host-provable NOW (failing tests written, 11 regressions)
+## Host-provable - ALL FIXED 2026-08-09 (tests now green under make all)
 
 | Issue | Test | Proves |
 |---|---|---|
@@ -26,7 +26,7 @@ pending, fails only on NEW breakage). Post-fix gate: `make -C tests/host all`.
 | Issue | Extract | Then test |
 |---|---|---|
 | #105 R2-01 burst teardown + #111 R2-07 IsMcpsConfirm + #110 R2-06 LinkCheck gate | The TX state machine transitions out of OnTxData/OnRxData into a pure `burst_controller.c` (R47/R49 precedent) | Drive McpsConfirm-then-McpsIndication ordering on host; assert packet-1 state survives to OnRxData, stale AckReceived rejected, LinkCheck read as per-cycle event |
-| #108 R2-04 all-corrupt retire | Lands free with the #106 CommitThrough rework (retire logic moves into flash_log.c) | Extend test_r2_02 pattern: all-corrupt batch -> watermark advances |
+| ~~#108 R2-04 all-corrupt retire~~ FIXED | Landed with the #106 CommitThrough rework (00eb6a6) | T-6 now emulates the absolute retire path; green |
 | #120 R2-16 Null-Island LastPos | Export parser have_lat/have_lon presence flags (atgm336h.h) | Host: partial GGA (fix_quality+sats+hdop, empty lat/lon) -> presence false; real (0,0) -> true |
 | #132 R2-32 t==0 sentinel | Extract the civil->epoch conversion from SysTimeSyncFromGnss (pure) | Host: 00:00:00 UTC syncs; field-presence not zero-as-sentinel |
 
