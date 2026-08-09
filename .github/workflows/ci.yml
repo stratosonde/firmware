@@ -11,6 +11,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run host tests
         run: make -C tests/host test
+      # FR-xx post-fix gate (WO-0808): all documented regressions are fixed,
+      # so the flight gate (not baseline) is the requirement from ef4e97a on.
+      - name: Flight-readiness regression suite
+        run: make -C tests/host flight
 
   firmware:
     runs-on: ubuntu-latest
@@ -24,3 +28,20 @@ jobs:
           sudo apt-get install -y gcc-arm-none-eabi
       - name: Build firmware
         run: make -C Debug -j"$(nproc)" all
+
+  # FR-20 (#101): the binary that flies must be the binary CI builds.
+  firmware-flight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+      - name: Build flight configuration (SONDE_FLIGHT_BUILD)
+        run: |
+          find Debug -name subdir.mk -exec sed -i 's/-DDEBUG -DCORE_CM4/-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4/' {} +
+          make -C Debug all -j"$(nproc)"
+          arm-none-eabi-size Debug/Radio_Sonde_E5_HF_EU.elf
