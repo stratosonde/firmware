@@ -19,7 +19,7 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 |---|---|
 | What should I work on / what is open | **GitHub issues** — the only work tracker (labels `gate:1`…`gate:6`, `bench-gate`, `decision`, `project-health`) |
 | Done / bench-pending / open summary | This page |
-| Why things are the way they are (design rationale) | `docs/decisions/` — DDR-0001…DDR-0012 |
+| Why things are the way they are (design rationale) | `docs/decisions/` — DDR-0001…DDR-0013 |
 | Per-finding verification detail (F-001…F-030, R01…R51, N-01…N-04) | **GitHub issues** — each open finding's evidence + fix is reproduced in its issue body (#22–#59) |
 | Historical ledgers, reviews, audits (F1–F28, FW-1…FW-22, T1–T4, H3-1…H3-9, bench B1–B8, combined verification ledger) | **Git history only** — deleted from the tree 2026-08-04; last commit containing them is `eaaa1db` |
 | Wire formats | `docs/PayloadFormats.md` — **REGENERATED 2026-08-06** (heartbeat v2 LE, archive v1-v4 with v4 current, golden vectors from CI); `docs/LoRaWANApplicationProtocol.md` §6/§7 normative |
