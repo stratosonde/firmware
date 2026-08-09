@@ -418,7 +418,17 @@ static ConfigStatus_t Config_FlashRead(void)
 static ConfigStatus_t Config_FlashWrite(void)
 {
     FLASH_IF_StatusTypedef flash_status;
-    
+
+    /* FR-04 (#81): verify the write preconditions BEFORE erasing, so a
+     * parameter failure cannot destroy the stored config (previously the
+     * 99-byte struct always failed FLASH_IF_Write's 64-bit alignment check
+     * after the erase had already succeeded). */
+    if ((sizeof(SystemConfig_t) % 8U) != 0U ||
+        (((uint32_t)CONFIG_FLASH_ADDRESS) % 8U) != 0U) {
+        SONDE_LOG("Config flash precondition failed (size/alignment)\r\n");
+        return CONFIG_ERROR_FLASH;
+    }
+
     // Erase flash page first
     flash_status = FLASH_IF_Erase((void*)CONFIG_FLASH_ADDRESS, CONFIG_FLASH_SIZE);
     if (flash_status != FLASH_IF_OK) {

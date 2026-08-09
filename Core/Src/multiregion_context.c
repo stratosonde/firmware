@@ -102,6 +102,14 @@ _Static_assert(sizeof(Tier1Bank_t) <= MULTIREGION_FLASH_PAGE_SIZE,
                "Tier-1 bank must fit in one flash page");
 _Static_assert(sizeof(Tier2Bank_t) <= MULTIREGION_FLASH_PAGE_SIZE,
                "Tier-2 bank must fit in one flash page");
+/* FR-04 (#81): both banks go through FLASH_IF_Write, which rejects lengths
+ * that are not 64-bit aligned. aligned(8) on the type makes sizeof a
+ * multiple of 8 today; pin it so a future field cannot reintroduce the
+ * config.c erase-then-fail class of bug. */
+_Static_assert(sizeof(Tier1Bank_t) % 8U == 0U,
+               "Tier1Bank_t must be 8-byte aligned for FLASH_IF_Write");
+_Static_assert(sizeof(Tier2Bank_t) % 8U == 0U,
+               "Tier2Bank_t must be 8-byte aligned for FLASH_IF_Write");
 
 /* Private variables ---------------------------------------------------------*/
 static MultiRegionStorage_t g_storage;

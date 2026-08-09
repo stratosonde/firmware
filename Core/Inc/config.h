@@ -129,14 +129,20 @@ typedef struct __attribute__((packed)) {
     uint8_t  debug_rtt_level;          // RTT debug level (0-3) - default 2
     uint32_t debug_flags;              // Debug feature flags - default 0x00000001
     
-    /* Reserved for future expansion (16 bytes) */
-    uint8_t  reserved[16];             // Future configuration fields
-    
+    /* Reserved for future expansion (21 bytes) — FR-04 (#81): sized so the
+     * whole struct is a multiple of 8, which FLASH_IF_Write's 64-bit
+     * alignment precondition requires. Was 16 (sizeof 99, 99&7=3): every
+     * config flash write was rejected AFTER the page had been erased. */
+    uint8_t  reserved[21];             // Future configuration fields
+
 } SystemConfig_t;
 
-/* Compile-time size check */
-_Static_assert(sizeof(SystemConfig_t) <= CONFIG_FLASH_SIZE, 
+/* Compile-time size checks */
+_Static_assert(sizeof(SystemConfig_t) <= CONFIG_FLASH_SIZE,
                "SystemConfig_t must fit in allocated flash space");
+/* FR-04 (#81): FLASH_IF_Write rejects non-8-aligned lengths */
+_Static_assert(sizeof(SystemConfig_t) % 8U == 0U,
+               "SystemConfig_t must be 8-byte aligned for FLASH_IF_Write");
 
 /**
  * @brief Configuration validation result
