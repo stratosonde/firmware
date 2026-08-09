@@ -151,6 +151,14 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         plan.time_to_target_h = -(int16_t)time_to_critical;
     } else if (time_to_full != 0xFFFF) {
         plan.time_to_target_h = (int16_t)time_to_full;
+    } else if (plan.battery_mv_normalized <= 4500 &&
+               plan.voltage_slope_mv_per_hour < 0) {
+        /* R2-17 (#121): already at/below the 4500 mV critical threshold and
+         * still discharging - PredictTimeToVoltage returns 0xFFFF for both
+         * targets ("moving away"), and emitting 0 here made the log path and
+         * Cayenne ch 12 render a dying battery as "Stable". 0 is reserved
+         * for genuinely stable; -1 = critical now, no computable ETA. */
+        plan.time_to_target_h = -1;
     } else {
         plan.time_to_target_h = 0;
     }
