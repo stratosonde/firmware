@@ -11,12 +11,34 @@ INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
 SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
 
+# Flight-readiness regression suite (2026-08-08 review). Separate binary: it
+# compiles flash_log.c against the simulated NOR backend in fake_w25q.c, which
+# the main runner neither needs nor wants linked in.
+FLIGHT_SRCS := test_flightreadiness.c fake_w25q.c
+FLIGHT_INCLUDES := $(INCLUDES) -I.
+
 test_runner$(EXE): $(SRCS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
 
-.PHONY: test clean
+test_flight$(EXE): $(FLIGHT_SRCS)
+	$(CC) $(CFLAGS) $(FLIGHT_INCLUDES) -o $@ $(FLIGHT_SRCS) -lm
+
+.PHONY: test flight baseline all clean
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
+# Post-fix gate: every FR-xx regression must pass. Wire this into CI once the
+# P0/P1 fixes land.
+flight: test_flight$(EXE)
+	./test_flight$(EXE)
+
+# Pre-fix gate: passes while the documented FR-xx regressions are still open,
+# but fails on any NEW breakage. Use this until the fixes land so CI stays
+# meaningful instead of red-by-default.
+baseline: test_flight$(EXE)
+	EXPECT_UNFIXED=1 ./test_flight$(EXE)
+
+all: test flight
+
 clean:
-	$(RM) test_runner$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE)
