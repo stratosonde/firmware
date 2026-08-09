@@ -186,11 +186,25 @@ UTIL_ADV_TRACE_Status_t vcom_ReceiveInit(void (*RxCb)(uint8_t *rxChar, uint16_t 
 
   HAL_UARTEx_StopModeWakeUpSourceConfig(&huart1, WakeUpSelection);
 
-  /* Make sure that no UART transfer is on-going */
-  while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_BUSY) == SET);
-
-  /* Make sure that UART is ready to receive)   */
-  while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_REACK) == RESET);
+  /* Make sure that no UART transfer is on-going.
+   * FR-13 (#93): bounded — an unclocked/wedged USART1 spun these flag loops
+   * forever (IWDG reset at ~33 s with a misattributed cause). HAL_GetTick()
+   * is safe here: this runs long after SYS_TimerInitialisedFlag is set.
+   * No IWDG refresh inside the loops — a real wedge SHOULD reset. */
+  {
+    uint32_t flag_wait_start = HAL_GetTick();
+    while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_BUSY) == SET) {
+      if ((HAL_GetTick() - flag_wait_start) > 100U) {
+        return UTIL_ADV_TRACE_UNKNOWN_ERROR;
+      }
+    }
+    flag_wait_start = HAL_GetTick();
+    while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_REACK) == RESET) {
+      if ((HAL_GetTick() - flag_wait_start) > 100U) {
+        return UTIL_ADV_TRACE_UNKNOWN_ERROR;
+      }
+    }
+  }
 
   /* Enable USART interrupt */
   __HAL_UART_ENABLE_IT(&huart1, UART_IT_WUF);
