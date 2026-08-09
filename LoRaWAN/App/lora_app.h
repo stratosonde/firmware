@@ -212,6 +212,14 @@ void LoRaWAN_ResetJoinSuccess(void);
  * @note This performs a complete stack teardown and rebuild to ensure clean state
  */
 void LoRaApp_ReInitStack(LoRaMacRegion_t new_region);
+
+/**
+ * @brief Erase BOTH LoRaWAN NVM context slots (pages 126+127) and reset the
+ *        in-RAM slot generation counter (FR-11 / #94)
+ * @retval true if both slot pages erased successfully
+ * @note  lora_app.c owns the slot addresses; callers must not hardcode them
+ */
+bool LoRaApp_EraseNvmSlots(void);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

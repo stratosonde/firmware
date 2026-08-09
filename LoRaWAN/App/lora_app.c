@@ -2095,13 +2095,31 @@ typedef struct {
 
 static uint32_t g_nvm_generation = 0;
 
+/* FR-03 (#85): ST passes two DIFFERENT lengths for the same object —
+ * store gets (sizeof(LoRaMacNvmData_t)+7)&~7 (measured 1496), restore gets
+ * sizeof(LoRaMacNvmData_t) (1492). The header/CRC must use the LOGICAL
+ * length so both sides agree; only the physical flash write needs the
+ * 64-bit-padded length. These asserts pin that contract at compile time. */
+_Static_assert(sizeof(NvmSlotHeader_t) % 8U == 0U, "NVM slot header must be 8-byte aligned");
+_Static_assert(((sizeof(LoRaMacNvmData_t) + 7U) & ~7U) + sizeof(NvmSlotHeader_t) <= FLASH_PAGE_SIZE,
+               "padded NVM payload + header must fit one flash page");
+
 static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
 {
   /* USER CODE BEGIN OnStoreContextRequest_1 */
 
   /* USER CODE END OnStoreContextRequest_1 */
+  /* FR-03 (#85): logical length = the true object size (what restore checks
+   * and what the CRC covers); padded length = what FLASH_IF_Write's 64-bit
+   * alignment precondition requires. Using the passed nvm_size (already
+   * padded by LmHandler) for the header made every restore reject every
+   * slot (1496 != 1492) and read 4 bytes out of bounds past the object. */
+  const uint32_t logical_len = sizeof(LoRaMacNvmData_t);
+  const uint32_t padded_len  = (logical_len + 7U) & ~7U;
+  static uint8_t staging[(sizeof(LoRaMacNvmData_t) + 7U) & ~7U];
+
   if (nvm == NULL || nvm_size == 0 ||
-      nvm_size + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
+      padded_len + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
     SONDE_LOG("NVM store REJECTED (size %lu too large or bad ptr)\r\n",
                       (unsigned long)nvm_size);
     return;  /* honest failure, no silent drop */
@@ -2113,15 +2131,20 @@ static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
   NvmSlotHeader_t hdr;
   hdr.magic = NVM_SLOT_MAGIC;
   hdr.generation = g_nvm_generation + 1;
-  hdr.length = nvm_size;
-  hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, nvm_size);
+  hdr.length = logical_len;
+  hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, logical_len);
+
+  /* Stage the payload so the padded tail is defined bytes, not an
+   * out-of-bounds read past the caller's object. */
+  memcpy(staging, nvm, logical_len);
+  memset(staging + logical_len, 0, padded_len - logical_len);
 
   if (FLASH_IF_Erase((void *)slot_addr, FLASH_PAGE_SIZE) != FLASH_IF_OK) {
     SONDE_LOG_STR("NVM store: slot erase FAILED\r\n");
     return;
   }
   if (FLASH_IF_Write((void *)slot_addr, &hdr, sizeof(hdr)) != FLASH_IF_OK ||
-      FLASH_IF_Write((void *)(slot_addr + sizeof(hdr)), nvm, nvm_size) != FLASH_IF_OK) {
+      FLASH_IF_Write((void *)(slot_addr + sizeof(hdr)), staging, padded_len) != FLASH_IF_OK) {
     SONDE_LOG_STR("NVM store: slot write FAILED\r\n");
     return;
   }
@@ -2166,6 +2189,20 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   /* USER CODE BEGIN OnRestoreContextRequest_Last */
 
   /* USER CODE END OnRestoreContextRequest_Last */
+}
+
+/* FR-11 (#94): single owner for NVM slot erasure. The commissioning paths in
+ * multiregion_context.c used to erase only page 126 via a hardcoded
+ * 0x0803F000UL literal, leaving a valid older-generation slot B that restore
+ * would then select — the "clean state" erase survived itself. Erasing BOTH
+ * slots and resetting the generation counter is the only correct semantic. */
+bool LoRaApp_EraseNvmSlots(void)
+{
+  bool ok = true;
+  if (FLASH_IF_Erase(NVM_SLOT_A_ADDR, FLASH_PAGE_SIZE) != FLASH_IF_OK) ok = false;
+  if (FLASH_IF_Erase(NVM_SLOT_B_ADDR, FLASH_PAGE_SIZE) != FLASH_IF_OK) ok = false;
+  g_nvm_generation = 0;
+  return ok;
 }
 
 /**

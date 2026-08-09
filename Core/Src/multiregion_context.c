@@ -827,6 +827,11 @@ bool MultiRegion_ClearAllContexts(void)
             ok = false;
         }
     }
+    /* FR-11 (#94): "clear all contexts" must also clear the LoRaWAN NVM
+     * slots, or a stale DevEUI/session survives the wipe. */
+    if (!LoRaApp_EraseNvmSlots()) {
+        ok = false;
+    }
     return ok;
 }
 
@@ -919,9 +924,10 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
         LmHandlerParams.ActiveRegion = region;
         
         // CRITICAL: Erase LoRaWAN NVM to prevent DevEUI restoration
+        // FR-11 (#94): erase BOTH slots via the owner — page-126-only erase
+        // left a valid stale slot B that restore would select.
         SONDE_LOG_STR("Erasing LoRaWAN NVM to ensure clean state...\r\n");
-        extern FLASH_IF_StatusTypedef FLASH_IF_Erase(void *pFlashAddress, uint32_t page_size);
-        FLASH_IF_Erase((void*)0x0803F000UL, 2048);  // LORAWAN_NVM_BASE_ADDRESS
+        LoRaApp_EraseNvmSlots();
         HAL_Delay(100);
     }
     
@@ -1050,8 +1056,10 @@ bool MultiRegion_PreJoinAllRegions(void)
     APP_LOG(TS_ON, VLEVEL_H, "========================================\r\n\r\n");
     
     // CRITICAL: Erase LoRaWAN NVM first to prevent old DevEUI restoration
+    // FR-11 (#94): erase BOTH slots via the owner — page-126-only erase
+    // left a valid stale slot B that restore would select.
     SONDE_LOG_STR("Erasing LoRaWAN NVM for clean multi-region start...\r\n");
-    FLASH_IF_Erase((void*)0x0803F000UL, 2048);  // LORAWAN_NVM_BASE_ADDRESS
+    LoRaApp_EraseNvmSlots();
     HAL_Delay(100);
     
     bool all_success = true;
