@@ -416,9 +416,17 @@ bool MultiRegion_ForceSaveCurrentContext(void)
      *
      * Solution: store uplink_counter + FRAME_COUNTER_SAVE_INTERVAL so the
      * restored value is always ahead of any counter the server has seen.
-     * The live MAC counter is NOT modified — only the flash copy is advanced.
+     * The live MAC counter is NOT modified — only the context copy (which is
+     * also the in-RAM working copy in g_storage) is advanced.
+     *
+     * FR-05 (#82): the margin mutates a CRC-covered field, so the CRC MUST
+     * be restamped. ctx points into g_storage.contexts[] — without the
+     * restamp the active region's in-RAM context fails ValidateContextCRC()
+     * from the first batched save on, and a later switch-back to that region
+     * is silently refused (IsRegionJoined CRC check).
      */
     ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+    UpdateContextCRC(ctx);  /* FR-05: restamp — the margin is CRC-covered state */
     SONDE_LOG("Frame counter margin applied: stored FCntUp=%lu (advanced by %d)\r\n",
                       ctx->uplink_counter, FRAME_COUNTER_SAVE_INTERVAL);
     
