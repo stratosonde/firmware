@@ -906,7 +906,16 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
 {
     // Access external join success flag from lora_app.c
     extern volatile uint8_t g_multiregion_join_success;
-    
+
+    /* F4/T1 (DDR-0006/0008) + FR-12 (#89): joins are COMMISSIONING-ONLY.
+     * This guard previously sat AFTER LmHandlerJoin() — "defense in depth"
+     * that fired after the join request it exists to block. In FLIGHT it
+     * would have transmitted before returning the error. Check FIRST. */
+    if (!MissionState_IsCommissioning()) {
+        SONDE_LOG_STR("JoinRegion: BLOCKED - joins are commissioning-only (DDR-0006)\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+
     if (!g_initialized) {
         MultiRegion_Init();
     }
@@ -967,14 +976,6 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     
     // Trigger join (LmHandlerJoin returns void)
     LmHandlerJoin(ACTIVATION_TYPE_OTAA, true);
-    
-    /* F4/T1 (DDR-0006/0008): joins are COMMISSIONING-ONLY. The mission gate at
-     * the top of the provisioning path (and here, as defense in depth) makes
-     * the wait loop unreachable after the one-way door closes. */
-    if (!MissionState_IsCommissioning()) {
-        SONDE_LOG_STR("JoinRegion: BLOCKED - joins are commissioning-only (DDR-0006)\r\n");
-        return LORAMAC_HANDLER_ERROR;
-    }
 
     /* R30/D6: the wait loop is now BOUNDED. "Infinite retry until success" was
      * acceptable only if the commissioning gate could never fail; a bounded
