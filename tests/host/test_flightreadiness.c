@@ -470,6 +470,145 @@ static void test_header_pingpong_survives_rewrites(void)
  */
 
 /* ========================================================================== */
+
+/* ========================================================================== */
+/* R2 findings (2026-08-09 pre-flight review, issues #105-#123)               */
+/* EXPECTED-FAIL-BEFORE-FIX: each CHECK_REGRESSION proves the bug on the      */
+/* current tree and must pass after the root-cause fix lands.                 */
+/* ========================================================================== */
+
+static void test_r2_02_watermark_overadvance_on_wrap(void)
+{
+    printf("-- R2-02 (#106): watermark over-advance on ring wrap\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* Fill past capacity: wrap by 8 records. ~0.5 s, same as T-7. */
+    const uint32_t total = FLASH_LOG_MAX_RECORDS + 8U;
+    for (uint32_t i = 0; i < total; i++) {
+        sensor_t s = make_sensors((uint16_t)(i & 0xFFFFu));
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 5000U + i, 0, 0), FLASH_LOG_OK);
+    }
+
+    /* Long RF gap: nothing was ever transmitted. */
+    CHECK_EQ_I(hlog.last_transmitted_sequence, 0);
+
+    /* Emulate the lora_app.c caller composition EXACTLY (lora_app.c:1395,
+     * :1519, :1834): pin the commit base BEFORE the read ... */
+    uint32_t entry_watermark = hlog.last_transmitted_sequence;
+    FlashLog_Record_t batch[6];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped),
+               FLASH_LOG_OK);
+
+    /* Guards (pass on every tree): the BUG 1.7 clamp jumped the watermark to
+     * the oldest record that still exists, and the batch starts there. */
+    CHECK_EQ_I(got, 6);
+    CHECK(hlog.last_transmitted_sequence > 0);       /* wrap clamp fired (W -> W') */
+    CHECK_EQ_I(batch[0].sequence, hlog.last_transmitted_sequence);  /* oldest existing */
+    /* hlog.last_transmitted_sequence is now the clamped base — mutated UNDER us. */
+
+    /* ... then commit a count computed against the OLD base (0) onto the NEW
+     * base (8). lora_app.c: g_bulk_pending_mark = (last_seq + 1) - entry. */
+    uint32_t last_sent = batch[got - 1].sequence;             /* 13 */
+    uint32_t mark = (last_sent + 1U) - entry_watermark;   /* vs OLD base */
+    CHECK_EQ_I(FlashLog_MarkRecordsTransmitted(&hlog, mark), FLASH_LOG_OK);
+
+    /* The watermark must land exactly past the last transmitted record.
+     * Today it lands (clamped_base) records further on: sequences past
+     * last_sent were never read, never sent,
+     * never counted as skipped — silently, permanently discarded. */
+    CHECK_REGRESSION(hlog.last_transmitted_sequence == last_sent + 1U, "R2-02");
+
+    fake_w25q_free();
+}
+
+static void test_r2_03_sequence_identity_crosscheck(void)
+{
+    printf("-- R2-03 (#107): positional read committed by stored sequence\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    for (uint16_t i = 0; i < 6; i++) {
+        sensor_t s = make_sensors(i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6000U + i, 0, 0), FLASH_LOG_OK);
+    }
+
+    /* Plant a CRC-VALID record carrying the WRONG sequence at slot 2 — the
+     * sector-boundary/frontier-scan mixup from the finding. Read the real
+     * record, swap identity, restamp CRC, poke it back raw. */
+    FlashLog_Record_t planted;
+    CHECK_EQ_I(W25Q_Read(&hw, FLASH_LOG_DATA_START + 2U * FLASH_LOG_RECORD_SIZE,
+                         (uint8_t *)&planted, sizeof(planted)), W25Q_OK);
+    planted.sequence = 99;
+    planted.crc32 = FlashLog_CRC32((const uint8_t *)&planted,
+                                   sizeof(planted) - sizeof(uint32_t));
+    fake_w25q_poke(FLASH_LOG_DATA_START + 2U * FLASH_LOG_RECORD_SIZE,
+                   &planted, sizeof(planted));
+
+    /* Guards: the plant is genuinely well-formed (passes on every tree). */
+    {
+        FlashLog_Record_t verify;
+        CHECK_EQ_I(W25Q_Read(&hw, FLASH_LOG_DATA_START + 2U * FLASH_LOG_RECORD_SIZE,
+                             (uint8_t *)&verify, sizeof(verify)), W25Q_OK);
+        CHECK(FlashLog_VerifyRecord(&verify));
+        CHECK_EQ_I(verify.sequence, 99);
+    }
+
+    FlashLog_Record_t batch[6];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped),
+               FLASH_LOG_OK);
+
+    /* Desired: identity mismatch is treated as corruption — counted skipped,
+     * never packed. Today the foreign record sails through and the caller's
+     * (seq+1)-entry arithmetic underflows. */
+    CHECK_REGRESSION(skipped == 1U, "R2-03");
+    bool foreign_packed = false;
+    for (uint32_t i = 0; i < got; i++) {
+        if (batch[i].sequence == 99) foreign_packed = true;
+    }
+    CHECK_REGRESSION(!foreign_packed, "R2-03");
+
+    fake_w25q_free();
+}
+
+static void test_r2_14_ts_wrap_false_latch(void)
+{
+    printf("-- R2-14 (#118): TS_WRAP false latch at first GNSS time sync\n");
+
+    /* NOTE: s_ts_wrapped / s_last_ts_min are function-statics in
+     * EncodeCompactBinaryPacket; this is the only compact-encode user in
+     * this binary, so the statics start fresh here. */
+    CompactTelemetryPacket_t pkt;
+
+    sensor_t s = make_sensors(0);
+    s.gnss_valid = false;                 /* boot-relative clock, undisciplined */
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 100, 0, MODE_NORMAL));
+    CHECK(!(pkt.status & STATUS_TS_WRAP_MASK));   /* guard */
+
+    /* First fix: SysTimeSyncFromGnss jumps the clock to epoch; epoch/60
+     * truncated to uint16 lands BELOW the pre-sync value (we pick the ~50%
+     * failing case). The wrap bit must NOT latch on the discipline
+     * transition. */
+    s = make_sensors(0);                  /* gnss_valid = true, not stale */
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 10, 0, MODE_NORMAL));
+    CHECK(pkt.status & STATUS_TIME_GNSS_MASK);    /* guard: now disciplined */
+    CHECK_REGRESSION(!(pkt.status & STATUS_TS_WRAP_MASK), "R2-14");
+
+    /* Guard the fix direction: a real 45.5-day wrap within the disciplined
+     * regime must still set the bit. */
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 60000, 0, MODE_NORMAL));
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 20, 0, MODE_NORMAL));
+    CHECK(pkt.status & STATUS_TS_WRAP_MASK);
+}
+
 int main(void)
 {
     printf("=== Stratosonde flight-readiness regression tests ===\n\n");
@@ -481,6 +620,9 @@ int main(void)
     test_all_corrupt_does_not_wedge();
     test_header_pingpong_survives_rewrites();
     test_erase_ahead_slack();
+    test_r2_02_watermark_overadvance_on_wrap();
+    test_r2_03_sequence_identity_crosscheck();
+    test_r2_14_ts_wrap_false_latch();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {

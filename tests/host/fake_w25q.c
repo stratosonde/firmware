@@ -65,6 +65,15 @@ void fake_w25q_fail_next_reads(int n) { g_fail_reads = n; }
 
 uint8_t fake_w25q_peek(uint32_t addr) { return g_mem[addr]; }
 
+void fake_w25q_poke(uint32_t addr, const void *data, uint32_t len)
+{
+    /* Test-only fault injection: raw placement write that bypasses NOR
+     * program-only semantics. Used by R2-03 to plant a CRC-valid record
+     * carrying the WRONG sequence (the identity-mismatch fault). */
+    if (g_mem == NULL) return;
+    memcpy(g_mem + addr, data, len);
+}
+
 bool fake_w25q_is_erased(uint32_t addr, uint32_t len)
 {
     for (uint32_t i = 0; i < len; i++) {

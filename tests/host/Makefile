@@ -35,7 +35,8 @@ flight: test_flight$(EXE)
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_flight$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE)
+	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 
 all: test flight

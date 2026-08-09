@@ -41,6 +41,7 @@ SysTime_t SysTimeGet(void) { SysTime_t t = { g_fake_epoch, 0 }; return t; }
 
 static int g_failures = 0;
 static int g_checks = 0;
+static int g_expected_failures = 0;
 
 #define CHECK(cond) do { \
     g_checks++; \
@@ -56,6 +57,17 @@ static int g_checks = 0;
     if (_a != _e) { \
         g_failures++; \
         printf("FAIL %s:%d: %s == %ld, expected %ld\n", __FILE__, __LINE__, #actual, _a, _e); \
+    } \
+} while (0)
+
+/* Marks a check KNOWN to fail on the unfixed tree (R2 findings, 2026-08-09).
+ * EXPECT_UNFIXED=1 inverts the exit code so CI stays green pre-fix. */
+#define CHECK_REGRESSION(cond, fr_id) do { \
+    g_checks++; \
+    if (!(cond)) { \
+        g_failures++; \
+        g_expected_failures++; \
+        printf("FAIL [%s] %s:%d: %s\n", fr_id, __FILE__, __LINE__, #cond); \
     } \
 } while (0)
 
@@ -480,6 +492,100 @@ static void test_power_model(void)
     CHECK(strcmp(GetModeName((OperatingMode_t)99), "UNKNOWN") == 0);
 }
 
+
+/* ========================================================================== */
+/* R2 findings (2026-08-09 pre-flight review) — EXPECTED-FAIL-BEFORE-FIX      */
+/* ========================================================================== */
+
+static void test_r2_10_slope_temperature_contamination(void)
+{
+    /* R2-10 (#114): the slope is computed on the temperature-NORMALIZED
+     * voltage. NormalizeBatteryVoltage ADDS compensation as temperature falls
+     * (steeply below -55C: +430 mV at -55C, +2170 mV at -65C), so cooling at
+     * constant charge state produces a RISING normalized voltage — the slope
+     * reads cooling as charging. Sweep temperature at CONSTANT raw voltage:
+     * the slope must stay flat. */
+    VoltageSlope_t vs;
+    memset(&vs, 0, sizeof(vs));
+    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4500, -55.0f, false, 3600, true, false);
+    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4500, -65.0f, false, 7200, true, false);
+    (void)p1;
+    /* Normalized voltage jumped ~4930 -> ~6670 mV purely from temperature. */
+    CHECK_REGRESSION(abs(p2.voltage_slope_mv_per_hour) <= 20, "R2-10");
+    /* And the mode must not flip to GPS-on NORMAL because it got COLDER. */
+    CHECK_REGRESSION(p2.power_mode != MODE_NORMAL, "R2-10");
+}
+
+static void test_r2_11_no_history_default_uses_raw_voltage(void)
+{
+    /* R2-11 (#115): slope state is RAM-only — after every reset there is no
+     * history and SelectModeFromPredictions falls through every branch to
+     * MODE_CONSERVATIVE (10-min cadence, GPS ON) even with a marginal
+     * battery. The no-history default must derive from RAW voltage, not
+     * fall through. (Baseline persistence across resets is the backup-reg
+     * half of the fix — bench-verified, DR12-15.) */
+    VoltageSlope_t vs;
+    memset(&vs, 0, sizeof(vs));
+    TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false);
+    CHECK_EQ_I(p.voltage_slope_mv_per_hour, 0);   /* guard: truly no history */
+    CHECK_REGRESSION(p.power_mode != MODE_CONSERVATIVE, "R2-11");
+    CHECK_REGRESSION(!p.gps_enabled, "R2-11");
+}
+
+static void test_r2_17_already_critical_never_reports_stable(void)
+{
+    /* R2-17 (#121): at/below the 4500 mV critical threshold while
+     * discharging, both PredictTimeToVoltage calls return 0xFFFF, so
+     * DecideTransmitPlan emits time_to_target_h == 0 — which the log path
+     * (lora_app.c) and Cayenne ch 12 render as "Stable". 0 must be reserved
+     * for genuinely stable; already-critical must be distinguishable
+     * (any non-zero encoding is acceptable). */
+    VoltageSlope_t vs;
+    memset(&vs, 0, sizeof(vs));
+    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4600, 25.0f, false, 3600, true, false);
+    (void)p1;
+    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4400, 25.0f, false, 7200, true, false);
+    CHECK_EQ_I(p2.voltage_slope_mv_per_hour, -200);  /* guard: discharging */
+    CHECK(p2.power_mode != MODE_NORMAL);             /* guard: not charging */
+    CHECK_REGRESSION(p2.time_to_target_h != 0, "R2-17");
+}
+
+static void test_r2_30_rmc_valid_clears_on_void(void)
+{
+    /* R2-30 (#130): GNSS_ParseRMC sets data.valid on status 'A' but never
+     * clears it on 'V' — a fix lost mid-window still reads as held. */
+    GNSS_HandleTypeDef g;
+    memset(&g, 0, sizeof(g));
+    GNSS_ParseRMC(&g, "$GNRMC,120000,A,4807.038,N,01131.000,E,0.5,180.0,060825,,,A*00");
+    CHECK(g.data.valid);   /* guard: 'A' sets it (passes today) */
+    GNSS_ParseRMC(&g, "$GNRMC,120100,V,,,,,,,060825,,,N*00");
+    CHECK_REGRESSION(!g.data.valid, "R2-30");   /* 'V' must clear it */
+}
+
+static void test_r2_19_dma_overrun_blind_spot(void)
+{
+    /* R2-19 (#123): dma_produced_total advances in 256-byte quanta, so the
+     * (produced - consumed) > GNSS_DMA_BUFFER_SIZE check under-reports: the
+     * counter can say exactly one buffer-full while up to 255 REAL bytes
+     * past that were already produced (and lost) uncounted. A full buffer's
+     * worth of unconsmed production must already surface as an overrun. */
+    GNSS_HandleTypeDef g;
+    memset(&g, 0, sizeof(g));
+    g.is_powered = true;
+    g_host_dma_cndtr = 0;            /* head = (512-0)%512 = 0 == tail: nothing consumable */
+    g.dma_produced_total = 512;      /* two half-callbacks fired; parser never ran */
+    GNSS_ProcessDMABuffer(&g);
+    CHECK_REGRESSION(g.dma_overrun_count == 1, "R2-19");
+
+    /* Guard (passes on every tree): a clear > SIZE overrun is detected. */
+    memset(&g, 0, sizeof(g));
+    g.is_powered = true;
+    g_host_dma_cndtr = 0;
+    g.dma_produced_total = 768;
+    GNSS_ProcessDMABuffer(&g);
+    CHECK_EQ_I(g.dma_overrun_count, 1);
+}
+
 int main(void)
 {
     test_crc_vectors();
@@ -491,8 +597,30 @@ int main(void)
     test_decide_transmit_plan();
     test_nmea_checksum_guard();
     test_gnss_parser();
+    test_r2_10_slope_temperature_contamination();
+    test_r2_11_no_history_default_uses_raw_voltage();
+    test_r2_17_already_critical_never_reports_stable();
+    test_r2_30_rmc_valid_clears_on_void();
+    test_r2_19_dma_overrun_blind_spot();
 
-    printf("\n%d checks, %d failures\n", g_checks, g_failures);
+    printf("\n%d checks, %d failures", g_checks, g_failures);
+    if (g_expected_failures > 0) {
+        printf(" (%d are documented R2 regressions)", g_expected_failures);
+    }
+    printf("\n");
+
+    const char *expect_unfixed = getenv("EXPECT_UNFIXED");
+    if (expect_unfixed != NULL && expect_unfixed[0] == '1') {
+        int unexpected = g_failures - g_expected_failures;
+        if (unexpected == 0) {
+            printf("PRE-FIX BASELINE OK (%d documented regressions still open)\n",
+                   g_expected_failures);
+            return 0;
+        }
+        printf("UNEXPECTED FAILURES: %d\n", unexpected);
+        return 1;
+    }
+
     if (g_failures == 0) {
         printf("ALL HOST TESTS PASSED\n");
         return 0;
