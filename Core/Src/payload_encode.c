@@ -105,12 +105,23 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
      * wire; it remains available in flash/bulk records.) */
     static bool s_ts_wrapped = false;      /* sticky for the mission */
     static uint16_t s_last_ts_min = 0;
-    if (timestamp_min < s_last_ts_min) {
-        s_ts_wrapped = true;               /* 45.5-day wrap observed */
-    }
-    s_last_ts_min = timestamp_min;
+    static bool s_baseline_valid = false;  /* disciplined baseline established */
 
     const bool time_gnss_disciplined = sensors->gnss_valid && !sensors->gnss_stale;
+
+    /* R2-14 (#118): only track wraps while GNSS-disciplined. Before the first
+     * fix the clock is boot-relative; SysTimeSyncFromGnss then JUMPS it to
+     * epoch, and epoch/60 truncated to u16 lands below the pre-sync value
+     * ~50% of the time - a discipline transition, not a 45.5-day wrap, and
+     * it latched the wrap bit for the whole mission. Re-baseline on the
+     * transition to disciplined time instead. */
+    if (time_gnss_disciplined) {
+        if (s_baseline_valid && timestamp_min < s_last_ts_min) {
+            s_ts_wrapped = true;           /* real 45.5-day wrap observed */
+        }
+        s_last_ts_min = timestamp_min;
+        s_baseline_valid = true;
+    }
     packet->status = (sensors->gnss_stale ? STATUS_GPS_STALE_MASK : 0)
                    | (sensors->temp_stale ? STATUS_TEMP_STALE_MASK : 0)
                    | (sensors->hum_stale  ? STATUS_HUM_STALE_MASK : 0)
