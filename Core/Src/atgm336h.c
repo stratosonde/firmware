@@ -1039,10 +1039,10 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
     }
   }
 
-  if (status == 'A')
-  {
-    hgnss->data.valid = true;
-  }
+  /* R2-30 (#130): the RMC status field is authoritative for fix validity -
+   * 'V' (void) must CLEAR a previously latched valid, not just fail to set
+   * it. Otherwise a fix lost mid-window kept reading as held until reboot. */
+  hgnss->data.valid = (status == 'A');
 
   return 0;
 }

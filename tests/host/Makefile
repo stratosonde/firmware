@@ -17,10 +17,14 @@ SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
 FLIGHT_SRCS := test_flightreadiness.c fake_w25q.c
 FLIGHT_INCLUDES := $(INCLUDES) -I.
 
-test_runner$(EXE): $(SRCS)
+# Sources #included by the test TUs (not linked separately) must still be
+# prerequisites or make will not rebuild when they change.
+INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
+
+test_runner$(EXE): $(SRCS) $(INCLUDED_SRCS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
 
-test_flight$(EXE): $(FLIGHT_SRCS)
+test_flight$(EXE): $(FLIGHT_SRCS) $(INCLUDED_SRCS)
 	$(CC) $(CFLAGS) $(FLIGHT_INCLUDES) -o $@ $(FLIGHT_SRCS) -lm
 
 .PHONY: test flight baseline all clean
