@@ -378,10 +378,13 @@ static void test_all_corrupt_does_not_wedge(void)
     CHECK_EQ_I(got, 0);
     CHECK_EQ_I(skipped, 4);
 
-    /* The anti-wedge path in lora_app.c retires `skipped` here. Verify that
-     * retiring exactly `skipped` clears the backlog — if it does not, the
-     * caller's anti-wedge is insufficient (FR-09). */
-    CHECK_EQ_I(FlashLog_MarkRecordsTransmitted(&hlog, skipped), FLASH_LOG_OK);
+    /* The anti-wedge retire path in lora_app.c (post R2-02/#106 rework; also
+     * closes the caller half of R2-04/#108) commits ABSOLUTELY:
+     * retire_through = watermark + skipped when nothing read clean. Verify
+     * that retiring exactly the consumed run clears the backlog - if it
+     * does not, the caller anti-wedge is insufficient (FR-09). */
+    CHECK_EQ_I(FlashLog_CommitThrough(&hlog,
+                  hlog.last_transmitted_sequence + skipped), FLASH_LOG_OK);
     CHECK(!FlashLog_HasUnsentData(&hlog));
 
     fake_w25q_free();
