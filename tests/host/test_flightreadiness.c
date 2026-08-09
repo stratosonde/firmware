@@ -114,13 +114,12 @@ static void test_flash_write_alignment(void)
 /* ========================================================================== */
 /* T-4 / FR-07 — bulk packet record identity under skips                      */
 /* ========================================================================== */
-/* EncodeBulkPacketV3 writes ONE base_seq and defines record i's identity as
- * base_seq + i. The caller (lora_app.c:1462) passes flash_records[0].sequence,
- * but the array reaching the encoder has been compacted by two independent
- * skip paths. One skip and every later record is misattributed.
- *
- * This test encodes a batch whose true sequences are non-contiguous and
- * asserts the decoded identity of each record matches its true sequence. */
+/* FIXED (FR-07 option A, #87): wire v5 (packet_type 0x05) serializes each
+ * record's own sequence, so identity is correct by construction for ANY
+ * candidate array — compacted by corrupt-skips, failed conversions, or any
+ * future filter. This test encodes batches whose true sequences are
+ * non-contiguous and asserts the decoded identity of each record equals its
+ * true sequence. */
 
 static HighResTelemetryRecord_t make_highres(uint16_t marker)
 {
@@ -132,28 +131,28 @@ static HighResTelemetryRecord_t make_highres(uint16_t marker)
     return r;
 }
 
+/* v5 wire contract: record i's sequence is the u32 LE at 2 + i*36. */
 static uint32_t decoded_identity_of(const uint8_t *pkt, uint8_t index)
 {
-    uint32_t base = (uint32_t)pkt[2] | ((uint32_t)pkt[3] << 8)
-                  | ((uint32_t)pkt[4] << 16) | ((uint32_t)pkt[5] << 24);
-    return base + index;   /* the wire contract, verbatim */
+    const uint8_t *p = pkt + 2 + (uint32_t)index * BULK_V5_RECORD_WIRE;
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static void test_bulk_identity_with_skips(void)
 {
     printf("-- T-4 / FR-07: bulk record identity across skipped records\n");
 
-    /* Contiguous batch: identity must be exact. This part passes today and
-     * guards against a fix that breaks the happy path. */
+    /* Contiguous batch: identity must be exact (happy-path guard). */
     {
         HighResTelemetryRecord_t recs[3];
         uint32_t true_seq[3] = { 100, 101, 102 };
         for (int i = 0; i < 3; i++) { recs[i] = make_highres((uint16_t)(5000 + i)); }
 
-        uint8_t buf[BULK_V3_OVERHEAD + BULK_V3_MAX_RECORDS * sizeof(HighResTelemetryRecord_t)];
+        uint8_t buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
         uint8_t packed = 0; uint16_t len = 0;
-        CHECK(EncodeBulkPacketV3(buf, sizeof(buf), sizeof(buf), recs, 3,
-                                 true_seq[0], &packed, &len));
+        CHECK(EncodeBulkPacketV5(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+                                 &packed, &len));
         CHECK_EQ_I(packed, 3);
         for (uint8_t i = 0; i < packed; i++) {
             CHECK_EQ_I(decoded_identity_of(buf, i), true_seq[i]);
@@ -162,33 +161,23 @@ static void test_bulk_identity_with_skips(void)
 
     /* Non-contiguous batch: record 101 was corrupt and skipped by
      * FlashLog_GetUnsentRecordsFIFO, so the array holds sequences
-     * {100, 102, 103}. The encoder will claim {100, 101, 102}. */
+     * {100, 102, 103}. v5 must report exactly {100, 102, 103}. */
     {
         HighResTelemetryRecord_t recs[3];
         uint32_t true_seq[3] = { 100, 102, 103 };   /* 101 skipped */
         for (int i = 0; i < 3; i++) { recs[i] = make_highres((uint16_t)(5000 + i)); }
 
-        uint8_t buf[BULK_V3_OVERHEAD + BULK_V3_MAX_RECORDS * sizeof(HighResTelemetryRecord_t)];
+        uint8_t buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
         uint8_t packed = 0; uint16_t len = 0;
-        CHECK(EncodeBulkPacketV3(buf, sizeof(buf), sizeof(buf), recs, 3,
-                                 true_seq[0], &packed, &len));
+        CHECK(EncodeBulkPacketV5(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+                                 &packed, &len));
         CHECK_EQ_I(packed, 3);
 
-        /* Record 0 is always right; the misattribution starts at index 1. */
-        CHECK_EQ_I(decoded_identity_of(buf, 0), true_seq[0]);
-        CHECK_REGRESSION(decoded_identity_of(buf, 1) == true_seq[1], "FR-07");
-        CHECK_REGRESSION(decoded_identity_of(buf, 2) == true_seq[2], "FR-07");
-
-        printf("   record 1: wire says %u, truth is %u\n",
-               (unsigned)decoded_identity_of(buf, 1), (unsigned)true_seq[1]);
+        for (uint8_t i = 0; i < packed; i++) {
+            CHECK_EQ_I(decoded_identity_of(buf, i), true_seq[i]);
+        }
+        (void)len;
     }
-
-    /* If FR-07 option (C) is adopted (stop packing at the first skip), the
-     * caller must never hand a non-contiguous array to the encoder. That is a
-     * caller-side invariant; this test then becomes an encoder contract test
-     * and the two CHECK_REGRESSION lines above should be deleted along with
-     * the non-contiguous case. If option (A)/(B) is adopted, replace
-     * decoded_identity_of() with the new per-record identity decode. */
 }
 
 /* ========================================================================== */

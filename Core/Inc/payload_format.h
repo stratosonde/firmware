@@ -174,9 +174,25 @@ typedef struct __attribute__((packed)) {
  * 0x03 (2+32n+4, no base_seq) shipped <1 day in CI only and never flew — superseded. */
 #define BULK_PACKET_TYPE_LEGACY_FIXED   0x02  // BulkTelemetryPacket_t (v2, 198 B fixed)
 #define BULK_PACKET_TYPE_V3_SUPERSEDED  0x03  // v3: variable, no record identity (never deployed)
-#define BULK_PACKET_TYPE_VARIABLE       0x04  // v4: variable + base_seq identity
+#define BULK_PACKET_TYPE_VARIABLE       0x04  // v4: variable + base_seq identity (superseded by v5, FR-07)
 #define BULK_V3_OVERHEAD                10    // type + count + base_seq + crc32
 #define BULK_V3_MAX_RECORDS             6     // 198 B worst-case budget parity with v2
+
+/* ---- Bulk wire format v5 (FR-07 option A, #87): per-record explicit identity ----
+ * Layout: [packet_type=0x05][record_count=n][n × (seq u32 LE + 32B record)][crc32]
+ * Length = 2 + 36n + 4 = 6 + 36n. CRC32 (same polynomial as v2/v4) covers
+ * everything before it.
+ *
+ * v4 derived identity implicitly (base_seq + i), which broke whenever the
+ * record array was compacted (corrupt-skip in the FIFO read, or a failed
+ * ConvertFlashLogToHighRes). v5 serializes each record's own flash sequence,
+ * so identity holds by construction for ANY subset of the archive, and the
+ * sender's watermark commit point is simply seq_of(last packed record) + 1.
+ * No deployed fleet at adoption time, so no decoder compatibility burden. */
+#define BULK_PACKET_TYPE_V5_EXPLICIT    0x05  // v5: variable + per-record sequence
+#define BULK_V5_OVERHEAD                6     // type + count + crc32
+#define BULK_V5_RECORD_WIRE             36    // seq u32 LE + 32B record
+#define BULK_V5_MAX_RECORDS             5     // 6 + 36*5 = 186 <= 198 (v2 parity)
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
@@ -226,26 +242,26 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
                                  uint8_t record_count);
 
 /**
- * @brief Encode a variable-length bulk packet (wire v4, packet_type 0x04)
+ * @brief Encode a variable-length bulk packet (wire v5, packet_type 0x05) — FR-07 (#87)
  * @param buf: output buffer
  * @param buf_cap: output buffer capacity in bytes
  * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
- * @param records: candidate records, FIFO order (contiguous flash sequences)
+ * @param records: candidate records, FIFO order (need NOT be contiguous in sequence)
+ * @param record_seqs: parallel array — each record's own flash sequence (DDR-0011)
  * @param record_count: number of candidate records
- * @param base_seq: flash sequence of records[0] (DDR-0011 identity: record i = base_seq + i)
  * @param packed_count: out — records actually encoded (<= record_count)
- * @param out_len: out — encoded packet length (6 + 32n + 4)
+ * @param out_len: out — encoded packet length (6 + 36n)
  * @retval bool: true if at least one record was encoded
- * @note Packs only complete records, as many as fit BOTH buf_cap and max_payload.
- *       Records not packed remain pending for the next cycle (stable identity,
- *       at-least-once per DDR-0011).
+ * @note Identity is explicit per record, so skips (corrupt or unconvertible
+ *       records) can never corrupt the ground-side (device, seq) dedup key.
+ *       The watermark commit point is record_seqs[packed_count-1] + 1.
  */
-bool EncodeBulkPacketV3(uint8_t *buf,
+bool EncodeBulkPacketV5(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
+                        const uint32_t *record_seqs,
                         uint8_t record_count,
-                        uint32_t base_seq,
                         uint8_t *packed_count,
                         uint16_t *out_len);
 

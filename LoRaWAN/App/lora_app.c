@@ -1387,6 +1387,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
         FlashLog_Record_t flash_records[6];
         uint32_t record_count;
         uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
+        /* FR-08 (#91): pin the entry watermark BEFORE the read so the commit
+         * point can be computed positionally from consumed sequences. */
+        uint32_t entry_watermark = hflashlog.last_transmitted_sequence;
 
         FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
                                                                             flash_records,
@@ -1408,6 +1411,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
            * (zero-filled) — fabricated data transmitted as science.
            * A gap is honest; fabricated data is not. */
           HighResTelemetryRecord_t highres_records[6];
+          uint32_t highres_seqs[6];   /* FR-07 (#87): per-record explicit identity */
           uint8_t packed_count = 0;
           for (uint32_t i = 0; i < record_count && i < 6; i++) {
             if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count],
@@ -1415,17 +1419,28 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
               SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
               continue;  /* Skip bad record, keep packing the rest */
             }
+            highres_seqs[packed_count] = flash_records[i].sequence;
             packed_count++;
           }
 
           if (packed_count == 0) {
-            /* R21 (#51): nothing convertible. Retire any corrupt skips NOW so
-             * a corrupt run can't wedge bulk transfer by being re-probed
-             * forever; good records are left for the next cycle. */
-            if (skipped_count > 0) {
+            /* R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL
+             * consumed batch, not just the corrupt skips: a record that reads
+             * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
+             * unconvertible — leaving it pending re-probes it forever and
+             * wedges bulk transfer. Positional mark covers corrupt + read. */
+            uint32_t mark = skipped_count;
+            if (record_count > 0) {
+              mark = (flash_records[record_count - 1].sequence + 1U) - entry_watermark;
+              SONDE_LOG("Retiring %lu record(s) with no TX (%lu corrupt, %lu unconvertible)\r\n",
+                                (unsigned long)mark, (unsigned long)skipped_count,
+                                (unsigned long)record_count);
+            } else if (mark > 0) {
               SONDE_LOG("Retiring %lu corrupt record(s) with no TX (anti-wedge)\r\n",
-                                (unsigned long)skipped_count);
-              FlashLog_MarkRecordsTransmitted(&hflashlog, skipped_count);
+                                (unsigned long)mark);
+            }
+            if (mark > 0) {
+              FlashLog_MarkRecordsTransmitted(&hflashlog, mark);
             }
             g_tx_state = TX_STATE_COMPLETE;
             break;
@@ -1434,16 +1449,17 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
           LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
 
-          /* D3 (#33): wire v3 variable-length bulk (packet_type 0x03). Query the
-           * runtime payload budget (current DR + pending FOpts, protocol §11)
-           * and pack only complete records that fit. Records that don't fit
-           * stay pending for the next cycle (stable identity, DDR-0011). */
+          /* D3 (#33) + FR-07 (#87): wire v5 variable-length bulk (packet_type
+           * 0x05, per-record explicit sequence). Query the runtime payload
+           * budget (current DR + pending FOpts, protocol §11) and pack only
+           * complete records that fit. Records that don't fit stay pending
+           * for the next cycle (stable identity, DDR-0011). */
           LoRaMacTxInfo_t txInfo;
           uint16_t max_payload = 0;
           for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
-            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V3_OVERHEAD + try_n * sizeof(HighResTelemetryRecord_t)),
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE),
                                        &txInfo) == LORAMAC_STATUS_OK) {
-              max_payload = (uint16_t)(BULK_V3_OVERHEAD + try_n * sizeof(HighResTelemetryRecord_t));
+              max_payload = (uint16_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE);
               break;
             }
           }
@@ -1453,14 +1469,13 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             break;
           }
 
-          uint8_t v3_buf[BULK_V3_OVERHEAD + BULK_V3_MAX_RECORDS * sizeof(HighResTelemetryRecord_t)];
-          uint8_t v3_packed = 0;
-          uint16_t v3_len = 0;
+          uint8_t v5_buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
+          uint8_t v5_packed = 0;
+          uint16_t v5_len = 0;
 
-          if (EncodeBulkPacketV3(v3_buf, sizeof(v3_buf), max_payload,
-                                 highres_records, packed_count,
-                                 flash_records[0].sequence,  /* DDR-0011 base identity */
-                                 &v3_packed, &v3_len)) {
+          if (EncodeBulkPacketV5(v5_buf, sizeof(v5_buf), max_payload,
+                                 highres_records, highres_seqs, packed_count,
+                                 &v5_packed, &v5_len)) {
 
             /* DDR-0011 (#34): archive packets are CONFIRMED uplinks. The FIRST
              * archive packet of a burst carries LinkCheckReq (protocol §5.2);
@@ -1472,28 +1487,32 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
 
             LmHandlerAppData_t bulkData;
             bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
-            bulkData.BufferSize = v3_len;
-            bulkData.Buffer = v3_buf;
+            bulkData.BufferSize = v5_len;
+            bulkData.Buffer = v5_buf;
 
-            SONDE_LOG("Sending %u-byte bulk v4 packet at SF7 on port %d with %u records\r\n",
-                              v3_len, LORAWAN_BULK_PORT, v3_packed);
+            SONDE_LOG("Sending %u-byte bulk v5 packet at SF7 on port %d with %u records\r\n",
+                              v5_len, LORAWAN_BULK_PORT, v5_packed);
 
             LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
             
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
               
-              /* F-005/R21 (#51): mark exactly what was CONSUMED from the
-               * entry watermark — packed (sent) + skipped (corrupt) — so the
-               * watermark lands exactly past the batch. D3 (#33): v3_packed is
-               * what actually went on the air; records cut by the runtime
-               * payload budget stay pending. The exact-identity ack lands with
+              /* F-005/R21 (#51) + FR-08 (#91): positional commit point. The
+               * old arithmetic (packed + skipped) was only correct when every
+               * skip sat before the packing cut — a trailing corrupt record
+               * plus a truncating budget committed a record that was never
+               * transmitted. Now: everything from the entry watermark through
+               * the last PACKED record's own sequence is consumed (packed
+               * records + any corrupt slots below them); records read but cut
+               * by the budget stay pending. The exact-identity ack lands with
                * the confirmed-delivery rework (#34). */
-              if (v3_packed != record_count) {
-                SONDE_LOG("WARN: packed %u of %lu read - marking only packed+skipped\r\n",
-                                  v3_packed, (unsigned long)record_count);
+              if (v5_packed != record_count) {
+                SONDE_LOG("WARN: packed %u of %lu read - marking through seq %lu only\r\n",
+                                  v5_packed, (unsigned long)record_count,
+                                  (unsigned long)highres_seqs[v5_packed - 1]);
               }
-              g_bulk_pending_mark = v3_packed + skipped_count;
+              g_bulk_pending_mark = (highres_seqs[v5_packed - 1] + 1U) - entry_watermark;
               
               SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);

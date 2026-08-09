@@ -204,9 +204,34 @@ Bulk transfer of historical high-resolution records at SF7, sent when link quali
 | `0x01` | Legacy v1, 222 B fixed (historical only) | 222 |
 | `0x02` | Legacy v2, 198 B fixed (FW-20) | 198 |
 | `0x03` | Variable, no record identity (CI-only <1 day, never deployed — superseded) | 2+32n+4 |
-| `0x04` | **Current v4, variable** `6 + 32n + 4` with base sequence (issues #33/#34) | 42-202 |
+| `0x04` | v4, variable `6 + 32n + 4` with base sequence (never deployed — superseded by v5, FR-07/#87) | 42-202 |
+| `0x05` | **Current v5, variable** `6 + 36n` with per-record explicit sequence (FR-07/#87) | 42-186 |
 
-### Packet Structure v4 (variable length)
+### Packet Structure v5 (variable length)
+
+#### Header (2 bytes)
+
+| Offset | Field | Type | Size | Description |
+|--------|-------|------|------|-------------|
+| 0 | Packet Type | uint8 | 1 | 0x05 = variable-length + per-record identity |
+| 1 | Record Count | uint8 | 1 | n records (1-5) |
+
+n complete 36-byte wire records follow immediately at offset 2, each being
+`sequence uint32 LE` + the 32-byte high-resolution record (layout below,
+explicitly little-endian on the wire). The packet ends with a 4-byte CRC32
+(LE) over all preceding bytes: total length `6 + 36n`.
+
+**Identity is explicit per record (FR-07, #87).** v4 derived identity
+implicitly (`base_seq + i`), which misattributed every record after a skipped
+one (corrupt flash slot or failed conversion compacting the candidate array).
+v5 serializes each record's own flash sequence, so the ground-side
+`(DevEUI, sequence)` dedup key (DDR-0011) is correct for ANY subset of the
+archive, and the sender's watermark commit point is exactly
+`sequence_of(last packed record) + 1` (FR-08, #91).
+
+The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0011).
+
+### Packet Structure v4 (variable length, SUPERSEDED — never deployed)
 
 #### Header (6 bytes)
 
@@ -217,8 +242,6 @@ Bulk transfer of historical high-resolution records at SF7, sent when link quali
 | 2 | Base Sequence | uint32 LE | 4 | Flash sequence of the FIRST record — record i has identity `base_seq + i` (DDR-0011; backend dedups on (DevEUI, sequence)) |
 
 n complete 32-byte records follow immediately at offset 6 (layout below, explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `6 + 32n + 4`.
-
-The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0011).
 
 #### High-Resolution Records (n × 32 bytes)
 
@@ -250,11 +273,11 @@ Each record is 32 bytes, little-endian:
 | 1-4 | 0x1E | Satellite Count | Satellite count 0-15 (duplicates byte 26) |
 | 5-7 | 0xE0 | Power Mode | Operating mode 0-7 (duplicates byte 28) |
 
-#### Trailer (4 bytes, v4)
+#### Trailer (4 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 6+32n | CRC32 | uint32 LE | 4 | CRC32/IEEE over bytes 0..(6+32n-1) |
+| 2+36n (v5) / 6+32n (v4) | CRC32 | uint32 LE | 4 | CRC32/IEEE over all preceding bytes |
 
 ### Legacy v2 (packet_type 0x02, fixed 198 B)
 
@@ -271,20 +294,21 @@ Same header with type `0x02`, record count 1-6, six fixed 32-byte record slots a
 | 4 | CRITICAL | Critical battery | 1800s (30 min) |
 | 5 | GPS_LOCKOUT | GPS disabled | As configured |
 
-### Python Decoder Example (v3 + legacy)
+### Python Decoder Example (v5 + legacy)
 
 ```python
 import struct
 
 RECORD_SIZE = 32
-V3_OVERHEAD = 6  # type + count + crc32
+V5_RECORD_WIRE = 36  # seq u32 LE + 32-byte record (v5)
 
 def decode_archive_packet(payload: bytes) -> dict:
     """
     Decode core science archive packet from LoRaWAN Port 11 (LITTLE-ENDIAN).
 
     Branches on payload[0]:
-      0x04 = v4 variable length: 6 + 32n + 4 bytes, base_seq header (current firmware)
+      0x05 = v5 variable length: 6 + 36n bytes, per-record sequence (current firmware)
+      0x04 = v4 variable length: 6 + 32n + 4 bytes, base_seq header (never deployed)
       0x03 = v3 variable without identity (never deployed; superseded)
       0x02 = v2 legacy fixed 198 B
       0x01 = v1 legacy fixed 222 B (historical only)
@@ -293,7 +317,15 @@ def decode_archive_packet(payload: bytes) -> dict:
         raise ValueError("payload too short")
 
     version = payload[0]
-    if version == 0x04:
+    if version == 0x05:
+        count = payload[1]
+        expected = 2 + V5_RECORD_WIRE * count + 4
+        if len(payload) != expected:
+            raise ValueError(f"v5: expected {expected} bytes for {count} records, got {len(payload)}")
+        base_seq = None  # identity is per-record in v5
+        header_len = 2
+        crc_off = len(payload) - 4
+    elif version == 0x04:
         count = payload[1]
         expected = 6 + RECORD_SIZE * count + 4
         if len(payload) != expected:
@@ -329,8 +361,15 @@ def decode_archive_packet(payload: bytes) -> dict:
     result = {'packet_type': version, 'record_count': count,
               'base_seq': base_seq, 'records': []}
 
+    stride = V5_RECORD_WIRE if version == 0x05 else RECORD_SIZE
     for i in range(count):
-        rec = payload[header_len + i * RECORD_SIZE: header_len + (i + 1) * RECORD_SIZE]
+        wire = payload[header_len + i * stride: header_len + (i + 1) * stride]
+        if version == 0x05:
+            seq = struct.unpack('<I', wire[0:4])[0]
+            rec = wire[4:]
+        else:
+            seq = (base_seq + i) if base_seq is not None else None
+            rec = wire
         timestamp = struct.unpack('<I', rec[0:4])[0]
         lat, lon = struct.unpack('<ii', rec[4:12])
         alt = struct.unpack('<H', rec[12:14])[0]
@@ -342,6 +381,7 @@ def decode_archive_packet(payload: bytes) -> dict:
         crc16 = struct.unpack('<H', rec[30:32])[0]
 
         result['records'].append({
+            'sequence': seq,
             'timestamp': timestamp,
             'latitude': lat * (90.0 / 8388607.0),
             'longitude': lon * (180.0 / 8388607.0),
@@ -384,12 +424,12 @@ def calculate_crc32(data: bytes) -> int:
 # Example usage
 if __name__ == "__main__":
     # Authoritative byte-level vectors: tests/host/test_main.c prints
-    # "GOLDEN bulk-v4 (2 records, base_seq=256):" from the real firmware encoder.
-    # Build a minimal 1-record v4 packet (6 + 32 + 4 = 42 bytes):
+    # "GOLDEN bulk-v5 (2 records, seqs=256,257):" from the real firmware encoder.
+    # Build a minimal 1-record v5 packet (2 + 36 + 4 = 42 bytes):
     example = bytearray(42)
-    example[0] = 0x04  # v4
+    example[0] = 0x05  # v5
     example[1] = 0x01  # 1 record
-    struct.pack_into('<I', example, 2, 256)          # base_seq
+    struct.pack_into('<I', example, 2, 256)          # record sequence (explicit, FR-07)
     struct.pack_into('<I', example, 6, 1737848000)   # Timestamp (LE)
     struct.pack_into('<i', example, 10, 4768932)     # Lat binary
     struct.pack_into('<i', example, 14, -10633288)   # Lon binary

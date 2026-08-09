@@ -301,36 +301,42 @@ static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t
 }
 
 /**
- * @brief Encode a variable-length bulk packet (wire v4, packet_type 0x04) — D3 (#33) + DDR-0011 identity (#34)
+ * @brief Encode a variable-length bulk packet (wire v5, packet_type 0x05) — FR-07 (#87)
+ *
+ * Supersedes EncodeBulkPacketV3/v4 (0x04): identity is explicit per record
+ * (seq u32 LE preceding each 32-byte record), so a non-contiguous candidate
+ * array — corrupt-skip in the FIFO read, or a failed conversion — can no
+ * longer misattribute every record after the gap.
  */
-bool EncodeBulkPacketV3(uint8_t *buf,
+bool EncodeBulkPacketV5(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
+                        const uint32_t *record_seqs,
                         uint8_t record_count,
-                        uint32_t base_seq,
                         uint8_t *packed_count,
                         uint16_t *out_len)
 {
-    if (!buf || !records || !packed_count || !out_len || record_count == 0) {
+    if (!buf || !records || !record_seqs || !packed_count || !out_len || record_count == 0) {
         return false;
     }
 
     /* Whole records only; budget = min(buf_cap, max_payload) */
     uint16_t budget = (max_payload < buf_cap) ? max_payload : buf_cap;
-    uint8_t n = (uint8_t)((budget - BULK_V3_OVERHEAD) / sizeof(HighResTelemetryRecord_t));
+    uint8_t n = (uint8_t)((budget - BULK_V5_OVERHEAD) / BULK_V5_RECORD_WIRE);
     if (n > record_count) n = record_count;
-    if (n > BULK_V3_MAX_RECORDS) n = BULK_V3_MAX_RECORDS;
+    if (n > BULK_V5_MAX_RECORDS) n = BULK_V5_MAX_RECORDS;
     if (n == 0) {
         *packed_count = 0;
         return false;
     }
 
-    buf[0] = BULK_PACKET_TYPE_VARIABLE;
+    buf[0] = BULK_PACKET_TYPE_V5_EXPLICIT;
     buf[1] = n;
-    PutU32LE(buf + 2, base_seq);   /* DDR-0011: record i identity = base_seq + i */
-    uint16_t off = 6;
+    uint16_t off = 2;
     for (uint8_t i = 0; i < n; i++) {
+        PutU32LE(buf + off, record_seqs[i]);   /* DDR-0011: explicit identity */
+        off += 4;
         off += SerializeRecordV3LE(buf + off, &records[i]);
     }
     PutU32LE(buf + off, CalculateCRC32(buf, off));
@@ -339,7 +345,8 @@ bool EncodeBulkPacketV3(uint8_t *buf,
     *packed_count = n;
     *out_len = off;
 
-    SONDE_LOG("Bulk v4: Records=%d Base=%lu Len=%u\r\n", n, (unsigned long)base_seq, off);
+    SONDE_LOG("Bulk v5: Records=%d FirstSeq=%lu Len=%u\r\n",
+              n, (unsigned long)record_seqs[0], off);
     return true;
 }
 
