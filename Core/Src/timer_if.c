@@ -386,8 +386,8 @@ void TIMER_IF_DelayMs(uint32_t delay)
 void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
   /* USER CODE BEGIN HAL_RTC_AlarmAEventCallback */
-  extern void PWR_NoteRtcAlarmA(void);  /* R07 (#29): wake-source latch for chunked sleep */
-  PWR_NoteRtcAlarmA();
+  /* FR-06 (#84): PWR_NoteRtcAlarmA latch removed — chunked sleep now reads
+   * RTC->SR directly (readable under PRIMASK; the ISR latch never was). */
   /* USER CODE END HAL_RTC_AlarmAEventCallback */
   UTIL_TIMER_IRQ_MAP_PROCESS();
   /* USER CODE BEGIN HAL_RTC_AlarmAEventCallback_Last */

@@ -114,24 +114,12 @@ void PWR_ExitOffMode(void)
   /* USER CODE END ExitOffMode_1 */
 }
 
-/* R07 (#29): STOP2 wake-source latches. RTC Wakeup/Alarm are EXTI direct
- * lines (no PR1 pending bits), so the wake source is latched in the HAL
- * event callbacks and consumed by the chunked-sleep loop. */
-static volatile bool s_woke_by_wakeup_timer = false;
-static volatile bool s_woke_by_alarm_a = false;
-
-void HAL_RTCEx_WakeUpTimerEventCallback(RTC_HandleTypeDef *hrtc)
-{
-  (void)hrtc;
-  s_woke_by_wakeup_timer = true;
-}
-
-/* Called from HAL_RTC_AlarmAEventCallback in Core/Src/timer_if.c (that
- * callback is owned by the UTIL_TIMER chain — we just observe it). */
-void PWR_NoteRtcAlarmA(void)
-{
-  s_woke_by_alarm_a = true;
-}
+/* FR-06 (#84): the R07 (#29) ISR-set wake-source latches were deleted.
+ * PWR_EnterStopMode() runs with interrupts disabled (UTIL_LPM critical
+ * section -> __disable_irq), so the HAL event callbacks never execute inside
+ * the chunk loop and the latches were never set — every chunk took the full
+ * exit path. The chunk loop now reads RTC->SR (WUTF/ALRAF) directly, which
+ * is valid under PRIMASK. Do not reintroduce ISR-set latches here. */
 
 void PWR_EnterStopMode(void)
 {
@@ -262,15 +250,6 @@ void PWR_EnterStopMode(void)
   extern void Deadman_Check(void);  /* defined in lora_app.c */
   uint32_t chunks = 0;
 
-  /* R07 (#29): RTC Wakeup (EXTI line 20) and RTC Alarm (17) are EXTI DIRECT
-   * lines — their PR1 pending bits read back as 0, so the old PR1 test below
-   * always saw "no wakeup timer, no alarm" and EVERY 25 s IWDG wake took the
-   * full exit path (defeating chunked sleep). Latch the source in the HAL
-   * event callbacks instead — they run inside the IRQ handlers before the
-   * flags are cleared. */
-  s_woke_by_wakeup_timer = false;
-  s_woke_by_alarm_a = false;
-
   while (1)
   {
     /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz, 25s = 51200 counts */
@@ -301,20 +280,30 @@ void PWR_EnterStopMode(void)
     HAL_IWDG_Refresh(&hiwdg);
     Deadman_Check();  /* FW-4: no-op in COMMISSIONING; resets if no work cycle for 3h */
 
+    /* The WUT interrupt pended but its ISR never ran (PRIMASK set), so the
+     * NVIC pending bit is still latched. Clear it or the next WFI returns
+     * immediately and the classification below sees a flag-less spurious
+     * wake (which takes the "something else" exit). */
+    NVIC_ClearPendingIRQ(RTC_WKUP_IRQn);
+
+    /* FR-06 (#84): classify the wake source from RTC hardware flags, which
+     * ARE readable with PRIMASK set (no ISR runs inside this critical
+     * section, so the R07 callback latches were never set and every chunk
+     * took the full exit path). Sample SR BEFORE
+     * HAL_RTCEx_DeactivateWakeUpTimer(), which clears WUTF. ALRAF is read
+     * but deliberately NOT cleared here: after the break, IRQs re-enable and
+     * the pending Alarm-A IRQ runs the UTIL_TIMER chain that owns it. */
+    uint32_t rtc_sr          = READ_REG(RTC->SR);
+    uint32_t is_alarm_a      = (rtc_sr & RTC_SR_ALRAF) != 0U;
+    uint32_t is_wakeup_timer = (rtc_sr & RTC_SR_WUTF) != 0U;
+
     /* F-08 (#76): deactivate the wakeup timer BEFORE any exit path. The
      * chunk-overflow break used to skip this, leaving the WUT armed. */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 
     if (++chunks > 150) break;  /* FW-4: never sleep forever (belt and braces) */
 
-    /* Check what woke us — R07 (#29): callback latches, not EXTI->PR1
-     * (direct lines have no pending bits). Alarm A wins over the IWDG chunk
-     * timer; latches are consumed here. */
-    uint32_t is_alarm_a      = s_woke_by_alarm_a;
-    uint32_t is_wakeup_timer = s_woke_by_wakeup_timer;
-    s_woke_by_alarm_a = false;
-    s_woke_by_wakeup_timer = false;
-
+    /* Alarm A (LoRaWAN timer event) wins over the IWDG chunk timer. */
     if (is_alarm_a)
     {
       /* LoRaWAN timer event — exit chunked sleep. WUTF PR already consumed. */
