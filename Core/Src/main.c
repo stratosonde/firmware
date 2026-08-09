@@ -161,18 +161,22 @@ int main(void)
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
+  /* FW-5 / FR-01 (#83): arm the IWDG BEFORE clock config. HAL_RCC_OscConfig()
+   * waits for the LSE with an HAL_GetTick()-based timeout, but the tick
+   * override (sys_app.c) returns a constant 0 until SYS_TimerInitialisedFlag
+   * is set inside MX_LoRaWAN_Init() — so a dead LSE hangs that loop forever.
+   * Arming the watchdog first (HAL_IWDG_Init starts the LSI itself via the
+   * key register, no clock-config dependency) turns that silent brick into
+   * a ~33 s reset-and-recover. The join-wait loop already refreshes via its
+   * hiwdg.Instance guard. */
+  MX_IWDG_Init();
+
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
-
-  /* FW-5: arm the IWDG immediately after clock config so the watchdog covers
-   * the entire boot/commissioning path (was after MX_LoRaWAN_Init — a wedge
-   * in peripheral init or pre-join could spin forever with no watchdog).
-   * The join-wait loop already refreshes via its hiwdg.Instance guard. */
-  MX_IWDG_Init();
 
   /* F13b: Capture condensed reset cause (RCC->CSR + fault breadcrumb) once,
    * early, then clear flags so the next boot reads clean. Surfaced in the
@@ -181,7 +185,7 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
 
-  /* NOTE: IWDG watchdog armed above, right after SystemClock_Config (FW-5) */
+  /* NOTE: IWDG watchdog armed above, before SystemClock_Config (FW-5 / FR-01) */
   SONDE_LOG_STR("IWDG watchdog armed (32.76s timeout)\r\n");
   
   /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
@@ -197,7 +201,7 @@ int main(void)
   MX_LoRaWAN_Init();  /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
-  /* MX_IWDG_Init(); - FW-5: moved up, immediately after SystemClock_Config() */
+  /* MX_IWDG_Init(); - FW-5/FR-01: moved up, immediately after HAL_Init() */
   /* USER CODE BEGIN 2 */
   /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
 
