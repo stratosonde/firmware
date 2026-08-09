@@ -542,7 +542,14 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
    * unparsed bytes are already destroyed — count it, drop to the head, and
    * resync: the parser restarts cleanly at the next '$' (DDR-0007: the gap
    * is surfaced, never silent). */
-  if ((hgnss->dma_produced_total - hgnss->dma_consumed_total) > GNSS_DMA_BUFFER_SIZE)
+  /* R2-19 (#123): dma_produced_total only advances in 256-byte callback
+   * quanta, so up to 255 REAL bytes past the counter can already have been
+   * produced (and lost) unaccounted. Comparing against the full buffer size
+   * left a 256-byte blind spot: a backlog of exactly one buffer-full means
+   * the producer has already lapped the consumer. Compare against
+   * SIZE - 256 (one quantum): worst case is a resync one quantum early;
+   * the "no silent loss" invariant actually holds. */
+  if ((hgnss->dma_produced_total - hgnss->dma_consumed_total) > (GNSS_DMA_BUFFER_SIZE - 256U))
   {
     hgnss->dma_overrun_count++;
     SONDE_LOG("[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
