@@ -134,6 +134,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
      * for a 10C drop) and flipped the mode to GPS-on NORMAL. The raw-voltage
      * slope is the true charge/discharge trend; normalization only maps the
      * instantaneous level onto the 4.5V-crit/5.5V-full thresholds. */
+    /* R2-11 (#115): the slope state is RAM-only, so after every reset there
+     * is no history. Remember that BEFORE sampling so the no-history default
+     * below can derive from raw voltage instead of falling through. */
+    const bool have_history = (slope_state->baseline_timestamp != 0);
+
     plan.voltage_slope_mv_per_hour =
         CalculateVoltageSlope(slope_state, battery_mv_raw, now_timestamp);
 
@@ -155,6 +160,19 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                                 plan.battery_mv_normalized,
                                                 time_to_critical,
                                                 battery_mv_raw);
+
+    /* R2-11 (#115): with no slope history SelectModeFromPredictions falls
+     * through every branch to MODE_CONSERVATIVE - 10-min cadence, GPS ON -
+     * even on a marginal battery right after a brownout reset. Fail the
+     * other way: below 5000 mV raw (marginal supercap), start REDUCED
+     * (GPS off) until a real slope exists. Never loosen a stricter mode
+     * (the R10 raw floor may already have picked SURVIVAL). Persisting the
+     * baseline across resets (backup registers, DR12-15) is the companion
+     * half and is bench-verified. */
+    if (!have_history && battery_mv_raw < 5000 && plan.power_mode < MODE_REDUCED) {
+        SONDE_LOG_STR("PREDICT: no slope history + marginal raw V -> REDUCED\r\n");
+        plan.power_mode = MODE_REDUCED;
+    }
     plan.tx_interval_ms = ApplyOperatingMode(plan.power_mode,
                                              &plan.gps_enabled,
                                              &plan.gps_timeout_ms);
