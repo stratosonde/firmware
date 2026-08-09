@@ -126,9 +126,16 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     plan.battery_mv_normalized = temp_stale ? battery_mv_raw
                                             : NormalizeBatteryVoltage(battery_mv_raw, temperature_c);
 
-    /* Slope + predictions on the NORMALIZED voltage (LTO: 4.5V crit, 5.5V full) */
+    /* Slope on the RAW voltage, predictions against the normalized level.
+     * R2-10 (#114): computing the slope on the normalized voltage let the
+     * temperature compensation itself masquerade as charging - below -55C
+     * NormalizeBatteryVoltage adds up to +2170 mV, so cooling at constant
+     * charge state produced a steeply POSITIVE slope (measured +1740 mV/h
+     * for a 10C drop) and flipped the mode to GPS-on NORMAL. The raw-voltage
+     * slope is the true charge/discharge trend; normalization only maps the
+     * instantaneous level onto the 4.5V-crit/5.5V-full thresholds. */
     plan.voltage_slope_mv_per_hour =
-        CalculateVoltageSlope(slope_state, plan.battery_mv_normalized, now_timestamp);
+        CalculateVoltageSlope(slope_state, battery_mv_raw, now_timestamp);
 
     uint16_t time_to_critical =
         PredictTimeToVoltage(plan.battery_mv_normalized, plan.voltage_slope_mv_per_hour, 4500);

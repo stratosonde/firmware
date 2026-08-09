@@ -612,6 +612,13 @@ int main(void)
     const char *expect_unfixed = getenv("EXPECT_UNFIXED");
     if (expect_unfixed != NULL && expect_unfixed[0] == '1') {
         int unexpected = g_failures - g_expected_failures;
+        if (unexpected < 0) {
+            /* Fewer failures than documented: fixes are landing. Green,
+             * and say how many regressions this tree has retired. */
+            printf("BASELINE OK (%d documented regressions still open, %d FIXED)\n",
+                   g_expected_failures + unexpected, -unexpected);
+            return 0;
+        }
         if (unexpected == 0) {
             printf("PRE-FIX BASELINE OK (%d documented regressions still open)\n",
                    g_expected_failures);
