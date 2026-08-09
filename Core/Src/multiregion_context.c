@@ -39,7 +39,10 @@
  *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
  *   0x0803E800  page 125 - System configuration     (config module)
  *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
- *   0x0803F800  page 127 - legacy single-page store (retired, reserved)
+ *   0x0803F800  page 127 - LoRaWAN NVM slot B (F-016/#54 ping-pong store)
+ *
+ * RULE (mirrors backup_regs.h): any new flash-page user must add its
+ * allocation to this map AND the mirror in config.h first (FR-21/#102).
  *
  * Tier-1 holds immutable join credentials (DevAddr/DevEUI/session keys) as
  * three redundant, independently CRC'd copies written once at commissioning

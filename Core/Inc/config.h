@@ -49,8 +49,11 @@ extern "C" {
   *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
   *   0x0803E800  page 125 - System configuration     (this module)
   *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
-  *   0x0803F800  page 127 - legacy multi-region page (retired, reserved)
+  *   0x0803F800  page 127 - LoRaWAN NVM slot B (F-016/#54 ping-pong store)
   *
+  * RULE (mirrors backup_regs.h): any new flash-page user must add its
+  * allocation to this map AND the mirror in multiregion_context.c first
+  * (FR-21/#102).
   * Previously this was 0x0803FC00, which sits *inside* page 127. Saving the
   * configuration erased the whole page and wiped every stored region context
   * (DevAddr, session keys and frame counters), and vice-versa.

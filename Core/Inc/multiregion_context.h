@@ -14,7 +14,8 @@
   *           at commissioning and never erased in flight.
   *   Tier-2: dynamic frame counters only, ping-ponged between two flash
   *           slots with erase-before-write (brownout-safe, wear-leveled).
-  * Version-1 single-page storage (page 127) is retired; a v1 bank reads as
+  * Page 127 is now LoRaWAN NVM slot B (F-016/#54). The version-1 single-page
+ * context store is gone; a v1 bank reads as
   * virgin and the device falls back to COMMISSIONING.
   *
   ******************************************************************************
