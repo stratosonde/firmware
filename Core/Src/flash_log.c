@@ -359,8 +359,13 @@ static FlashLog_StatusTypeDef FlashLog_EraseSectorIfNeeded(FlashLog_HandleTypeDe
         if (status != W25Q_OK) {
             return FLASH_LOG_ERROR_FLASH;
         }
+        /* FR-10 (#90): on a wrapped ring this erase destroys up to 63
+         * not-yet-overwritten records ahead of the frontier. oldest_addr is
+         * maintained at the write site with the sector-boundary convention:
+         * once wrapped, oldest_addr = end of the sector containing
+         * write_addr, i.e. the oldest slot that can still hold valid data. */
     }
-    
+
     return FLASH_LOG_OK;
 }
 
@@ -501,7 +506,11 @@ static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog
         }
         hlog->record_count++;
         if (hlog->record_count > FLASH_LOG_MAX_RECORDS) {
-            hlog->oldest_addr = hlog->write_addr;
+            /* FR-10 (#90): sector-boundary convention — see WriteRecord */
+            hlog->oldest_addr = ((hlog->write_addr / W25Q_SECTOR_SIZE) + 1U) * W25Q_SECTOR_SIZE;
+            if (hlog->oldest_addr >= FLASH_LOG_DATA_END) {
+                hlog->oldest_addr = FLASH_LOG_DATA_START;
+            }
         }
     }
     return FLASH_LOG_OK;
@@ -616,9 +625,19 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
         hlog->write_addr = FLASH_LOG_DATA_START;
     }
     
-    /* Update oldest address if we wrapped */
+    /* Update oldest address if we wrapped.
+     * FR-10 (#90): erase-ahead destroys the whole sector containing
+     * write_addr before its first record is written, so the slots between
+     * write_addr and that sector's end are erased, not available. The old
+     * convention (oldest = write_addr) counted them anyway — up to 63
+     * phantom records reported as corrupt on every post-wrap bulk read.
+     * Now: oldest_addr = end of the sector containing write_addr — the
+     * oldest slot that can still hold valid data. */
     if (hlog->record_count > FLASH_LOG_MAX_RECORDS) {
-        hlog->oldest_addr = hlog->write_addr;
+        hlog->oldest_addr = ((hlog->write_addr / W25Q_SECTOR_SIZE) + 1U) * W25Q_SECTOR_SIZE;
+        if (hlog->oldest_addr >= FLASH_LOG_DATA_END) {
+            hlog->oldest_addr = FLASH_LOG_DATA_START;
+        }
     }
     
     /* Periodically update header to flash */
@@ -729,9 +748,19 @@ uint32_t FlashLog_GetAvailableRecords(FlashLog_HandleTypeDef *hlog)
     if (hlog->record_count <= FLASH_LOG_MAX_RECORDS) {
         return hlog->record_count;
     }
-    
-    /* After wrap, only FLASH_LOG_MAX_RECORDS are available */
-    return FLASH_LOG_MAX_RECORDS;
+
+    /* FR-10 (#90): after wrap, available = the valid span between
+     * oldest_addr and write_addr along the ring. With the sector-boundary
+     * oldest convention this excludes the erase-ahead slack (erased 0xFF
+     * slots) that min(record_count, MAX) used to count. */
+    uint32_t span;
+    if (hlog->write_addr >= hlog->oldest_addr) {
+        span = hlog->write_addr - hlog->oldest_addr;
+    } else {
+        span = (FLASH_LOG_DATA_END - hlog->oldest_addr) +
+               (hlog->write_addr - FLASH_LOG_DATA_START);
+    }
+    return span / FLASH_LOG_RECORD_SIZE;
 }
 
 bool FlashLog_HasWrapped(FlashLog_HandleTypeDef *hlog)
