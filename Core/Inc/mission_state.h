@@ -32,8 +32,12 @@ typedef enum {
  * reliable signal at altitude and the determination is effectively
  * stateless-from-sensor — a cold-snap reset no longer stretches the ascent
  * cadence indefinitely (F-028 concern eliminated by construction). */
-#ifndef MISSION_FLOAT_DP_HPA
-#define MISSION_FLOAT_DP_HPA        2.0f   /* |ΔP| below this = level flight */
+/* FR-17 (#98): relative, not absolute. 2.0 hPa is ~17% of the ~12 hPa float
+ * ambient (a brisk climb read as FLOAT) but only ~18 m at 890 hPa ground
+ * pressure (a pad-side unit declared FLOAT after 3 cycles). 2% of ambient
+ * scales correctly across the whole flight profile. */
+#ifndef MISSION_FLOAT_REL_THRESHOLD
+#define MISSION_FLOAT_REL_THRESHOLD 0.02f  /* |ΔP|/P below this = level flight */
 #endif
 #ifndef MISSION_FLOAT_LEVEL_SAMPLES
 #define MISSION_FLOAT_LEVEL_SAMPLES 3      /* consecutive level cycles = FLOAT */

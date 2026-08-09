@@ -118,7 +118,9 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid)
     if (s_have_pressure_ref) {
         float dp = pressure_hpa - s_last_pressure_hpa;
         if (dp < 0.0f) dp = -dp;
-        if (dp < MISSION_FLOAT_DP_HPA) {
+        /* FR-17 (#98): level = |ΔP| below 2% of ambient, not a fixed 2 hPa */
+        if (s_last_pressure_hpa > 0.0f &&
+            dp < MISSION_FLOAT_REL_THRESHOLD * s_last_pressure_hpa) {
             if (s_level_count < 255) s_level_count++;
         } else {
             s_level_count = 0;
