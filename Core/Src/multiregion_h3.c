@@ -112,24 +112,23 @@ LoRaMacRegion_t MultiRegion_DetectFromH3Region(RegionId h3Region, float lat, flo
         NearestRegionsInfo nearest = findNearestRegions((double)lat, (double)lon, 3);
         
         if (nearest.numRegions > 0 && nearest.regions[0].distanceKm < H3_MAX_DISTANCE_KM) {
-            /* FW-16: integer-only print (float printf support is not linked) */
-            int32_t dist_d = (int32_t)(nearest.regions[0].distanceKm * 10.0f);
+            /* FW-16: integer-only print (float printf support is not linked).
+             * FR-19 (#100): no intermediate vars — APP_LOG may compile its
+             * arguments out entirely, leaving them unused. */
             APP_LOG(TS_ON, VLEVEL_M,
                     "H3: Outside regions, nearest: %s (%d.%d km)\r\n",
                     nearest.regions[0].regionName,
-                    (int)(dist_d / 10), (int)((dist_d < 0 ? -dist_d : dist_d) % 10));
-            
+                    (int)(nearest.regions[0].distanceKm),
+                    (int)(nearest.regions[0].distanceKm * 10.0f) % 10);
+
             // Use nearest region
             h3Region = nearest.regions[0].regionId;
         } else {
             // No nearby regions found - keep current
-            /* FW-16: integer-only print (float printf support is not linked) */
-            int32_t lat_m = (int32_t)(lat * 10000.0f);
-            int32_t lon_m = (int32_t)(lon * 10000.0f);
             APP_LOG(TS_ON, VLEVEL_M,
                     "H3: No nearby regions found (%d.%04d, %d.%04d)\r\n",
-                    (int)(lat_m / 10000), (int)((lat_m < 0 ? -lat_m : lat_m) % 10000),
-                    (int)(lon_m / 10000), (int)((lon_m < 0 ? -lon_m : lon_m) % 10000));
+                    (int)lat, (int)((lat < 0 ? -lat : lat) * 10000.0f) % 10000,
+                    (int)lon, (int)((lon < 0 ? -lon : lon) * 10000.0f) % 10000);
             return MultiRegion_GetActiveRegion();
         }
     }
@@ -152,17 +151,15 @@ LoRaMacRegion_t MultiRegion_DetectFromH3Region(RegionId h3Region, float lat, flo
  */
 static void LogRegionDetection(const char* h3RegionName, float lat, float lon, LoRaMacRegion_t loraRegion)
 {
-    char logMsg[128];
-    /* FW-16: integer-only print (float printf support is not linked) */
-    int32_t lat_m = (int32_t)(lat * 10000.0f);
-    int32_t lon_m = (int32_t)(lon * 10000.0f);
-    snprintf(logMsg, sizeof(logMsg),
-             "H3: Detected %s at (%d.%04d, %d.%04d) -> LoRa region %d\r\n",
-             h3RegionName,
-             (int)(lat_m / 10000), (int)((lat_m < 0 ? -lat_m : lat_m) % 10000),
-             (int)(lon_m / 10000), (int)((lon_m < 0 ? -lon_m : lon_m) % 10000),
-             loraRegion);
-    APP_LOG(TS_ON, VLEVEL_M, logMsg);
+    /* FW-16: integer-only print (float printf support is not linked).
+     * FR-16 (#97): straight to APP_LOG — no ungated snprintf.
+     * FR-19 (#100): no intermediate vars — APP_LOG may compile args out. */
+    APP_LOG(TS_ON, VLEVEL_M,
+            "H3: Detected %s at (%d.%04d, %d.%04d) -> LoRa region %d\r\n",
+            h3RegionName,
+            (int)lat, (int)((lat < 0 ? -lat : lat) * 10000.0f) % 10000,
+            (int)lon, (int)((lon < 0 ? -lon : lon) * 10000.0f) % 10000,
+            loraRegion);
 }
 
 

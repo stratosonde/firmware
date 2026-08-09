@@ -226,6 +226,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
       /* Use MS5607 temperature as backup/verification */
       int press_int = (int)(ms_press * 10);
       int temp_int = (int)(ms_temp * 10);
+      (void)press_int; (void)temp_int;  /* FR-19: log-only in flight */
       SONDE_LOG("MS5607: P=%d.%d hPa, T=%d.%d°C\r\n",
                         press_int / 10, press_int % 10,
                         temp_int / 10, temp_int % 10);
@@ -280,6 +281,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   int batt_mv = SYS_GetBatteryVoltage();
   int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
   int solar_mv = SYS_GetSolarVoltage();
+  (void)batt_mv; (void)vdda_mv; (void)solar_mv;  /* FR-19: log-only in flight */
   SONDE_LOG("Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,
                     vdda_mv / 1000, (vdda_mv % 1000) / 10, vdda_mv);
@@ -290,8 +292,28 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   /* Use real GNSS data if available from hgnss (populated by SendTxData's GPS collection)
    * GPS is powered on/off in SendTxData before calling EnvSensors_Read
    * hgnss.data contains the latest parsed NMEA data */
-  
-  if (hgnss.is_initialized && hgnss.data.valid && 
+  EnvSensors_MergeGnss(sensor_data);
+
+  /* F-030 (#59): per-sensor freshness bitmask — the top-level return no
+   * longer hides total acquisition failure. 1 bit = fresh live read this
+   * cycle; 0 = stale/never-acquired (the staleness flags carry the detail). */
+  int32_t status = 0;
+  if (!sensor_data->temp_stale)  status |= ENV_SENSORS_FRESH_TEMP;
+  if (!sensor_data->hum_stale)   status |= ENV_SENSORS_FRESH_HUMIDITY;
+  if (!sensor_data->press_stale) status |= ENV_SENSORS_FRESH_PRESSURE;
+  if (!sensor_data->gnss_stale && sensor_data->gnss_valid) status |= ENV_SENSORS_FRESH_GNSS;
+  return status;
+  /* USER CODE END EnvSensors_Read */
+}
+
+/* FR-15 (#96): GPS-only merge, no I2C. SendTxData used to call the full
+ * EnvSensors_Read() a second time per work cycle just to fold the fresh GPS
+ * fix in — a redundant MS5607 OSR_4096 conversion pair (~9 ms each) plus a
+ * full SHT31 read. This is the GNSS block of EnvSensors_Read(), extracted
+ * verbatim; semantics (zeros-on-no-fix, staleness honesty) unchanged. */
+void EnvSensors_MergeGnss(sensor_t *sensor_data)
+{
+  if (hgnss.is_initialized && hgnss.data.valid &&
       hgnss.data.fix_quality != GNSS_FIX_INVALID &&
       GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
   {
@@ -305,7 +327,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     sensor_data->gnss_hdop = hgnss.data.hdop;
     sensor_data->gnss_valid = true;
     sensor_data->gnss_stale = s_gnss_stale ? 1 : 0;  /* T2: honesty from the TX path */
-    
+
     SONDE_LOG("GNSS: Valid fix | Sats:%d%s\r\n", hgnss.data.satellites,
                       s_gnss_stale ? " (STALE)" : "");
   }
@@ -326,17 +348,6 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     SONDE_LOG("GNSS: No fix | Sats visible:%d | Position zeroed\r\n",
                       hgnss.data.satellites_in_view);
   }
-
-  /* F-030 (#59): per-sensor freshness bitmask — the top-level return no
-   * longer hides total acquisition failure. 1 bit = fresh live read this
-   * cycle; 0 = stale/never-acquired (the staleness flags carry the detail). */
-  int32_t status = 0;
-  if (!sensor_data->temp_stale)  status |= ENV_SENSORS_FRESH_TEMP;
-  if (!sensor_data->hum_stale)   status |= ENV_SENSORS_FRESH_HUMIDITY;
-  if (!sensor_data->press_stale) status |= ENV_SENSORS_FRESH_PRESSURE;
-  if (!sensor_data->gnss_stale && sensor_data->gnss_valid) status |= ENV_SENSORS_FRESH_GNSS;
-  return status;
-  /* USER CODE END EnvSensors_Read */
 }
 
 int32_t EnvSensors_Init(void)

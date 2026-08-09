@@ -367,6 +367,7 @@ MS5607_StatusTypeDef MS5607_ReadPressureAndTemperature(MS5607_HandleTypeDef *hms
   {
     int p10 = (int)(*pressure * 10.0f);
     int t10 = (int)(*temperature * 10.0f);
+    (void)p10; (void)t10;  /* FR-19: log-only in flight */
     SONDE_LOG("MS5607: ERROR - implausible result P=%d.%d hPa T=%d.%d C\r\n",
                       p10 / 10, abs(p10 % 10), t10 / 10, abs(t10 % 10));
     return MS5607_ERROR;

@@ -27,6 +27,7 @@
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h>  /* FR-18 (#99): offsetof for the CRC span */
 
 /* Private defines -----------------------------------------------------------*/
 /* Two-tier session storage (FW-1 / DDR-0006).
@@ -110,6 +111,13 @@ _Static_assert(sizeof(Tier1Bank_t) % 8U == 0U,
                "Tier1Bank_t must be 8-byte aligned for FLASH_IF_Write");
 _Static_assert(sizeof(Tier2Bank_t) % 8U == 0U,
                "Tier2Bank_t must be 8-byte aligned for FLASH_IF_Write");
+/* FR-18 (#99): the context CRC covers offsetof(MinimalRegionContext_t, crc16)
+ * bytes. Pin the layout so an added/reordered member or an enum-width change
+ * fails at compile time instead of silently shifting the CRC span. */
+_Static_assert(offsetof(MinimalRegionContext_t, crc16) == 76,
+               "context CRC span assumes crc16 at offset 76");
+_Static_assert(sizeof(MinimalRegionContext_t) == 80,
+               "MinimalRegionContext_t layout drift");
 
 /* Private variables ---------------------------------------------------------*/
 static MultiRegionStorage_t g_storage;
@@ -289,9 +297,7 @@ bool MultiRegion_ForceSaveCurrentContext(void)
     SONDE_LOG_STR("Network is activated, proceeding...\r\n");
     
     LoRaMacRegion_t current_region = LmHandlerParams.ActiveRegion;
-    char region_msg[64];
-    snprintf(region_msg, sizeof(region_msg), "Current region: %s\r\n", RegionToString(current_region));
-    SONDE_LOG_STR(region_msg);
+    SONDE_LOG("Current region: %s\r\n", RegionToString(current_region));
     
     int8_t slot = FindContextSlot(current_region);
     
@@ -304,16 +310,12 @@ bool MultiRegion_ForceSaveCurrentContext(void)
                 g_storage.contexts[i].dev_addr == 0xFFFFFFFF) {
                 slot = i;
                 g_storage.num_valid++;
-                char slot_msg[64];
-                snprintf(slot_msg, sizeof(slot_msg), "Found empty slot: %d\r\n", i);
-                SONDE_LOG_STR(slot_msg);
+                SONDE_LOG("Found empty slot: %d\r\n", i);
                 break;
             }
         }
     } else {
-        char slot_msg[64];
-        snprintf(slot_msg, sizeof(slot_msg), "Using existing slot: %d\r\n", slot);
-        SONDE_LOG_STR(slot_msg);
+        SONDE_LOG("Using existing slot: %d\r\n", slot);
     }
     
     if (slot < 0) {
@@ -677,9 +679,7 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
 LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
 {
     // Debug entry
-    char entry_msg[128];
-    snprintf(entry_msg, sizeof(entry_msg), "\r\n>>> MultiRegion_SwitchToRegion() called for %s\r\n", RegionToString(region));
-    SONDE_LOG_STR(entry_msg);
+    SONDE_LOG("\r\n>>> MultiRegion_SwitchToRegion() called for %s\r\n", RegionToString(region));
     
     if (!g_initialized) {
         SONDE_LOG_STR("ERROR: Not initialized, returning error\r\n");
@@ -688,10 +688,9 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     }
     
     // Debug current state
-    snprintf(entry_msg, sizeof(entry_msg), "Current active_slot: %d, Current region: %s\r\n", 
+    SONDE_LOG("Current active_slot: %d, Current region: %s\r\n",
              g_storage.active_slot,
              g_storage.active_slot < MAX_REGION_CONTEXTS ? RegionToString(g_storage.contexts[g_storage.active_slot].region) : "NONE");
-    SONDE_LOG_STR(entry_msg);
     
     // Check if already on this region AND MAC is actually joined
     // On boot, even though we're on the target region, MAC isn't joined yet so we need to restore
@@ -1025,6 +1024,7 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
 
     // Join successful
     uint32_t join_time = (HAL_GetTick() - start_time) / 1000;
+    (void)join_time;  /* FR-19: log-only in flight */
     SONDE_LOG("%s join SUCCESS! (took %lus)\r\n", RegionToString(region), join_time);
     APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Join successful for %s (took %lus)\r\n", 
             RegionToString(region), join_time);
@@ -1275,7 +1275,10 @@ static bool ValidateContextCRC(MinimalRegionContext_t *ctx)
 {
     uint16_t stored_crc = ctx->crc16;
     ctx->crc16 = 0;
-    uint16_t calculated_crc = CalculateCRC16((uint8_t*)ctx, sizeof(MinimalRegionContext_t) - 2);
+    /* FR-18 (#99): offsetof span, not sizeof-2 — the old span silently
+     * depended on crc16's position and the trailing padding. NOTE: changes
+     * CRC values vs pre-FR-18 firmware (no deployed fleet, so no migration). */
+    uint16_t calculated_crc = CalculateCRC16((uint8_t*)ctx, offsetof(MinimalRegionContext_t, crc16));
     ctx->crc16 = stored_crc;
     
     return (stored_crc == calculated_crc);
@@ -1287,7 +1290,7 @@ static bool ValidateContextCRC(MinimalRegionContext_t *ctx)
 static void UpdateContextCRC(MinimalRegionContext_t *ctx)
 {
     ctx->crc16 = 0;
-    ctx->crc16 = CalculateCRC16((uint8_t*)ctx, sizeof(MinimalRegionContext_t) - 2);
+    ctx->crc16 = CalculateCRC16((uint8_t*)ctx, offsetof(MinimalRegionContext_t, crc16));  /* FR-18 */
 }
 
 /**
@@ -1562,20 +1565,17 @@ static bool FlashWriteStorage(void)
  */
 static int8_t FindContextSlot(LoRaMacRegion_t region)
 {
-    char debug_msg[256];
-    snprintf(debug_msg, sizeof(debug_msg), 
-             "FindContextSlot: Searching for region %s (enum=%d)\r\n", 
+    /* FR-16 (#97): this used to run six snprintf into a 256-byte stack buffer
+     * per call even in flight builds (SONDE_LOG_STR gated, snprintf not). */
+    SONDE_LOG("FindContextSlot: Searching for region %s (enum=%d)\r\n",
              RegionToString(region), region);
-    SONDE_LOG_STR(debug_msg);
-    
+
     SONDE_LOG_STR("Storage contents:\r\n");
     for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
-        snprintf(debug_msg, sizeof(debug_msg),
-                 "  Slot %d: region=%s (enum=%d), DevAddr=0x%08lX\r\n",
-                 i, RegionToString(g_storage.contexts[i].region), 
+        SONDE_LOG("  Slot %d: region=%s (enum=%d), DevAddr=0x%08lX\r\n",
+                 i, RegionToString(g_storage.contexts[i].region),
                  g_storage.contexts[i].region,
                  g_storage.contexts[i].dev_addr);
-        SONDE_LOG_STR(debug_msg);
 
         /* FW-9: skip empty slots. LORAMAC_REGION_AS923 == 0, so an erased/
          * zeroed slot otherwise "matches" an AS923 lookup. A real slot always
@@ -1586,8 +1586,7 @@ static int8_t FindContextSlot(LoRaMacRegion_t region)
         }
 
         if (g_storage.contexts[i].region == region) {
-            snprintf(debug_msg, sizeof(debug_msg), "  -> Found at slot %d!\r\n", i);
-            SONDE_LOG_STR(debug_msg);
+            SONDE_LOG("  -> Found at slot %d!\r\n", i);
             return i;
         }
     }
@@ -1779,7 +1778,8 @@ void MultiRegion_DisplaySessionKeys(void)
     }
     
     MinimalRegionContext_t *ctx = &g_storage.contexts[g_storage.active_slot];
-    
+    (void)ctx;  /* FR-19: every use below is a gated log line */
+
     SONDE_LOG_STR("\r\n");
     SONDE_LOG_STR("========================================\r\n");
     SONDE_LOG_STR("=== SESSION KEYS FOR CHIRPSTACK ABP ===\r\n");
@@ -1791,9 +1791,7 @@ void MultiRegion_DisplaySessionKeys(void)
     // DevEUI
     SONDE_LOG_STR("DevEUI:       ");
     for (int i = 0; i < 8; i++) {
-        char hex[4];
-        snprintf(hex, sizeof(hex), "%02x%s", ctx->dev_eui[i], (i < 7) ? ":" : "");
-        SONDE_LOG_STR(hex);
+        SONDE_LOG("%02x%s", ctx->dev_eui[i], (i < 7) ? ":" : "");
     }
     SONDE_LOG_STR("\r\n");
     
@@ -1803,18 +1801,14 @@ void MultiRegion_DisplaySessionKeys(void)
     // AppSKey (formatted for Chirpstack)
     SONDE_LOG_STR("AppSKey:      ");
     for (int i = 0; i < 16; i++) {
-        char hex[3];
-        snprintf(hex, sizeof(hex), "%02x", ctx->app_s_key[i]);
-        SONDE_LOG_STR(hex);
+        SONDE_LOG("%02x", ctx->app_s_key[i]);
     }
     SONDE_LOG_STR("\r\n");
-    
+
     // NwkSKey (formatted for Chirpstack)
     SONDE_LOG_STR("NwkSKey:      ");
     for (int i = 0; i < 16; i++) {
-        char hex[3];
-        snprintf(hex, sizeof(hex), "%02x", ctx->nwk_s_key[i]);
-        SONDE_LOG_STR(hex);
+        SONDE_LOG("%02x", ctx->nwk_s_key[i]);
     }
     SONDE_LOG_STR("\r\n");
     

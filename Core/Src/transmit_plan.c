@@ -165,18 +165,16 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         plan.gps_enabled = false;
         plan.veto = VETO_TEMP_STALE;
         int temp_deci = (int)(temperature_c * 10.0f);
-        char temp_msg[96];
-        snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d C)\r\n",
+        (void)temp_deci;  /* FR-19: log-only in flight */
+        SONDE_LOG("GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d C)\r\n",
                  temp_deci / 10, abs(temp_deci % 10));
-        SONDE_LOG_STR(temp_msg);
     } else if (temperature_c < gps_lockout_temp) {
         plan.gps_enabled = false;
         plan.veto = VETO_TEMP_LOCKOUT;
         int temp_deci = (int)(temperature_c * 10.0f);
-        char temp_msg[96];
-        snprintf(temp_msg, sizeof(temp_msg), "GPS LOCKOUT: Temperature %d.%d C < %d C (supercap inoperative)\r\n",
+        (void)temp_deci;  /* FR-19: log-only in flight */
+        SONDE_LOG("GPS LOCKOUT: Temperature %d.%d C < %d C (supercap inoperative)\r\n",
                  temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
-        SONDE_LOG_STR(temp_msg);
     }
 
     /* T1 ladder (DDR-0006): FLIGHT with no session = RF silence. The cycle

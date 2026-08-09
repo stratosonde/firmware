@@ -99,6 +99,10 @@ int32_t EnvSensors_Init(void);
   */
  int32_t EnvSensors_Read(sensor_t *sensor_data);
 
+/* FR-15 (#96): merge the current hgnss fix into an existing sensor_t with NO
+ * I2C traffic — use after GPS acquisition instead of a second full read. */
+void EnvSensors_MergeGnss(sensor_t *sensor_data);
+
 /* F-030 (#59): EnvSensors_Read freshness bitmask bits */
 #define ENV_SENSORS_FRESH_TEMP       0x01
 #define ENV_SENSORS_FRESH_HUMIDITY   0x02

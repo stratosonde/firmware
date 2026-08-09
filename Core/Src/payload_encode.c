@@ -126,10 +126,11 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     int32_t pressure_centi = (int32_t)(sensors->pressure * 100);  /* int16 overflowed at >327 hPa (host-test catch) */
     int16_t humidity_centi = (int16_t)(sensors->humidity * 100);
     int16_t battery_mv = (int16_t)(sensors->battery_voltage * 1000);
-    
-    char debug_msg[200];
-    snprintf(debug_msg, sizeof(debug_msg),
-             "Compact: T=%lum Lat=%ld.%06ld Lon=%ld.%06ld Temp=%d.%02dC P=%ld.%02ld H=%d.%02d%% Bat=%dmV Sats=%d Mode=%d\r\n",
+    (void)temp_centi; (void)pressure_centi; (void)humidity_centi; (void)battery_mv;  /* FR-19: log-only in flight */
+    (void)lat_micro; (void)lon_micro;  /* FR-19 */
+
+    /* FR-16 (#97): SONDE_LOG directly — an ungated snprintf still ran in flight */
+    SONDE_LOG("Compact: T=%lum Lat=%ld.%06ld Lon=%ld.%06ld Temp=%d.%02dC P=%ld.%02ld H=%d.%02d%% Bat=%dmV Sats=%d Mode=%d\r\n",
              (unsigned long)timestamp_min,
              (long)(lat_micro / 1000000), (long)labs(lat_micro % 1000000),
              (long)(lon_micro / 1000000), (long)labs(lon_micro % 1000000),
@@ -137,7 +138,6 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
              (long)(pressure_centi / 100), labs(pressure_centi % 100),
              humidity_centi / 100, abs(humidity_centi % 100),
              battery_mv, sensors->satellites, power_mode);
-    SONDE_LOG_STR(debug_msg);
     
     return true;
 }
@@ -213,19 +213,17 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     // Debug logging with safe integer conversions
     int32_t lat_micro = sensors->gnss_valid ? (int32_t)(sensors->latitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
     int32_t lon_micro = sensors->gnss_valid ? (int32_t)(sensors->longitude * GPS_BINARY_TO_DEGREES * 1000000) : 0;
-    
-    char debug_msg[200];
-    snprintf(debug_msg, sizeof(debug_msg),
-             "HighRes: T=%lus Lat=%ld.%06ld Lon=%ld.%06ld Alt=%dm Temp=%d.%dC P=%d.%d Bat=%dmV Solar=%dmV Slope=%+dmV/h\r\n",
+    (void)lat_micro; (void)lon_micro;  /* FR-19: log-only in flight */
+
+    SONDE_LOG("HighRes: T=%lus Lat=%ld.%06ld Lon=%ld.%06ld Alt=%dm Temp=%d.%dC P=%d.%d Bat=%dmV Solar=%dmV Slope=%+dmV/h\r\n",
              (unsigned long)timestamp,
              (long)(lat_micro / 1000000), (long)labs(lat_micro % 1000000),
              (long)(lon_micro / 1000000), (long)labs(lon_micro % 1000000),
              record->altitude,
              record->temperature / 10, abs(record->temperature % 10),
              record->pressure / 10, record->pressure % 10,
-             record->battery_voltage, record->solar_voltage, 
+             record->battery_voltage, record->solar_voltage,
              voltage_slope);
-    SONDE_LOG_STR(debug_msg);
     
     return true;
 }

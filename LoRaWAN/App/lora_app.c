@@ -259,12 +259,13 @@ static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity);
 static void OnSystemReset(void);
 
 /* USER CODE BEGIN PFP */
+#if ENABLE_GNSS_DETAIL_PACKET
 static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size);
-static void PacketQueue_Init(PacketQueue_t *queue);
 static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port);
+#endif
+static void PacketQueue_Init(PacketQueue_t *queue);
 static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry);
 static bool PacketQueue_IsEmpty(PacketQueue_t *queue);
-static uint8_t PacketQueue_Count(PacketQueue_t *queue);
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
@@ -637,9 +638,10 @@ static int8_t DatarateFromSF(uint8_t sf)
   return LORAWAN_DEFAULT_DATA_RATE;
 }
 
+#if ENABLE_GNSS_DETAIL_PACKET  /* FR-19 (#100): unused when the debug packet is off */
 /**
   * @brief  Encode detailed GNSS telemetry packet (satellite tracking + 3D speed)
-  * @param  buffer: Destination buffer  
+  * @param  buffer: Destination buffer
   * @param  max_size: Maximum buffer size
   * @retval Actual packet size in bytes
   * @note   Custom binary format on Port 3 for detailed analysis
@@ -712,9 +714,10 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
   
   /* Satellites used in fix (1 byte) */
   buffer[idx++] = hgnss.data.satellites;
-  
+
   return idx;
 }
+#endif  /* ENABLE_GNSS_DETAIL_PACKET */
 
 /* ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ========== */
 /* R49 (#46): NormalizeBatteryVoltage, CalculateVoltageSlope, PredictTimeToVoltage,
@@ -740,11 +743,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   // FW-17: only log margin/gateway count when a LinkCheckAns was actually
   // received — otherwise these fields are garbage
   if (linkcheck_received) {
-    char link_msg[128];
-    snprintf(link_msg, sizeof(link_msg),
-             "LinkCheckAns: Margin=%ddB, Gateways=%d\r\n",
-             margin, gw_count);
-    SONDE_LOG_STR(link_msg);
+    SONDE_LOG("LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", margin, gw_count);
   }
   
   /* DDR-0011 (#34): the archive opportunity opens on the confirmed probe's ACK
@@ -786,10 +785,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   
   // Process any received application data
   if (appData && appData->BufferSize > 0) {
-    char rx_msg[64];
-    snprintf(rx_msg, sizeof(rx_msg), "Received %d bytes on port %d\r\n", 
-             appData->BufferSize, appData->Port);
-    SONDE_LOG_STR(rx_msg);
+    SONDE_LOG("Received %d bytes on port %d\r\n", appData->BufferSize, appData->Port);
   }
   
   SONDE_LOG_STR("=== OnRxData Callback END ===\r\n");
@@ -1005,17 +1001,15 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000);
         int32_t alt_int = (int32_t)(hgnss.data.altitude * 10);
         int32_t hdop_int = (int32_t)(hgnss.data.hdop * 10);
-        
-        char fix_msg[150];
-        snprintf(fix_msg, sizeof(fix_msg), 
-                 "GPS FIX! Lat=%ld.%06ld Lon=%ld.%06ld Alt=%ld.%ldm Sats:%d HDOP=%ld.%ld (took %lums)\r\n",
+        (void)lat_int; (void)lon_int; (void)alt_int; (void)hdop_int;  /* FR-19: log-only in flight */
+
+        SONDE_LOG("GPS FIX! Lat=%ld.%06ld Lon=%ld.%06ld Alt=%ld.%ldm Sats:%d HDOP=%ld.%ld (took %lums)\r\n",
                  (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
                  (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                  (long)(alt_int / 10), (long)labs(alt_int % 10),
                  hgnss.data.satellites,
                  (long)(hdop_int / 10), (long)labs(hdop_int % 10),
                  (unsigned long)ttf_ms);
-        SONDE_LOG_STR(fix_msg);
         break;  /* Exit early - we have what we need */
       }
       
@@ -1025,14 +1019,12 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
       {
         /* F27 FIX: integer-only print (no float printf support linked) */
         int hdop_deci = (int)(hgnss.data.hdop * 10.0f);
-        char status_msg[100];
-        snprintf(status_msg, sizeof(status_msg),
-                 "[GPS %lus] Sats:%d/%d HDOP:%d.%d Fix:%s\r\n",
+        (void)hdop_deci;  /* FR-19: log-only in flight */
+        SONDE_LOG("[GPS %lus] Sats:%d/%d HDOP:%d.%d Fix:%s\r\n",
                  (unsigned long)(elapsed / 1000),
                  hgnss.data.satellites, hgnss.data.satellites_in_view,
                  hdop_deci / 10, hdop_deci % 10,
                  (hgnss.data.fix_quality != GNSS_FIX_INVALID) ? "Yes" : "No");
-        SONDE_LOG_STR(status_msg);
         last_status_print = elapsed;
       }
       
@@ -1120,6 +1112,7 @@ static void SelectRegionAndSession(bool *rf_silence)
       
       /* Calculate elapsed time for H3 lookup */
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
+      (void)h3_elapsed;  /* FR-19: log-only in flight */
       
       /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
        * NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
@@ -1154,18 +1147,16 @@ static void SelectRegionAndSession(bool *rf_silence)
       /* Convert floats to integers for printing (safe for all printf implementations) */
       int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);  // 6 decimal places
       int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000); // 6 decimal places
-      
+
       /* #77: shared RegionToString — the open-coded switch is gone */
       const char* region_name = RegionToString(detected_region);
+      (void)lat_int; (void)lon_int; (void)region_name;  /* FR-19: log-only in flight */
 
-      /* Output region lookup result to RTT with timing - use snprintf to avoid buffer issues */
-      char h3_msg[200];
-      snprintf(h3_msg, sizeof(h3_msg), 
-               "H3 Region Lookup: Lat=%ld.%06ld Lon=%ld.%06ld -> %s (took %lums)\r\n",
+      /* FR-16 (#97): SONDE_LOG directly — an ungated snprintf still ran in flight */
+      SONDE_LOG("H3 Region Lookup: Lat=%ld.%06ld Lon=%ld.%06ld -> %s (took %lums)\r\n",
                (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
                (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
-      SONDE_LOG_STR(h3_msg);
       
       /* Production: Auto-switch region based on H3lite lookup */
       LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchToRegion(detected_region);
@@ -1212,6 +1203,7 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
                                                              slope_mv_per_hour, (uint8_t)current_mode);
     if (log_status == FLASH_LOG_OK) {
       uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
+      (void)record_count;  /* FR-19: log-only in flight */
       SONDE_LOG("Flash log: Written record %lu (total records: %lu)\r\n",
                         record_count, record_count);
     } else {
@@ -1297,11 +1289,9 @@ static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
 
   /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
   int hdop_int = (int)(sensor_data->gnss_hdop * 10);
-  char lpp_msg[120];
-  snprintf(lpp_msg, sizeof(lpp_msg), "Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n", 
-           hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms, 
+  SONDE_LOG("Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n",
+           hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms,
            slope_mv_per_hour, time_to_target_signed, current_mode);
-  SONDE_LOG_STR(lpp_msg);
 }
 #endif  /* ENABLE_DEBUG_LPP */
 
@@ -1495,6 +1485,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
              * records commit only on network ACK (OnTxData). */
             if (g_bulk_packets_sent == 0) {
               LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
+              (void)lc_status;  /* FR-19: log-only in flight; the call has the side effect */
               SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
             }
 
@@ -1588,6 +1579,7 @@ static void SendTxData(void)
   // Read raw voltages
   uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
   uint16_t solar_mv = SYS_GetSolarVoltage();
+  (void)solar_mv;  /* FR-19: log-only in flight */
 
   // Use RTC-based time that continues during STOP2 sleep
   uint16_t ms_unused;
@@ -1607,6 +1599,7 @@ static void SendTxData(void)
   int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
   int16_t time_to_target_signed = plan.time_to_target_h;
   uint16_t battery_mv_normalized = plan.battery_mv_normalized;
+  (void)battery_mv_normalized;  /* FR-19: log-only in flight */
 
   // Update timer interval if changed
   UTIL_TIMER_Stop(&TxTimer);
@@ -1616,25 +1609,22 @@ static void SendTxData(void)
   // Log power management status
   /* F27 FIX: integer-only print (no float printf support linked) */
   int temp_deci_pm = (int)(temperature_c * 10.0f);
-  char pm_msg[256];
-  snprintf(pm_msg, sizeof(pm_msg),
-           "\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
+  (void)temp_deci_pm;  /* FR-19: log-only in flight */
+  /* FR-16 (#97): ungated snprintf+STR pairs still executed in flight builds */
+  SONDE_LOG("\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
            temp_deci_pm / 10, abs(temp_deci_pm % 10),
            battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
-  SONDE_LOG_STR(pm_msg);
-  
+
   if (time_to_target_signed < 0) {
-    snprintf(pm_msg, sizeof(pm_msg), "Critical_in=%dh ", abs(time_to_target_signed));
+    SONDE_LOG("Critical_in=%dh ", abs(time_to_target_signed));
   } else if (time_to_target_signed > 0) {
-    snprintf(pm_msg, sizeof(pm_msg), "Full_in=%dh ", time_to_target_signed);
+    SONDE_LOG("Full_in=%dh ", time_to_target_signed);
   } else {
-    snprintf(pm_msg, sizeof(pm_msg), "Stable ");
+    SONDE_LOG_STR("Stable ");
   }
-  SONDE_LOG_STR(pm_msg);
-  
-  snprintf(pm_msg, sizeof(pm_msg), "Mode=%s GPS=%s ===\r\n",
+
+  SONDE_LOG("Mode=%s GPS=%s ===\r\n",
            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
-  SONDE_LOG_STR(pm_msg);
   
   /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
    * (see below). Previously the record was written here with the PREVIOUS
@@ -1716,10 +1706,10 @@ static void SendTxData(void)
   /* Add separator before continuing to telemetry */
   SONDE_LOG_STR("\r\n");
   
-  // CRITICAL: Re-read sensor data AFTER GPS acquisition to include fresh GPS fix
-  SONDE_LOG_STR("Re-reading sensor data to capture fresh GPS fix...\r\n");
-  EnvSensors_Read(&sensor_data);  // This includes the GPS fix we just acquired
-  SONDE_LOG_STR("Sensor data refreshed with current GPS position\r\n");
+  // CRITICAL: fold in the fresh GPS fix acquired above.
+  // FR-15 (#96): GPS-only merge — a second full EnvSensors_Read() here
+  // re-ran the MS5607 OSR_4096 pair and SHT31 read for no new information.
+  EnvSensors_MergeGnss(&sensor_data);
 
   ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode);
 
@@ -1743,9 +1733,7 @@ static void SendTxData(void)
     lppData.Buffer = CayenneLppGetBuffer();
     
     // DEBUG: Log payload size
-    char size_msg[64];
-    snprintf(size_msg, sizeof(size_msg), "CayenneLPP payload size: %d bytes\r\n", lppData.BufferSize);
-    SONDE_LOG_STR(size_msg);
+    SONDE_LOG("CayenneLPP payload size: %d bytes\r\n", lppData.BufferSize);
     
     // Send with default datarate  
     LmHandlerSetTxDatarate(LORAWAN_DEFAULT_DATA_RATE);
@@ -1774,20 +1762,15 @@ static void SendTxData(void)
     
     if (gnss_packet_size > 0)
     {
-      char gnss_msg[100];
-      snprintf(gnss_msg, sizeof(gnss_msg), 
-               "Queuing GNSS detail packet: %d bytes (GPS:%d BeiDou:%d GLONASS:%d)\r\n",
-               gnss_packet_size, hgnss.extended.gps_count, 
+      SONDE_LOG("Queuing GNSS detail packet: %d bytes (GPS:%d BeiDou:%d GLONASS:%d)\r\n",
+               gnss_packet_size, hgnss.extended.gps_count,
                hgnss.extended.beidou_count, hgnss.extended.glonass_count);
-      SONDE_LOG_STR(gnss_msg);
       
       /* Push to queue - will be sent after RX windows complete */
       if (PacketQueue_Push(&g_packet_queue, gnss_detail_buffer, gnss_packet_size, LORAWAN_GNSS_DETAIL_PORT))
       {
-        char queue_msg[60];
-        snprintf(queue_msg, sizeof(queue_msg), "GNSS packet queued (queue size: %d)\r\n", 
-                 PacketQueue_Count(&g_packet_queue));
-        SONDE_LOG_STR(queue_msg);
+        SONDE_LOG("GNSS packet queued (queue size: %d)\r\n",
+                 g_packet_queue.count);
       }
       else
       {
@@ -1906,8 +1889,9 @@ static void OnTxData(LmHandlerTxParams_t *params)
       queuedData.Buffer = entry.buffer;
       
       LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+      (void)queue_status;  /* FR-19: log-only in flight; the call has the side effect */
       SONDE_LOG("OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
-                        entry.port, entry.size, queue_status, PacketQueue_Count(&g_packet_queue));
+                        entry.port, entry.size, queue_status, g_packet_queue.count);
     }
   }
   
@@ -1936,21 +1920,14 @@ static void OnTxData(LmHandlerTxParams_t *params)
 static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
 {
   /* USER CODE BEGIN OnJoinRequest_1 */
-  char rtt_buf[128];
-  
   SONDE_LOG_STR("\r\n=== OnJoinRequest Callback ===\r\n");
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Status: %s (%d)\r\n", 
+  SONDE_LOG("  Status: %s (%d)\r\n",
            (joinParams->Status == LORAMAC_HANDLER_SUCCESS) ? "SUCCESS" : "FAILED",
            joinParams->Status);
-  SONDE_LOG_STR(rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Mode: %s\r\n", 
+  SONDE_LOG("  Mode: %s\r\n",
            (joinParams->Mode == ACTIVATION_TYPE_OTAA) ? "OTAA" : "ABP");
-  SONDE_LOG_STR(rtt_buf);
-  
-  snprintf(rtt_buf, sizeof(rtt_buf), "  Datarate: DR%d, TxPower: %d\r\n", 
+  SONDE_LOG("  Datarate: DR%d, TxPower: %d\r\n",
            joinParams->Datarate, joinParams->TxPower);
-  SONDE_LOG_STR(rtt_buf);
   
   if (joinParams->Status == LORAMAC_HANDLER_SUCCESS)
   {
@@ -2253,6 +2230,7 @@ static void PacketQueue_Init(PacketQueue_t *queue)
   memset(queue, 0, sizeof(PacketQueue_t));
 }
 
+#if ENABLE_GNSS_DETAIL_PACKET  /* FR-19 (#100): sole producer is the debug packet */
 /**
   * @brief  Push packet to queue
   * @param  queue: Pointer to queue structure
@@ -2277,6 +2255,7 @@ static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t
 
   return true;
 }
+#endif  /* ENABLE_GNSS_DETAIL_PACKET */
 
 /**
   * @brief  Pop packet from queue
@@ -2308,12 +2287,5 @@ static bool PacketQueue_IsEmpty(PacketQueue_t *queue)
   return (queue->count == 0);
 }
 
-/**
-  * @brief  Get number of packets in queue
-  * @param  queue: Pointer to queue structure
-  * @retval Number of packets
-  */
-static uint8_t PacketQueue_Count(PacketQueue_t *queue)
-{
-  return queue->count;
-}
+/* FR-19 (#100): PacketQueue_Count deleted — its only callers were log lines;
+ * use g_packet_queue.count directly. */
