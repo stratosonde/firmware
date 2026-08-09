@@ -175,6 +175,17 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
         probes++;
 
         status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);
+
+        /* R2-03 (#107): positional reads are committed by STORED sequence, so
+         * a CRC-valid record carrying the wrong identity (frontier-scan /
+         * sector-boundary mixup, or a stale slot after wrap) must not sail
+         * through - the caller's commit arithmetic assumes batch[i].sequence
+         * == base + i. Identity mismatch = corruption: skip it, count it. */
+        if (status == FLASH_LOG_OK &&
+            records[*actual_count].sequence != sequence_to_read) {
+            status = FLASH_LOG_ERROR_CRC;
+        }
+
         if (status != FLASH_LOG_OK) {
             /* F-006/R13 (#51): corrupt/torn record — count it, but do NOT
              * advance the watermark here. Skip + good reads compose with the
@@ -197,6 +208,36 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
     return FLASH_LOG_OK;
 }
 
+/* R2-02 (#106): absolute commit. The count-based MarkRecordsTransmitted only
+ * works if the caller's base matches the CURRENT watermark - but the BUG 1.7
+ * wrap clamp mutates the watermark inside GetUnsentRecordsFIFO, UNDER a caller
+ * that pinned its base before the read. The composed result over-advanced the
+ * watermark past records that were never read, never sent, never counted as
+ * skipped: silent, permanent data loss on every post-wrap bulk cycle.
+ * CommitThrough takes the absolute (exclusive) sequence instead; clamped to
+ * [current watermark, next_sequence], it cannot over-advance no matter what
+ * the read did to the base. */
+FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint32_t through_sequence)
+{
+    if (hlog == NULL || !hlog->initialized) {
+        return FLASH_LOG_ERROR_PARAM;
+    }
+
+    if (through_sequence > hlog->next_sequence) {
+        through_sequence = hlog->next_sequence;
+    }
+
+    /* Never move the watermark backward (a stale ACK must not un-send). */
+    if (through_sequence <= hlog->last_transmitted_sequence) {
+        return FLASH_LOG_OK;
+    }
+
+    hlog->last_transmitted_sequence = through_sequence;
+
+    /* Update header to persist transmission tracking */
+    return FlashLog_SyncHeader(hlog);
+}
+
 FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count)
 {
     if (hlog == NULL || !hlog->initialized) {
@@ -207,21 +248,12 @@ FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *h
         return FLASH_LOG_OK; /* Nothing to mark */
     }
     
-    /* Update last transmitted sequence to mark these records as sent */
-    uint32_t new_last_transmitted = hlog->last_transmitted_sequence + count;
-
-    /* F15 FIX: off-by-one. "All caught up" means last_transmitted ==
-     * next_sequence; clamping to next_sequence-1 left one phantom unsent
-     * record forever (GetUnsentCount never reached 0) and wedged bulk
-     * transfer on the last record. Clamp to next_sequence itself. */
-    if (new_last_transmitted > hlog->next_sequence) {
-        new_last_transmitted = hlog->next_sequence;
-    }
-    
-    hlog->last_transmitted_sequence = new_last_transmitted;
-    
-    /* Update header to persist transmission tracking */
-    return FlashLog_SyncHeader(hlog);
+    /* R2-02 (#106): count-based marking is retained for existing callers but
+     * now composes through the absolute commit (F15's next_sequence clamp is
+     * inherited from CommitThrough). New callers: use FlashLog_CommitThrough
+     * with an absolute sequence - a count is only meaningful relative to a
+     * base that nothing enforces. */
+    return FlashLog_CommitThrough(hlog, hlog->last_transmitted_sequence + count);
 }
 
 uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog)

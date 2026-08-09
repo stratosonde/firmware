@@ -313,6 +313,17 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
 FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count);
 
 /**
+  * @brief  Commit all records through an absolute sequence (exclusive)
+  * @param  hlog: Pointer to flash log handle
+  * @param  through_sequence: first sequence NOT yet transmitted
+  * @retval FlashLog_StatusTypeDef
+  * @note   R2-02 (#106): preferred over the count-based API - immune to the
+  *         read-path wrap clamp moving the watermark under the caller.
+  *         Monotonic: never moves the watermark backward.
+  */
+FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint32_t through_sequence);
+
+/**
   * @brief  Get count of unsent records
   * @param  hlog: Pointer to flash log handle
   * @retval Number of unsent records

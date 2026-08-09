@@ -391,7 +391,7 @@ static PacketQueue_t g_packet_queue = {0};
 /* Adaptive transmission strategy state */
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
-static uint32_t g_bulk_pending_mark = 0;  /* C4: records to mark after confirmed TX */
+static uint32_t g_bulk_commit_through = 0;  /* C4/R2-02 (#106): absolute commit point (exclusive seq) after confirmed TX */
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -1390,9 +1390,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
         FlashLog_Record_t flash_records[6];
         uint32_t record_count;
         uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
-        /* FR-08 (#91): pin the entry watermark BEFORE the read so the commit
-         * point can be computed positionally from consumed sequences. */
-        uint32_t entry_watermark = hflashlog.last_transmitted_sequence;
+        /* R2-02 (#106): no entry-watermark pin - the read path may clamp the
+         * watermark (BUG 1.7) under any base pinned here. Commits below are
+         * ABSOLUTE (FlashLog_CommitThrough), derived from record sequences. */
 
         FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
                                                                             flash_records,
@@ -1432,18 +1432,17 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
              * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
              * unconvertible — leaving it pending re-probes it forever and
              * wedges bulk transfer. Positional mark covers corrupt + read. */
-            uint32_t mark = skipped_count;
-            if (record_count > 0) {
-              mark = (flash_records[record_count - 1].sequence + 1U) - entry_watermark;
-              SONDE_LOG("Retiring %lu record(s) with no TX (%lu corrupt, %lu unconvertible)\r\n",
-                                (unsigned long)mark, (unsigned long)skipped_count,
+            /* R2-02 (#106): absolute retire point. Read probes are consecutive
+             * sequences from the (post-clamp) watermark, so when nothing read
+             * clean the corrupt run spans watermark..watermark+skipped-1. */
+            uint32_t retire_through = (record_count > 0)
+                ? flash_records[record_count - 1].sequence + 1U
+                : hflashlog.last_transmitted_sequence + skipped_count;
+            if (retire_through > hflashlog.last_transmitted_sequence) {
+              SONDE_LOG("Retiring through seq %lu with no TX (%lu corrupt, %lu unconvertible)\r\n",
+                                (unsigned long)retire_through, (unsigned long)skipped_count,
                                 (unsigned long)record_count);
-            } else if (mark > 0) {
-              SONDE_LOG("Retiring %lu corrupt record(s) with no TX (anti-wedge)\r\n",
-                                (unsigned long)mark);
-            }
-            if (mark > 0) {
-              FlashLog_MarkRecordsTransmitted(&hflashlog, mark);
+              FlashLog_CommitThrough(&hflashlog, retire_through);
             }
             g_tx_state = TX_STATE_COMPLETE;
             break;
@@ -1510,13 +1509,15 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
                * the last PACKED record's own sequence is consumed (packed
                * records + any corrupt slots below them); records read but cut
                * by the budget stay pending. The exact-identity ack lands with
-               * the confirmed-delivery rework (#34). */
+               * the confirmed-delivery rework (#34).
+               * R2-02 (#106): the commit point is ABSOLUTE - not a count vs a
+               * base the read path may have clamped. */
               if (v5_packed != record_count) {
                 SONDE_LOG("WARN: packed %u of %lu read - marking through seq %lu only\r\n",
                                   v5_packed, (unsigned long)record_count,
                                   (unsigned long)highres_seqs[v5_packed - 1]);
               }
-              g_bulk_pending_mark = (highres_seqs[v5_packed - 1] + 1U) - entry_watermark;
+              g_bulk_commit_through = highres_seqs[v5_packed - 1] + 1U;
               
               SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
@@ -1829,17 +1830,19 @@ static void OnTxData(LmHandlerTxParams_t *params)
    * confirmed uplink — never bare radio-TX completion (F-004/N-04). Records
    * without an ACK stay pending and are retransmitted later; the backend
    * deduplicates by (device, base_seq + i). */
-  if (g_bulk_pending_mark > 0) {
+  if (g_bulk_commit_through > 0) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      FlashLog_MarkRecordsTransmitted(&hflashlog, g_bulk_pending_mark);
-      SONDE_LOG("OnTxData: ACK received — committed %lu archive records\r\n",
-                        (unsigned long)g_bulk_pending_mark);
+      /* R2-02 (#106): absolute commit - cannot over-advance even if the
+       * read path clamped the watermark after this batch was read. */
+      FlashLog_CommitThrough(&hflashlog, g_bulk_commit_through);
+      SONDE_LOG("OnTxData: ACK received — archive committed through seq %lu\r\n",
+                        (unsigned long)g_bulk_commit_through);
     } else {
-      SONDE_LOG("OnTxData: no network ACK (status %d, ack %d) — %lu records stay PENDING\r\n",
+      SONDE_LOG("OnTxData: no network ACK (status %d, ack %d) — records through seq %lu stay PENDING\r\n",
                         params->Status, params->AckReceived,
-                        (unsigned long)g_bulk_pending_mark);
+                        (unsigned long)g_bulk_commit_through);
     }
-    g_bulk_pending_mark = 0;
+    g_bulk_commit_through = 0;
   }
 
   /* DDR-0011 (#34): the confirmed probe heartbeat opens the archive opportunity.

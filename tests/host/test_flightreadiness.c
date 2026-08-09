@@ -496,9 +496,10 @@ static void test_r2_02_watermark_overadvance_on_wrap(void)
     /* Long RF gap: nothing was ever transmitted. */
     CHECK_EQ_I(hlog.last_transmitted_sequence, 0);
 
-    /* Emulate the lora_app.c caller composition EXACTLY (lora_app.c:1395,
-     * :1519, :1834): pin the commit base BEFORE the read ... */
-    uint32_t entry_watermark = hlog.last_transmitted_sequence;
+    /* Emulate the lora_app.c caller composition. Post-fix (R2-02): there is
+     * NO entry-watermark pin and NO count-based mark - the read path may
+     * legitimately clamp the watermark (BUG 1.7) under any pinned base, so
+     * the caller commits ABSOLUTELY by record sequence. */
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
     CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped),
@@ -509,19 +510,21 @@ static void test_r2_02_watermark_overadvance_on_wrap(void)
     CHECK_EQ_I(got, 6);
     CHECK(hlog.last_transmitted_sequence > 0);       /* wrap clamp fired (W -> W') */
     CHECK_EQ_I(batch[0].sequence, hlog.last_transmitted_sequence);  /* oldest existing */
-    /* hlog.last_transmitted_sequence is now the clamped base — mutated UNDER us. */
+    /* The read clamped the watermark to the oldest existing record. */
 
-    /* ... then commit a count computed against the OLD base (0) onto the NEW
-     * base (8). lora_app.c: g_bulk_pending_mark = (last_seq + 1) - entry. */
-    uint32_t last_sent = batch[got - 1].sequence;             /* 13 */
-    uint32_t mark = (last_sent + 1U) - entry_watermark;   /* vs OLD base */
-    CHECK_EQ_I(FlashLog_MarkRecordsTransmitted(&hlog, mark), FLASH_LOG_OK);
+    /* Commit exactly what was sent, by absolute sequence. */
+    uint32_t last_sent = batch[got - 1].sequence;
+    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, last_sent + 1U), FLASH_LOG_OK);
 
     /* The watermark must land exactly past the last transmitted record.
      * Today it lands (clamped_base) records further on: sequences past
      * last_sent were never read, never sent,
      * never counted as skipped — silently, permanently discarded. */
     CHECK_REGRESSION(hlog.last_transmitted_sequence == last_sent + 1U, "R2-02");
+
+    /* And the absolute API must refuse to move the watermark backward. */
+    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, 1U), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.last_transmitted_sequence, last_sent + 1U);
 
     fake_w25q_free();
 }
