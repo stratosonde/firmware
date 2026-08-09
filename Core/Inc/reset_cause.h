@@ -53,8 +53,9 @@ uint8_t ResetCause_Get(void);
 /**
  * @brief Consecutive boots since the last proven work cycle (F-03/#65).
  *        Incremented in ResetCause_CaptureBoot; cleared by the first
- *        Deadman_MarkProgress() of a successful cycle. A fatal path can
- *        use this to detect and break a reset loop.
+ *        Deadman_MarkProgress() of a successful cycle. Error_Handler_Fatal()
+ *        uses it to break reset loops (FR-23/#104: boot-time fatals degrade
+ *        instead of resetting past 5 consecutive unproductive boots).
  */
 uint32_t ResetCause_GetBootAttempts(void);
 

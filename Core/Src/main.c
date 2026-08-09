@@ -894,9 +894,24 @@ void Error_Handler(void)
  * 16+ = boot-time fatal errors below. */
 void Error_Handler_Fatal(uint16_t code)
 {
-  SONDE_LOG("FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_RTCAPB_CLK_ENABLE();
+
+  /* FR-23 (#104): the F-03 boot-attempts counter finally acts. A
+   * DETERMINISTIC fatal condition (dead hardware, persistently bad config)
+   * otherwise reset-loops forever — burning power, never recovering, and the
+   * counter documented for exactly this sat inert. After 5 consecutive boots
+   * without a proven work cycle, boot-time fatals (codes >= 16) stop
+   * resetting and fall through to the caller's degraded path instead
+   * (DDR-0001: forward progress, degrade and keep flying). CPU-fault and
+   * deadman codes (<16) always reset — there is no meaningful degraded
+   * continuation from a crashed context. */
+  if (code >= 16U && ResetCause_GetBootAttempts() >= 5U) {
+    SONDE_LOG("FATAL_ERROR %u: 5+ consecutive boots - DEGRADING, no reset\r\n", code);
+    return;
+  }
+
+  SONDE_LOG("FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
   HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                       RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
   NVIC_SystemReset();
