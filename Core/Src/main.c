@@ -411,11 +411,15 @@ void SystemClock_Config(void)
 }
 
 /* F-14 (#70): LSE->LSI failover, shared by the CSS interrupt callback and the
- * SysTick-based RTC liveness check. Changing the RTC clock source resets the
- * backup domain (HAL behaviour) — backup-register state (mission state,
- * deadman, SysTime MSB) is lost, which is acceptable: the alternative is a
- * sonde with frozen time. The IWDG (LSI-clocked) and the boot-time fallback
- * are the backstops for anything this path gets wrong. */
+ * RTC liveness check. Changing the RTC clock source resets the backup domain
+ * (HAL behaviour) — this DESTROYS: DR3 (mission state), DR4 (fault
+ * breadcrumb), DR5 (deadman), DR7 (SysTime-valid marker) and DR8–DR11
+ * (last-known position, F-15/#72). Callers must be prepared for that loss;
+ * the door anchor in MissionState_Init() survives a DR3 wipe via the Tier-1
+ * bank check and is the designed blast-radius limiter. The loss is
+ * acceptable: the alternative is a sonde with frozen time. The IWDG
+ * (LSI-clocked) and the boot-time fallback are the backstops for anything
+ * this path gets wrong. */
 static void LSE_FailoverToLSI(void)
 {
   RCC_PeriphCLKInitTypeDef rtcClk = {0};
@@ -433,33 +437,45 @@ void HAL_RCCEx_LSECSS_Callback(void)
   LSE_FailoverToLSI();
 }
 
-/* F-14 (#70): second layer — verify the RTC actually advances against the
- * MSI-clocked SysTick. Covers failure modes the CSS misses (RTC path broken
- * with LSE still oscillating). Call from the main loop. NOTE: SysTick stops
- * in STOP2, so after a sleep the RTC appears to run FAST, never slow — this
- * can only under-trigger, never false-fire. */
+/* F-14 (#70) / FR-02 (#86): second layer — verify the RTC actually advances
+ * against a clock-independent reference. Covers failure modes the CSS misses
+ * (RTC path broken with LSE still oscillating). Call from the main loop.
+ *
+ * FR-02 rebuild: the previous version read HAL_RTC_GetTime() into an
+ * uninitialized RTC_TimeTypeDef — but with BinMode = RTC_BINARY_ONLY the HAL
+ * writes only SubSeconds, so Hours/Minutes/Seconds were never written. The
+ * constant stack garbage looked like a frozen RTC, stall_count hit 5, and
+ * LSE_FailoverToLSI() wiped the backup domain ~5 s into every boot. Its rate
+ * limiter was also self-referential (HAL_GetTick() is RTC-derived — a frozen
+ * RTC would freeze the reference too).
+ *
+ * Now: read RTC->SSR directly (the actual timebase in binary-only mode — a
+ * down-counter at RTCCLK/(PREDIV_A+1) = 1024 Hz) and rate-limit on uwTick,
+ * the MSI-clocked HAL tick counter. HAL_GetTick() cannot be used (RTC-derived);
+ * uwTick is genuinely independent in run mode and stops in STOP2, so after a
+ * sleep the RTC appears to run FAST, never slow — this can only under-trigger,
+ * never false-fire. A healthy SSR changes within ~1 ms; an identical value
+ * across 3 full seconds of MSI time is a genuine stall. */
 static void RTC_LivenessCheck(void)
 {
-  static uint32_t last_check_tick = 0;
-  static uint32_t last_rtc_seconds = 0;
+  static uint32_t last_check_ms = 0;
+  static uint32_t last_ssr = 0;
   static uint8_t  stall_count = 0;
-  uint32_t now_tick = HAL_GetTick();
 
   if (g_rtc_clock_source != RCC_RTCCLKSOURCE_LSE) return;  /* already on LSI */
-  if ((now_tick - last_check_tick) < 1000U) return;        /* check ~1/s */
-  last_check_tick = now_tick;
 
-  RTC_TimeTypeDef t; RTC_DateTypeDef d;
-  HAL_RTC_GetTime(&hrtc, &t, RTC_FORMAT_BIN);
-  HAL_RTC_GetDate(&hrtc, &d, RTC_FORMAT_BIN);  /* date read unlocks shadows */
-  uint32_t rtc_seconds = (uint32_t)t.Hours * 3600U + (uint32_t)t.Minutes * 60U + (uint32_t)t.Seconds;
+  uint32_t now_ms = uwTick;                    /* MSI-clocked, RTC-independent */
+  if ((now_ms - last_check_ms) < 1000U) return;  /* check ~1/s */
+  last_check_ms = now_ms;
 
-  if (rtc_seconds != last_rtc_seconds)
+  uint32_t ssr = READ_REG(RTC->SSR);           /* binary-mode down-counter */
+
+  if (ssr != last_ssr)
   {
-    last_rtc_seconds = rtc_seconds;
+    last_ssr = ssr;
     stall_count = 0;
   }
-  else if (++stall_count >= 5U)  /* no RTC advance across ~5 s of SysTick */
+  else if (++stall_count >= 3U)  /* no RTC advance across ~3 s of MSI time */
   {
     SONDE_LOG_STR("ERROR: RTC stalled with LSE selected - forcing LSI failover\r\n");
     LSE_FailoverToLSI();
