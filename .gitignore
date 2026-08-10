@@ -48,3 +48,6 @@ LoRaWAN/App/se-identity.h
 
 # Error-log scratch files
 *_err.txt
+
+# Local-only LLM workflow notes (never commit, per file header)
+docs/temp/
