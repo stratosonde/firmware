@@ -10,6 +10,8 @@ void     fake_w25q_init(void);
 void     fake_w25q_free(void);
 void     fake_w25q_corrupt(uint32_t addr, uint32_t len);
 void     fake_w25q_fail_next_reads(int n);
+void     fake_w25q_fail_next_writes(int n);   /* 2026-08-10 review finding #4 */
+void     fake_w25q_fail_next_erases(int n);   /* 2026-08-10 review finding #4 */
 uint8_t  fake_w25q_peek(uint32_t addr);
 void     fake_w25q_poke(uint32_t addr, const void *data, uint32_t len);  /* raw placement write (fault injection) */
 bool     fake_w25q_is_erased(uint32_t addr, uint32_t len);

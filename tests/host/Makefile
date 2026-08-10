@@ -17,6 +17,10 @@ SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
 FLIGHT_SRCS := test_flightreadiness.c fake_w25q.c
 FLIGHT_INCLUDES := $(INCLUDES) -I.
 
+# 2026-08-10 review findings: source-scan regressions for the HAL-bound
+# findings (#1/#2/#3/#5, gate half of #6). Self-contained, no firmware objects.
+FINDINGS_SRCS := test_review_findings.c
+
 # Sources #included by the test TUs (not linked separately) must still be
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
@@ -27,7 +31,10 @@ test_runner$(EXE): $(SRCS) $(INCLUDED_SRCS)
 test_flight$(EXE): $(FLIGHT_SRCS) $(INCLUDED_SRCS)
 	$(CC) $(CFLAGS) $(FLIGHT_INCLUDES) -o $@ $(FLIGHT_SRCS) -lm
 
-.PHONY: test flight baseline all clean
+test_findings$(EXE): $(FINDINGS_SRCS)
+	$(CC) $(CFLAGS) -o $@ $(FINDINGS_SRCS)
+
+.PHONY: test flight findings baseline all clean
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -36,14 +43,18 @@ test: test_runner$(EXE)
 flight: test_flight$(EXE)
 	./test_flight$(EXE)
 
+findings: test_findings$(EXE)
+	./test_findings$(EXE)
+
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
+	EXPECT_UNFIXED=1 ./test_findings$(EXE)
 
-all: test flight
+all: test flight findings
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE)

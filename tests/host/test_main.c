@@ -460,6 +460,22 @@ static void test_power_model(void)
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 5020, 1500), 36);  /* dt<600: repeat last */
     CHECK_EQ_I(CalculateVoltageSlope(&vs, 4900, 4600), -100); /* F-01 (#62): discharging must be negative (-100mV over 3600s from baseline 5000@1000) */
 
+    /* Finding #6 (2026-08-10 review): the battery ADC has no plausibility
+     * gate, so one failed conversion (returns 0 mV) can poison the slope
+     * baseline. On recovery the true delta exceeds 5462 mV and the int16_t
+     * cast wraps: +6400 mV over 600 s = +38400 mV/h comes back as -27136 —
+     * a RECOVERING battery reads as catastrophic discharge. The slope must
+     * saturate, never wrap. EXPECTED-FAIL-BEFORE-FIX. */
+    {
+        VoltageSlope_t vs3;
+        memset(&vs3, 0, sizeof(vs3));
+        CHECK_EQ_I(CalculateVoltageSlope(&vs3, 0, 1000), 0);   /* poisoned baseline latches */
+        int16_t wrapped = CalculateVoltageSlope(&vs3, 6400, 1600);  /* dt=600s */
+        CHECK_REGRESSION(wrapped >= 0, "FINDING-6");
+        printf("   finding #6: slope after 0->6400mV over 600s = %d mV/h (want >= 0)\n",
+               (int)wrapped);
+    }
+
     /* PredictTimeToVoltage */
     CHECK_EQ_I(PredictTimeToVoltage(5000, -100, 4500), 5);
     CHECK_EQ_I(PredictTimeToVoltage(5000, 0, 4500), 0xFFFF);

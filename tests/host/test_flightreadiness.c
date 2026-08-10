@@ -434,6 +434,70 @@ static void test_header_pingpong_survives_rewrites(void)
 }
 
 /* ========================================================================== */
+/* T-7c — 2026-08-10 review finding #4: ping-pong toggles before write succeeds*/
+/* ========================================================================== */
+/* FlashLog_SyncHeader() flips hlog->active_header BEFORE the erase+program of
+ * the other slot, and both error paths return with the toggle standing. The
+ * next call therefore flips back and erases the slot that still held the GOOD
+ * header. Two consecutive failed header writes (erase OK, program fails — an
+ * intermittent SPI/CS fault or a brownout that outlives the erase) destroy
+ * BOTH header copies: record_count resets to 0, the backlog is orphaned
+ * (HasUnsentData() == false) and the ring overwrites it.
+ *
+ * T-7b above never exercises this: it corrupts a header only AFTER successful
+ * writes. EXPECTED-FAIL-BEFORE-FIX: passes once active_header is committed
+ * only after a successful program (fix verified by the reviewer on a scratch
+ * copy: two failed writes then survive). */
+static void test_header_pingpong_survives_failed_writes(void)
+{
+    printf("-- T-7c / finding #4: header ping-pong commit-after-success\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    for (uint32_t i = 0; i < 40; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_SyncHeader(&hlog), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.record_count, 40);
+
+    /* Advance the transmission watermark so the header-loss check below is
+     * load-bearing (an untouched watermark is 0 on both sides of the bug). */
+    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, 10U), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.last_transmitted_sequence, 10);
+
+    /* Control: ONE failed write must survive even on the unfixed tree (the
+     * second header copy carries the unit). Guards the test itself. */
+    fake_w25q_fail_next_writes(1);
+    CHECK(FlashLog_SyncHeader(&hlog) != FLASH_LOG_OK);
+    {
+        FlashLog_HandleTypeDef reload1;
+        CHECK_EQ_I(FlashLog_Init(&reload1, &hw), FLASH_LOG_OK);
+        CHECK_EQ_I(reload1.record_count, 40);
+        CHECK_EQ_I(reload1.last_transmitted_sequence, 10);
+    }
+
+    /* The bug: a SECOND consecutive failed write. On the unfixed tree the
+     * in-RAM toggle from the first failure targets the surviving good slot,
+     * erases it, and fails the program — both headers are now destroyed. */
+    fake_w25q_fail_next_writes(1);
+    CHECK(FlashLog_SyncHeader(&hlog) != FLASH_LOG_OK);
+    {
+        FlashLog_HandleTypeDef reload2;
+        CHECK_EQ_I(FlashLog_Init(&reload2, &hw), FLASH_LOG_OK);
+        CHECK_REGRESSION(reload2.record_count == 40, "FINDING-4");
+        CHECK_REGRESSION(reload2.last_transmitted_sequence == 10, "FINDING-4");
+        printf("   after 2 failed writes: record_count=%lu (want 40)\n",
+               (unsigned long)reload2.record_count);
+    }
+
+    fake_w25q_free();
+}
+
+/* ========================================================================== */
 /* T-1 / T-3 / T-8 — require production-side extraction, see notes            */
 /* ========================================================================== */
 /* T-1 (FR-03 NVM slot length round-trip) and T-3 (FR-05 context CRC restamp)
@@ -625,6 +689,7 @@ int main(void)
     test_fifo_skip_contract();
     test_all_corrupt_does_not_wedge();
     test_header_pingpong_survives_rewrites();
+    test_header_pingpong_survives_failed_writes();
     test_erase_ahead_slack();
     test_r2_02_watermark_overadvance_on_wrap();
     test_r2_03_sequence_identity_crosscheck();

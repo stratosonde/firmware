@@ -24,7 +24,9 @@
 #include <assert.h>
 
 static uint8_t *g_mem = NULL;
-static int      g_fail_reads = 0;
+static int      g_fail_reads  = 0;
+static int      g_fail_writes = 0;   /* finding #4: intermittent program faults */
+static int      g_fail_erases = 0;   /* finding #4: intermittent erase faults */
 
 /* Statistics — used to assert that the code under test does not, e.g.,
  * erase a sector it is about to read from. */
@@ -39,7 +41,9 @@ void fake_w25q_init(void)
         assert(g_mem != NULL);
     }
     memset(g_mem, 0xFF, W25Q_FLASH_SIZE);   /* virgin chip */
-    g_fail_reads = 0;
+    g_fail_reads  = 0;
+    g_fail_writes = 0;
+    g_fail_erases = 0;
     fake_w25q_erase_count = 0;
     fake_w25q_write_count = 0;
     fake_w25q_read_count  = 0;
@@ -62,6 +66,13 @@ void fake_w25q_corrupt(uint32_t addr, uint32_t len)
 }
 
 void fake_w25q_fail_next_reads(int n) { g_fail_reads = n; }
+
+/* Finding #4 (2026-08-10 review): the upstream fake could only fail READS,
+ * which is why T-7b never exercised a failing header write. These model an
+ * intermittent SPI/CS fault or a brownout that survives the erase but kills
+ * the program step — the destructive case the finding reproduces. */
+void fake_w25q_fail_next_writes(int n) { g_fail_writes = n; }
+void fake_w25q_fail_next_erases(int n) { g_fail_erases = n; }
 
 uint8_t fake_w25q_peek(uint32_t addr) { return g_mem[addr]; }
 
@@ -102,6 +113,7 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     (void)hw25q;
     if (g_mem == NULL || data == NULL || len == 0) { return W25Q_ERROR; }
     if ((uint64_t)addr + len > W25Q_FLASH_SIZE)    { return W25Q_ERROR; }
+    if (g_fail_writes > 0) { g_fail_writes--; return W25Q_ERROR; }
     fake_w25q_write_count++;
     /* NOR semantics: program can only clear bits. */
     for (uint32_t i = 0; i < len; i++) {
@@ -115,6 +127,7 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hw25q, uint32_t addr)
     (void)hw25q;
     if (g_mem == NULL)                     { return W25Q_ERROR; }
     if (addr >= W25Q_FLASH_SIZE)           { return W25Q_ERROR; }
+    if (g_fail_erases > 0) { g_fail_erases--; return W25Q_ERROR; }
     fake_w25q_erase_count++;
     uint32_t base = (addr / W25Q_SECTOR_SIZE) * W25Q_SECTOR_SIZE;
     memset(&g_mem[base], 0xFF, W25Q_SECTOR_SIZE);
