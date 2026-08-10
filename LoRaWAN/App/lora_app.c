@@ -899,7 +899,10 @@ static void SysTimeSyncFromGnss(void)
 {
   uint32_t d = hgnss.data.date;       /* DDMMYY */
   uint32_t t = hgnss.data.timestamp;  /* HHMMSS */
-  if (d == 0 || t == 0) return;
+  /* #132: t==0 is a VALID time (00:00:00 UTC), not "no time".
+   * Zero-as-sentinel skipped the sync once per 86400 fixes. Date validity is
+   * fully covered by the range check below (d==0 -> day==0 -> rejected). */
+  if (d == 0) return;
 
   int day = (int)(d / 10000U);
   int mon = (int)((d / 100U) % 100U);

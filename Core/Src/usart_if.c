@@ -134,7 +134,10 @@ UTIL_ADV_TRACE_Status_t vcom_DeInit(void)
 
   /* ##-3- Disable the NVIC for DMA ########################################### */
   /* USER CODE BEGIN 1 */
-  HAL_NVIC_DisableIRQ(DMA1_Channel5_IRQn);
+  /* R2-18 (#122): ST template residue disabled DMA1_Channel5 here, which this
+   * project does not use (USART1_RX = DMA1_Channel1, USART1_TX = DMA1_Channel2).
+   * The USART1 DMA channels are de-initialized via HAL_UART_MspDeInit above;
+   * no NVIC line belongs here. */
   /* USER CODE END 1 */
   /* USER CODE BEGIN vcom_DeInit_2 */
 

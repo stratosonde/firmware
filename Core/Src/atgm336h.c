@@ -425,10 +425,11 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
     return GNSS_ERROR;
   }
 
+#ifndef SONDE_FLIGHT_BUILD
   /* DEBUG: Log command string */
   SONDE_LOG_STR("[GPS CMD] Sending: ");
   SONDE_LOG_STR(cmd);
-  
+
   /* DEBUG: Log hex bytes */
   SONDE_LOG_STR("[GPS CMD] Hex: ");
   for(size_t i = 0; i < strlen(cmd); i++)
@@ -438,6 +439,7 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
     SONDE_LOG_STR(hex_buf);
   }
   SONDE_LOG_STR("\r\n");
+#endif /* SONDE_FLIGHT_BUILD */
 
   HAL_StatusTypeDef status;
   status = HAL_UART_Transmit(hgnss->huart, (uint8_t *)cmd, strlen(cmd), GNSS_UART_TIMEOUT);
@@ -494,15 +496,19 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   uint16_t dma_remaining = __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx);
   hgnss->dma_head = (uint16_t)((GNSS_DMA_BUFFER_SIZE - dma_remaining) % GNSS_DMA_BUFFER_SIZE);
 
+#ifndef SONDE_FLIGHT_BUILD
+  /* R2-15 (#119) sweep: the 10-second GPS summary is a 200-byte stack buffer +
+   * two snprintf paths that execute in flight builds for output compiled away.
+   * Gate the whole block. */
   /* GPS status monitoring - print summary every 10 seconds */
   static uint32_t last_debug_time = 0;
   uint32_t now = HAL_GetTick();
-  
+
   /* Print GPS summary every 10 seconds */
   if ((now - last_debug_time > 10000))
   {
     char summary[200];
-    
+
     if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID)
     {
       /* Valid fix - show full details */
@@ -532,10 +538,11 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
                (int)(hdop_d2 / 10), (int)((hdop_d2 < 0 ? -hdop_d2 : hdop_d2) % 10),
                (hgnss->data.fix_quality == GNSS_FIX_INVALID) ? "No Fix" : "Acquiring");
     }
-    
+
     SONDE_LOG_STR(summary);
     last_debug_time = now;
   }
+#endif /* SONDE_FLIGHT_BUILD */
 
   /* F-011 (#25): overrun detection on the absolute counters. If the DMA
    * producer (half/full callbacks, 256-granular) has lapped the consumer,
@@ -1284,24 +1291,30 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
   SONDE_LOG_STR("[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
   
+#ifndef SONDE_FLIGHT_BUILD
+  /* R2-15 (#119): this debug block must not exist in flight builds — the
+   * buffers, snprintf calls, and float/int conversions execute even though
+   * SONDE_LOG_STR compiles the output away. Gate the whole thing, not just
+   * the log macro (same pattern as FR-16/#97). */
   /* DEBUG: Read back GPIO states to verify pins are actually set */
   GPIO_PinState pb10_state = HAL_GPIO_ReadPin(hgnss->pwr_port, hgnss->pwr_pin);
   GPIO_PinState pb5_state = HAL_GPIO_ReadPin(hgnss->en_port, hgnss->en_pin);
   char pin_buf[80];
-  snprintf(pin_buf, sizeof(pin_buf), "[GPS WAKE DEBUG] Pin readback: PB10=%d PB5=%d (expect 1,1)\r\n", 
+  snprintf(pin_buf, sizeof(pin_buf), "[GPS WAKE DEBUG] Pin readback: PB10=%d PB5=%d (expect 1,1)\r\n",
            pb10_state, pb5_state);
   SONDE_LOG_STR(pin_buf);
-  
+
   /* DEBUG: Check UART error flags */
   uint32_t uart_errors = hgnss->huart->ErrorCode;
   if (uart_errors != HAL_UART_ERROR_NONE) {
     char err_buf[80];
-    snprintf(err_buf, sizeof(err_buf), "[GPS WAKE DEBUG] UART errors: 0x%08lX\r\n", 
+    snprintf(err_buf, sizeof(err_buf), "[GPS WAKE DEBUG] UART errors: 0x%08lX\r\n",
              (unsigned long)uart_errors);
     SONDE_LOG_STR(err_buf);
   } else {
     SONDE_LOG_STR("[GPS WAKE DEBUG] UART no errors\r\n");
   }
+#endif /* SONDE_FLIGHT_BUILD */
   
   /* No delay needed - 40 second polling loop will wait for GPS boot and satellite acquisition */
   hgnss->is_powered = true;

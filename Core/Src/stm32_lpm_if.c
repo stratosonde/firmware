@@ -75,9 +75,14 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 /* IWDG Chunked Sleep Configuration (DDR-0020: Watchdog and Progress Supervision)
  * IWDG timeout = (4095 × 256) / 32000 ≈ 32.76 seconds
  * Wake interval must be safely below this to refresh the watchdog.
- * RTC Wakeup Timer: RTCCLK/16 = 32768/16 = 2048 Hz */
-#define IWDG_SAFE_SLEEP_SECONDS   25     /* Must be < 32.76s IWDG timeout */
-#define IWDG_WAKEUP_COUNTS        (IWDG_SAFE_SLEEP_SECONDS * 2048)  /* 51200 */
+ * RTC Wakeup Timer: RTCCLK/16 = 32768/16 = 2048 Hz
+ * R2-09 (#113): 25 s only LOOKS like 24% headroom — chunk clock is LSE (RTC),
+ * watchdog clock is LSI, and at LSI's fast tolerance the real timeout is ~31 s;
+ * LSE→LSI failover stretches the chunk further, and post-wake work
+ * (Deadman_Check, wakeup-timer re-arm, register-sync waits) eats more.
+ * True margin at 25 s was ~4–5 s. 20 s restores real margin for free. */
+#define IWDG_SAFE_SLEEP_SECONDS   20     /* Must be < ~31 s worst-case IWDG timeout */
+#define IWDG_WAKEUP_COUNTS        (IWDG_SAFE_SLEEP_SECONDS * 2048)  /* 40960 */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
