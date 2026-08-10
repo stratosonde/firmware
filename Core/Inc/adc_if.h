@@ -104,6 +104,13 @@ uint16_t SYS_GetBatteryVoltage(void);
   * @return value solar panel voltage in mV
   */
 uint16_t SYS_GetSolarVoltage(void);
+
+/**
+  * @brief  Battery reading freshness (#136): 1 = last sample rejected/failed
+  *         and the value being served is last-known-good (or 0 pre-history)
+  * @return 1 stale, 0 fresh plausible read
+  */
+uint8_t SYS_BatteryIsStale(void);
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

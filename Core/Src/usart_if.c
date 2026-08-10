@@ -229,17 +229,15 @@ void vcom_Resume(void)
   /* USER CODE BEGIN vcom_Resume_1 */
 
   /* USER CODE END vcom_Resume_1 */
-  /*to re-enable lost UART settings*/
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /*to re-enable lost DMA settings*/
-  if (HAL_DMA_Init(&hdma_usart1_tx) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  /* R2-12 (#116) / 2026-08-10 finding #5: no-op, like vcom_Trace and
+   * vcom_Trace_DMA (FW-13: UART1 is the GPS UART; all logging is SEGGER RTT).
+   * The old unconditional HAL_UART_Init(&huart1) ran on EVERY STOP2 exit and
+   * restored PB6 to AF push-pull idle-HIGH — back-feeding the unpowered GNSS
+   * module's RX pin during every awake window in REDUCED/RECOVERY/SURVIVAL,
+   * and making the hgnss.is_powered guard in PWR_ExitStopMode() dead code.
+   * The path it restored is unused: vcom_ReceiveInit() never runs
+   * (UTIL_ADV_TRACE_StartRxProcess has no callers), and the GPS wake path
+   * re-inits UART1 itself. */
   /* USER CODE BEGIN vcom_Resume_2 */
 
   /* USER CODE END vcom_Resume_2 */

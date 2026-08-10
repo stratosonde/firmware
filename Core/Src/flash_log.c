@@ -345,9 +345,14 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     header.crc32 = FlashLog_CRC32((const uint8_t *)&header, 
                                   sizeof(FlashLog_Header_t) - sizeof(uint32_t));
     
-    /* Toggle between header A and B for wear leveling */
-    hlog->active_header = (hlog->active_header == 0) ? 1 : 0;
-    write_addr = (hlog->active_header == 0) ? HEADER_A_ADDR : HEADER_B_ADDR;
+    /* Ping-pong between header A and B for wear leveling.
+     * #135 (2026-08-10 finding #4): target the INACTIVE slot but commit
+     * active_header ONLY after a successful program. Toggling first meant two
+     * consecutive failed writes (erase OK, program fails) erased BOTH slots —
+     * the second call flipped back and destroyed the surviving good header,
+     * orphaning the whole archive (record_count/watermark reset to 0). */
+    uint8_t target = (hlog->active_header == 0) ? 1U : 0U;
+    write_addr = (target == 0) ? HEADER_A_ADDR : HEADER_B_ADDR;
 
     /* T4 FIX (FlashStorageNotes.md): erase-before-write invariant. Each header lives in its
      * own sector, so erasing it can only destroy the STALE copy — the other
@@ -363,6 +368,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
         return FLASH_LOG_ERROR_FLASH;
     }
 
+    hlog->active_header = target;   /* #135: commit ONLY after a successful program */
     hlog->header_generation++;  /* F-007/R12 (#50): monotonic per successful write */
 
     return FLASH_LOG_OK;
@@ -634,7 +640,8 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     record.flags = (sensor_data->press_stale ? 0x01 : 0)
                  | (sensor_data->temp_stale  ? 0x02 : 0)
                  | (sensor_data->hum_stale   ? 0x04 : 0)
-                 | (sensor_data->gnss_stale  ? 0x08 : 0);
+                 | (sensor_data->gnss_stale  ? 0x08 : 0)
+                 | (sensor_data->batt_stale  ? 0x10 : 0);  /* #136 */
     
     /* Calculate CRC32 (all fields except crc32) */
     record.crc32 = FlashLog_CRC32((const uint8_t *)&record, 

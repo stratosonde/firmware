@@ -269,8 +269,12 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   sensor_data->press_stale = press_stale ? 1 : 0;
   sensor_data->gnss_stale  = 1;  /* Default stale; cleared below only if GNSS data flows */
   
-  /* Read battery voltage from ADC (PB4 with voltage divider) */
+  /* Read battery voltage from ADC (PB4 with voltage divider).
+   * #136: the read is plausibility-gated in adc_if.c; carry its staleness so
+   * telemetry marks a last-known-good (or rejected) sample as untrustworthy,
+   * matching the R28 treatment of every other sensor. */
   sensor_data->battery_voltage = SYS_GetBatteryVoltage() / 1000.0f;  /* Convert mV to V */
+  sensor_data->batt_stale = SYS_BatteryIsStale();
   
   /* Read regulator voltage (VDDA/3.3V rail) from internal reference */
   sensor_data->regulator_voltage = SYS_GetBatteryLevel() / 1000.0f;  /* Convert mV to V */
@@ -302,6 +306,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   if (!sensor_data->hum_stale)   status |= ENV_SENSORS_FRESH_HUMIDITY;
   if (!sensor_data->press_stale) status |= ENV_SENSORS_FRESH_PRESSURE;
   if (!sensor_data->gnss_stale && sensor_data->gnss_valid) status |= ENV_SENSORS_FRESH_GNSS;
+  if (!sensor_data->batt_stale)  status |= ENV_SENSORS_FRESH_BATT;
   return status;
   /* USER CODE END EnvSensors_Read */
 }

@@ -207,6 +207,24 @@ uint16_t SYS_GetBatteryLevel(void)
   * @note  PB4 has a 0.5 voltage divider, function applies 2x scaling
   * @return value battery voltage in mV
   */
+/* #136 (2026-08-10 finding #6): R28-style plausibility gate + last-known-good
+ * cache + stale flag for the battery path — the one sensor that feeds the
+ * power state machine had none of it. A single failed conversion (returns 0)
+ * could latch SURVIVAL via the raw < 4300 mV floor and poison the voltage-
+ * slope baseline for up to 2 h. Window covers the divider ceiling (~6600 mV)
+ * and the LTO floor. batt_stale rides into telemetry via sensor_t.batt_stale
+ * and flash record flag b4. */
+#define BATT_PLAUSIBLE_MIN_MV   2500U
+#define BATT_PLAUSIBLE_MAX_MV   7000U
+static uint16_t s_batt_last_good_mv = 0;
+static uint8_t  s_batt_have_good = 0;
+static uint8_t  s_batt_stale = 1;   /* stale until the first plausible read */
+
+uint8_t SYS_BatteryIsStale(void)
+{
+  return s_batt_stale;
+}
+
 uint16_t SYS_GetBatteryVoltage(void)
 {
   uint16_t batteryVoltagemV = 0;
@@ -231,6 +249,25 @@ uint16_t SYS_GetBatteryVoltage(void)
     }
     /* ADC is 12-bit (0-4095); apply 2x scaling for 0.5 voltage divider */
     batteryVoltagemV = (uint16_t)(((uint32_t)measuredLevel * vdda_mv / 4096) * 2);
+  }
+
+  /* #136: plausibility gate BEFORE the last-known-good cache accepts a value
+   * (mirrors the R28 SHT31/MS5607 pattern). A rejected read serves the cache;
+   * with no history it returns 0 — the conservative direction (the 4300 mV
+   * floor picks SURVIVAL; never a fantasy full battery). */
+  if (batteryVoltagemV >= BATT_PLAUSIBLE_MIN_MV && batteryVoltagemV <= BATT_PLAUSIBLE_MAX_MV)
+  {
+    s_batt_last_good_mv = batteryVoltagemV;
+    s_batt_have_good = 1;
+    s_batt_stale = 0;
+  }
+  else
+  {
+    s_batt_stale = 1;
+    if (s_batt_have_good)
+    {
+      batteryVoltagemV = s_batt_last_good_mv;
+    }
   }
 
   return batteryVoltagemV;
@@ -286,8 +323,14 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
     if (HAL_ADCEx_Calibration_Start(&hadc) != HAL_OK)
     {
       Error_Handler();
+      /* #136: do NOT mark the ADC ready after a failed calibration — the old
+       * code set s_adc_ready anyway and used an uncalibrated ADC silently for
+       * the rest of the wake cycle. Retry init+calibrate on the next read. */
     }
-    s_adc_ready = true;
+    else
+    {
+      s_adc_ready = true;
+    }
   }
 
   /* Configure Regular Channel */

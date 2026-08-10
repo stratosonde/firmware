@@ -61,6 +61,7 @@ typedef struct
    uint8_t hum_stale;      /*!< humidity is stale (SHT31 read failed) */
    uint8_t press_stale;    /*!< FW-7: pressure is stale (MS5607 read failed) */
    uint8_t gnss_stale;     /*!< position is last-known-good, not a fresh fix */
+   uint8_t batt_stale;     /*!< #136: battery voltage is last-known-good (ADC read rejected) */
    /* USER CODE END sensor_t */
  } sensor_t;
 
@@ -108,6 +109,7 @@ void EnvSensors_MergeGnss(sensor_t *sensor_data);
 #define ENV_SENSORS_FRESH_HUMIDITY   0x02
 #define ENV_SENSORS_FRESH_PRESSURE   0x04
 #define ENV_SENSORS_FRESH_GNSS       0x08
+#define ENV_SENSORS_FRESH_BATT       0x10  /* #136 */
 
 /**
   * @brief  Mark GNSS position data as stale/fresh (T2 / DDR-0003).

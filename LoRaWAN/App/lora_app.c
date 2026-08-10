@@ -739,6 +739,14 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   bool linkcheck_received = params->LinkCheck;
   uint8_t margin = params->DemodMargin;
   uint8_t gw_count = params->NbGateways;
+
+  /* R2-06 (#110) / 2026-08-10 finding #2: the middleware LATCHES
+   * RxParams.LinkCheck on the first MLME_LINK_CHECK and never clears it, so
+   * without this consume-on-read every later burst would gate on a STALE
+   * margin/gateway count (one good LinkCheckAns near launch would permanently
+   * unlock SF7 bursts over a mid-ocean single-gateway link). Clear it here:
+   * each burst decision now provably requires a FRESH LinkCheckAns. */
+  params->LinkCheck = false;
   
   // FW-17: only log margin/gateway count when a LinkCheckAns was actually
   // received — otherwise these fields are garbage
@@ -1827,6 +1835,21 @@ static void OnTxData(LmHandlerTxParams_t *params)
   /* This ensures correct DevAddr, FCnt, and session state are saved */
   if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
     MultiRegion_SaveCurrentContext();
+
+    /* R2-05 (#109) / 2026-08-10 finding #1: the MAC NVM store task was
+     * registered but NEVER set — OnStoreContextRequest was unreachable dead
+     * code and in-flight MAC state (channel-mask edits, RX1 offset/RX2 DR,
+     * ADR-adjusted DR/TxPower) died on every reset. Trigger on a save
+     * interval: every 10th successful TX is often enough for MAC state to
+     * survive a reset, rare enough that the internal-flash page erase per
+     * store stays negligible against the 10k-cycle endurance. */
+    {
+      static uint8_t s_tx_since_nvm_store = 0;
+      if (++s_tx_since_nvm_store >= 10U) {
+        s_tx_since_nvm_store = 0;
+        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaStoreContextEvent), CFG_SEQ_Prio_0);
+      }
+    }
   }
 
   /* DDR-0005 (#34): delivery commit requires the NETWORK acknowledgement of a

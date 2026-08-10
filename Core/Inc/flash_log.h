@@ -120,7 +120,7 @@ typedef struct __attribute__((packed)) {
     uint16_t solar_mv;          /**< Solar panel voltage in millivolts (D5/F-025: was never archived) */
     int16_t voltage_slope;      /**< Battery slope mV/hour at write time (D5: honest history) */
     uint8_t power_mode;         /**< Operating mode enum at write time (D5) */
-    uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale */
+    uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale, b4 batt_stale (#136) */
 
     /* Reserved for expansion (12 bytes) */
     uint8_t reserved[12];       /**< Future expansion space */

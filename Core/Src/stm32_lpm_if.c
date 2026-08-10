@@ -248,10 +248,13 @@ void PWR_EnterStopMode(void)
   HAL_NVIC_EnableIRQ(RTC_WKUP_IRQn);
 
   /* FW-4: if the TxTimer/Alarm-A chain dies while the RTC wakeup timer keeps
-   * ticking, this loop would sleep in 25s chunks forever with a satisfied
+   * ticking, this loop would sleep in 20s chunks forever with a satisfied
    * IWDG. Two guards: (1) run the progress deadman here — it reads RTC time
    * and self-resets; (2) bound the chunk count past the worst-case cycle
-   * (SURVIVAL = 1h -> 150 chunks of 25s ~ 62.5 min). */
+   * (SURVIVAL = 1h -> 180 chunks of 20s = 60 min).
+   * #134: the bound tracks IWDG_SAFE_SLEEP_SECONDS — 150 chunks x 20s = 50 min
+   * aborted every SURVIVAL sleep ~10 min early (R2-09 shrank the chunk, not
+   * the count), paying a full PWR_ExitStopMode()/re-enter cycle per hour. */
   extern void Deadman_Check(void);  /* defined in lora_app.c */
   uint32_t chunks = 0;
 
@@ -306,7 +309,7 @@ void PWR_EnterStopMode(void)
      * chunk-overflow break used to skip this, leaving the WUT armed. */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 
-    if (++chunks > 150) break;  /* FW-4: never sleep forever (belt and braces) */
+    if (++chunks > 180) break;  /* FW-4: never sleep forever; #134: 180 x 20s = 60min covers SURVIVAL */
 
     /* Alarm A (LoRaWAN timer event) wins over the IWDG chunk timer. */
     if (is_alarm_a)

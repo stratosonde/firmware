@@ -103,7 +103,14 @@ int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32
      * time_change_sec promotes the WHOLE division to unsigned, wrapping a
      * negative numerator to a huge positive (a discharging battery read as
      * charging: -100 mV/h came back as +13298 mV/h). Safe: dt >= 600 above. */
-    int16_t slope_mv_per_hour = (int16_t)((voltage_change * 3600) / (int32_t)time_change_sec);
+    int32_t slope32 = (voltage_change * 3600) / (int32_t)time_change_sec;
+    /* #136 (2026-08-10 finding #6): saturate, never wrap. A large legitimate
+     * swing (e.g. recovery after a rejected/poisoned baseline) overflows the
+     * int16_t cast and flips sign — a RECOVERING battery read as catastrophic
+     * discharge (+38400 mV/h came back as -27136 mV/h). */
+    if (slope32 > INT16_MAX) slope32 = INT16_MAX;
+    if (slope32 < INT16_MIN) slope32 = INT16_MIN;
+    int16_t slope_mv_per_hour = (int16_t)slope32;
 
     // Every 2 hours (7200 seconds), shift baseline forward
     if (time_change_sec >= 7200) {
