@@ -45,4 +45,6 @@ Thumbs.db
 # F6: real LoRaWAN keys - never commit (DDR-0006)
 LoRaWAN/App/se-identity.h
 .aider*
-`n# Error-log scratch files`n*_err.txt
+
+# Error-log scratch files
+*_err.txt
