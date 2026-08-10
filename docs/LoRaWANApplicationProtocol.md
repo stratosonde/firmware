@@ -2,7 +2,7 @@
 
 **Status:** Draft v0.1  
 **Date:** 2026-08-03  
-**Related decisions:** DDR-0005, DDR-0007, DDR-0011, DDR-0012  
+**Related decisions:** DDR-0019, DDR-0003, DDR-0005, DDR-0017  
 **Audience:** Firmware, network-server integration, backend decoder, and data-pipeline developers
 
 ## 1. Purpose
@@ -163,7 +163,7 @@ In US915/AU915 the heartbeat is sent at SF9 (DR1): the SF10/DR0 11-byte budget i
 
 The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = current variable-length with base sequence.
 
-### 7.1 Archive v4 (current firmware, D3 + DDR-0011, issues #33/#34)
+### 7.1 Archive v4 (current firmware, D3 + DDR-0005, issues #33/#34)
 
 Variable length: `6 + 32n + 4` bytes. Header:
 
@@ -173,7 +173,7 @@ Variable length: `6 + 32n + 4` bytes. Header:
 | 1 | 1 | Record count n, 1-6 |
 | 2 | 4 | Base sequence, `uint32_t` LE — flash sequence of the first record |
 
-Records are contiguous FIFO, so record i carries archive identity `base_seq + i` — the stable 32-bit archive record ID required by §7.3 and DDR-0011. The backend deduplicates on (device, sequence).
+Records are contiguous FIFO, so record i carries archive identity `base_seq + i` — the stable 32-bit archive record ID required by §7.3 and DDR-0005. The backend deduplicates on (device, sequence).
 
 n complete 32-byte records follow (layout in §7.2), explicitly little-endian serialized (§3's explicit-serialization requirement landed with the variable-length version). The packet ends with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
 

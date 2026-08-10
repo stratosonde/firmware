@@ -14,7 +14,7 @@ This package introduces a bounded Qwiic application architecture while preservin
 
 ## Protocol specifications
 
-- `QwiicTransportProtocol.md` — power session, I2C ownership, framing, discovery, descriptor, deadlines.
+- `QwiicTransportProtocol.md` — power session, I2C ownership, framing, static commissioned peripheral profiles, deadlines. (v0.2: runtime discovery and the descriptor EEPROM were removed per DDR-0017.)
 - `ApplicationServicesProtocol.md` — developer-facing services for first-class records and best-effort objects.
 - `LoRaWANApplicationProtocol.md` — FPorts, archive opportunity behavior, delivery semantics, and proposed extension payloads.
 
@@ -38,7 +38,7 @@ This package introduces a bounded Qwiic application architecture while preservin
 ## Open decisions before acceptance
 
 - Confirm service I2C address `0x42`.
-- Confirm descriptor EEPROM address `0x50`.
+- ~~Confirm descriptor EEPROM address `0x50`~~ — withdrawn in v0.2 (DDR-0017): static commissioned profiles only, no descriptor hardware.
 - Set electrical current and rail-capacitance limits.
 - Set default claim and hard-session durations.
 - Assign producer IDs, sensor profile IDs, and schema IDs.

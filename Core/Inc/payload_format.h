@@ -113,7 +113,7 @@ typedef struct __attribute__((packed)) {
     uint16_t press_hum;         // Packed pressure (bits 0-10, 1 hPa) + humidity (bits 11-15, 5%)
     uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
     uint8_t  status;            // Status byte v2 (1 byte) - stale bits + time markers + mission state
-} CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, DDR-0005)
+} CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, DDR-0019)
 
 /**
  * @brief High-resolution telemetry record for flash storage
@@ -163,11 +163,11 @@ typedef struct __attribute__((packed)) {
 
 } BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222) — LEGACY, superseded by v3
 
-/* ---- Bulk wire format v4 (D3 + DDR-0011, #33/#34): variable-length, packet_type 0x04 ----
+/* ---- Bulk wire format v4 (D3 + DDR-0005, #33/#34): variable-length, packet_type 0x04 ----
  * Layout: [packet_type=0x04][record_count=n][base_seq u32 LE][n × 32B records][crc32]
  * Length = 6 + 32n + 4. CRC32 (same polynomial as v2) covers everything before it.
  * base_seq is the flash sequence of the FIRST record; records are contiguous FIFO,
- * so record i has identity base_seq + i (DDR-0011 stable archive record IDs —
+ * so record i has identity base_seq + i (DDR-0005 stable archive record IDs —
  * backend dedups on (device, sequence)). The sender packs only complete records
  * and as many as fit the runtime payload budget (LoRaMacQueryTxPossible — current
  * DR + pending FOpts, protocol §11). Decoder branches on payload[0].
@@ -247,7 +247,7 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
  * @param buf_cap: output buffer capacity in bytes
  * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
  * @param records: candidate records, FIFO order (need NOT be contiguous in sequence)
- * @param record_seqs: parallel array — each record's own flash sequence (DDR-0011)
+ * @param record_seqs: parallel array — each record's own flash sequence (DDR-0005)
  * @param record_count: number of candidate records
  * @param packed_count: out — records actually encoded (<= record_count)
  * @param out_len: out — encoded packet length (6 + 36n)

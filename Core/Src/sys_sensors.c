@@ -107,7 +107,7 @@
 /* GNSS module handle */
 GNSS_HandleTypeDef hgnss;
 
-/* F9/T2 (DDR-0007): last-known-good cache + stale flags.
+/* F9/T2 (DDR-0003): last-known-good cache + stale flags.
  * No fabricated defaults downstream: a failed read serves the cached value
  * and sets the stale bit; the bit survives the whole pipeline. */
 static float s_last_temp  = TEMPERATURE_DEFAULT_VAL;
@@ -258,7 +258,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
 #endif
 
   /* F25 FIX: LED flash + HAL_Delay(50) removed from flight path.
-   * LEDs are COMMISSIONING-only (DDR-0008); blocking delays burn power. */
+   * LEDs are COMMISSIONING-only (DDR-0002); blocking delays burn power. */
 
   /* Set sensor data */
   sensor_data->humidity    = HUMIDITY_Value;
@@ -421,7 +421,7 @@ int32_t EnvSensors_Init(void)
 /* USER CODE BEGIN PrFD */
 
 #if defined (SENSOR_ENABLED) && (SENSOR_ENABLED == 1)
-/* F20 (DDR-0001): a wedged I2C slave (SDA held low mid-transfer) must not
+/* F20 (DDR-0009): a wedged I2C slave (SDA held low mid-transfer) must not
  * kill the sensor bus for the rest of the flight — there is no power-gate
  * on the sensors, so the only recovery is bit-banging the slave's state
  * machine back to idle: 9 SCL clocks to flush the stuck byte, then STOP. */

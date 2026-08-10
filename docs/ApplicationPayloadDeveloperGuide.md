@@ -27,7 +27,7 @@ Use this when the expansion is a sensor IC, for example an AD7745-based capacita
 The board:
 
 - Does not claim the bus.
-- Provides a Stratosonde Expansion Descriptor at `0x50`, or uses a commissioned prototype profile.
+- Is bound from a commissioned static profile (DDR-0017: no runtime discovery, no descriptor EEPROM).
 - Allows Stratosonde to become I2C controller.
 - Is read by a versioned Stratosonde sensor driver.
 
@@ -234,18 +234,14 @@ A successful response returns the durable Stratosonde archive record ID.
 A passive board contains:
 
 - AD7745 at its native I2C address.
-- Descriptor EEPROM at `0x50`.
-- Sensor profile ID assigned to “AD7745 RTD + capacitive humidity.”
-- Hardware revision.
-- Schema ID and version.
-- Calibration constants or calibration reference.
+- A commissioned static profile declaring: sensor profile ID ("AD7745 RTD + capacitive humidity"), native address, hardware revision, schema ID and version, and calibration reference.
 
 On wake:
 
 1. The board does not drive I2C as controller.
 2. The claim window expires.
 3. Stratosonde becomes controller.
-4. Stratosonde reads and validates the descriptor.
+4. Stratosonde loads the commissioned static profile (no discovery is performed).
 5. The registered profile driver configures and reads the AD7745.
 6. The driver emits a first-class mission record.
 7. Stratosonde removes Qwiic power.
@@ -298,7 +294,7 @@ A new expansion should add:
 
 1. Producer ID registration.
 2. Schema or content-type registration.
-3. Descriptor profile, if passive.
+3. Static commissioned profile entry, if passive.
 4. Firmware encoder tests.
 5. Backend decoder tests.
 6. Golden protocol vectors.

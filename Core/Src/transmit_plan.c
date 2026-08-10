@@ -185,15 +185,19 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                              &plan.gps_enabled,
                                              &plan.gps_timeout_ms);
 
-    /* Veto evaluation — first veto wins, record WHY (DDR-0007).
+    /* Veto evaluation — first veto wins, record WHY (DDR-0003).
      * BUG 1.4: lockout check runs AFTER ApplyOperatingMode so it has final say. */
     plan.veto = VETO_NONE;
 
     const SystemConfig_t *config = Config_Get();
     int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
 
-    /* F9/T2 (DDR-0007): stale/unknown temperature is treated as COLD — the GPS
-     * stays locked out. Fail safe, not fail sunny. */
+    /* F9/T2 (DDR-0003): stale/unknown temperature is treated as COLD — the GPS
+     * stays locked out. Fail safe, not fail sunny.
+     * NOTE: this rule was REVISED 2026-08-09 — DDR-0016 INV-PWR-007 requires
+     * last-known-good temperature, and DDR-0021 removes the cold-lockout
+     * entirely. This veto is retained pending the conformance work queued in
+     * docs/decisions/README.md. */
     if (temp_stale) {
         plan.gps_enabled = false;
         plan.veto = VETO_TEMP_STALE;
@@ -210,7 +214,7 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                  temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
     }
 
-    /* T1 ladder (DDR-0006): FLIGHT with no session = RF silence. The cycle
+    /* T1 ladder (DDR-0018): FLIGHT with no session = RF silence. The cycle
      * still runs (GPS + flash logging); only the radio stays dark. */
     if (!joined && !commissioning) {
         plan.veto = VETO_RF_SILENCE;

@@ -82,7 +82,7 @@ void NMI_Handler(void)
 }
 
 /**
-  * F1 FIX (DDR-0001): Fault handlers are breadcrumb-and-reset, never brick traps.
+  * F1 FIX (DDR-0009): Fault handlers are breadcrumb-and-reset, never brick traps.
   * At 40 km a hang is permanent death; the IWDG would eventually fire anyway,
   * but only after burning hours of LoRaWAN airtime budget and leaving no record
   * of *why*. Write a breadcrumb to an RTC backup register (survives reset,

@@ -1,9 +1,11 @@
 # Stratosonde Qwiic Transport Protocol
 
-**Status:** Draft v0.1  
-**Date:** 2026-08-03  
-**Related decisions:** DDR-0009, DDR-0010  
+**Status:** Draft v0.2  
+**Date:** 2026-08-03 (revised 2026-08-09)  
+**Related decisions:** DDR-0017  
 **Audience:** Stratosonde firmware developers, expansion-board firmware developers, and hardware designers
+
+> **v0.2 revision (DDR-0017):** Runtime discovery is removed. Passive peripherals are bound exclusively from a commissioned static profile — the Stratosonde Expansion Descriptor (§11) is withdrawn and address `0x50` is no longer reserved. The claim window, session lifecycle, framing, deadlines, and error behavior are unchanged.
 
 ## 1. Purpose
 
@@ -72,7 +74,7 @@ If no valid claim arrives before the window closes:
 
 1. Stratosonde disables I2C target mode.
 2. Stratosonde becomes the sole I2C controller.
-3. Stratosonde attempts descriptor discovery.
+3. Stratosonde loads the commissioned static peripheral profile (§11/§12). There is no runtime discovery.
 4. A recognized driver reads the peripheral.
 5. Unknown or failed peripherals are isolated and core mission work continues.
 6. Stratosonde removes Qwiic power before sleep.
@@ -90,10 +92,9 @@ If no valid claim arrives before the window closes:
 | Address | Use |
 |---:|---|
 | `0x42` | Stratosonde Application Services target while an external controller owns the bus |
-| `0x50` | Preferred Stratosonde Expansion Descriptor EEPROM |
-| Other | Native peripheral addresses declared by the descriptor or commissioned profile |
+| Other | Native peripheral addresses declared by the commissioned static profile |
 
-These are 7-bit addresses. Address assignments are proposed and must be checked against final hardware before acceptance.
+These are 7-bit addresses. Address assignments are proposed and must be checked against final hardware before acceptance. (Address `0x50` was reserved for the withdrawn descriptor EEPROM in v0.1 and is now unreserved.)
 
 ## 6. Transport frame
 
@@ -218,9 +219,11 @@ Successful response after status byte:
 
 A grant may be smaller than requested.
 
-## 11. Stratosonde Expansion Descriptor
+## 11. Passive peripheral identification — static profile only
 
-A compliant passive sensor board should provide a 64-byte descriptor at EEPROM address `0x50`, offset zero.
+**Withdrawn in v0.2 (DDR-0017):** the Stratosonde Expansion Descriptor (a 64-byte EEPROM at address `0x50` carrying vendor/product/profile/schema/CRC) is no longer part of this protocol. Runtime discovery — descriptor reading or blind address scanning — is not performed.
+
+Passive peripherals are identified exclusively by the commissioned static profile (§12). Rationale: the attached peripheral set is known at commissioning time; descriptor EEPROMs add component and manufacturing cost for no flight benefit.
 
 | Offset | Size | Field |
 |---:|---:|---|
@@ -229,35 +232,15 @@ A compliant passive sensor board should provide a 64-byte descriptor at EEPROM a
 | 5 | 1 | Descriptor length, `64` |
 | 6 | 2 | Vendor ID |
 | 8 | 2 | Product ID |
-| 10 | 1 | Hardware revision |
-| 11 | 1 | Profile version |
-| 12 | 2 | Sensor profile ID |
-| 14 | 1 | Native peripheral address |
-| 15 | 1 | Native bus speed code |
-| 16 | 4 | Capability flags |
-| 20 | 8 | Serial number |
-| 28 | 2 | Data schema ID |
-| 30 | 1 | Data schema version |
-| 31 | 1 | Channel count |
-| 32 | 28 | Profile-specific constants or reserved bytes |
-| 60 | 4 | CRC32/IEEE over bytes 0-59, little-endian |
+## 12. Static commissioned profile
 
-Descriptor rules:
-
-- Reserved bytes must be zero.
-- A valid CRC with an unknown profile is still an unknown peripheral.
-- Drivers must enforce the declared profile version.
-- Calibration constants may be placed in the profile-specific area only when the profile specification defines them.
-- Calibration that cannot fit or requires updates should use a separate versioned EEPROM area.
-
-## 12. Manual profile fallback
-
-For prototypes or legacy boards, commissioning may select a static sensor profile and address. The static profile:
+Every passive peripheral is bound from an explicit commissioned static profile. The static profile:
 
 - Is explicit in configuration.
-- Disables descriptor guessing.
+- Declares the peripheral's native address, driver/sensor profile and version, and schema identity.
+- Disables any form of guessing or scanning.
 - Is not portable to arbitrary boards.
-- Must fail safely if the expected device does not respond or identify correctly.
+- Must fail safely if the expected device does not respond: the peripheral's data is marked stale/absent, it is retried on later eligible wakes, and it never blocks the cycle (DDR-0009, DDR-0017).
 
 ## 13. Timeouts and power removal
 
@@ -293,7 +276,7 @@ The optional expansion must never create an unbounded wait.
 - Unknown major versions are rejected.
 - Minor-compatible additions use new commands, capability bits, or appended response fields.
 - Existing field meaning is never silently changed.
-- Descriptor profile and application data schemas are independently versioned.
+- Static-profile sensor schemas and application data schemas are independently versioned.
 
 ## 16. Security and trust
 
@@ -316,6 +299,7 @@ Despite that trust assumption:
 - Bus stuck low at startup and during transfer.
 - Power removal during every service.
 - Application exceeds soft and hard deadlines.
-- Descriptor absent, corrupt, unknown, and valid.
+- Profiled peripheral absent, non-responsive, and responding mid-cycle-recovery.
+- Uncommissioned peripheral attached (must be ignored — no discovery).
 - Known passive sensor read failure.
 - Fuzz every frame parser with bounded execution time.

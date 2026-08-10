@@ -1,4 +1,4 @@
-/* F6/DDR-0006: real LoRaWAN keys live in the gitignored se-identity.h
+/* F6/DDR-0018: real LoRaWAN keys live in the gitignored se-identity.h
  * (copy se-identity-template.h and fill in fresh keys). CI / no-keys
  * checkouts fall back to the tracked template with zeroed placeholder
  * keys — compiles everywhere, never flyable. Include THIS header instead

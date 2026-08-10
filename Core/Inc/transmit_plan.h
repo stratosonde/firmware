@@ -8,7 +8,7 @@
   * The decide half of SendTxData(): takes raw inputs (voltages, temperature,
   * time, join state) and produces a TransmitPlan_t — pure data, no hardware.
   * The executor (SendTxData) reads the plan and does the doing. A skipped or
-  * degraded cycle records WHY (veto), not just THAT (DDR-0007).
+  * degraded cycle records WHY (veto), not just THAT (DDR-0003).
   *
   ******************************************************************************
   */
@@ -29,7 +29,7 @@ typedef enum {
     VETO_NONE = 0,          /**< go */
     VETO_TEMP_STALE,        /**< stale temperature treated as COLD (fail-safe) */
     VETO_TEMP_LOCKOUT,      /**< below GPS temperature lockout */
-    VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0006) */
+    VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0018) */
     VETO_RESTRICTED_REGION  /**< regulatory RF prohibition (set by executor) */
 } TransmitVeto_t;
 

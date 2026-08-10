@@ -1,10 +1,12 @@
 # Stratosonde Application Services Protocol
 
-**Status:** Draft v0.1  
-**Date:** 2026-08-03  
+**Status:** Draft v0.2  
+**Date:** 2026-08-03 (revised 2026-08-09)  
 **Transport:** `QwiicTransportProtocol.md`  
-**Related decisions:** DDR-0009, DDR-0012  
+**Related decisions:** DDR-0017  
 **Audience:** Application payload developers
+
+> **v0.2 revision (DDR-0017):** decision references updated to the V2 design corpus. The service set, data-class contract, and deadline behavior below already match DDR-0017; note that first-class extension records are full equals of core archive records (§16), and Application Controller sessions are energy-gated — a session may simply not be granted on a given wake when energy policy does not admit the rail load.
 
 ## 1. Purpose
 

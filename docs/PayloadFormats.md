@@ -225,11 +225,11 @@ explicitly little-endian on the wire). The packet ends with a 4-byte CRC32
 implicitly (`base_seq + i`), which misattributed every record after a skipped
 one (corrupt flash slot or failed conversion compacting the candidate array).
 v5 serializes each record's own flash sequence, so the ground-side
-`(DevEUI, sequence)` dedup key (DDR-0011) is correct for ANY subset of the
+`(DevEUI, sequence)` dedup key (DDR-0005) is correct for ANY subset of the
 archive, and the sender's watermark commit point is exactly
 `sequence_of(last packed record) + 1` (FR-08, #91).
 
-The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0011).
+The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0005).
 
 ### Packet Structure v4 (variable length, SUPERSEDED — never deployed)
 
@@ -239,7 +239,7 @@ The firmware queries the runtime payload budget before each packet (`LoRaMacQuer
 |--------|-------|------|------|-------------|
 | 0 | Packet Type | uint8 | 1 | 0x04 = variable-length + identity |
 | 1 | Record Count | uint8 | 1 | n records (1-6) |
-| 2 | Base Sequence | uint32 LE | 4 | Flash sequence of the FIRST record — record i has identity `base_seq + i` (DDR-0011; backend dedups on (DevEUI, sequence)) |
+| 2 | Base Sequence | uint32 LE | 4 | Flash sequence of the FIRST record — record i has identity `base_seq + i` (DDR-0005; backend dedups on (DevEUI, sequence)) |
 
 n complete 32-byte records follow immediately at offset 6 (layout below, explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `6 + 32n + 4`.
 
@@ -507,7 +507,7 @@ Typical size: 40-60 bytes (8-12 satellites with speed data)
    - Activated when: margin ≥15dB AND gateways ≥2 AND battery ≥5.0V
    - Sends variable-length v4 archive packets (`6 + 32n + 4` bytes) at SF7 (DR3), packed to the runtime payload budget (`LoRaMacQueryTxPossible`); n ≤ 6
    - Up to 20 packets per session
-   - Clears flash backlog (ACK-gated watermark, DDR-0011)
+   - Clears flash backlog (ACK-gated watermark, DDR-0005)
 
 ### Example from RTT Log
 
@@ -592,7 +592,7 @@ Values outside these ranges indicate sensor errors.
 
 ## Changelog
 
-### 2026-08-06 (archive v4 / confirmed delivery, issue #34, DDR-0011)
+### 2026-08-06 (archive v4 / confirmed delivery, issue #34, DDR-0005)
 - **Archive v4** (`packet_type 0x04`): header gains `base_seq` (uint32 LE) — record i identity = base_seq + i; backend dedups on (DevEUI, sequence). Length now `6 + 32n + 4`. `0x03` existed <1 day in CI only, never deployed.
 - **Confirmed delivery**: opportunity-probe heartbeat and all archive packets are confirmed uplinks; watermark commits only on `McpsConfirm.AckReceived` (at-least-once; lost ACK → duplicate retransmission → backend dedup, never a gap). LinkCheckReq moved from the probe to the first archive packet; its LinkCheckAns gates burst continuation.
 

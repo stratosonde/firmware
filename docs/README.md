@@ -5,7 +5,7 @@
 | I want to… | Read |
 |---|---|
 | Know what is done / bench-pending / open | **[ProjectStatus.md](ProjectStatus.md)** — the single status page |
-| Know *why* things are the way they are | [decisions/](decisions/) — DDR-0001…DDR-0013 (cited at enforcement points in code) |
+| Know *why* things are the way they are | [decisions/](decisions/) — DDR-0001…DDR-0021 (cited at enforcement points in code) |
 | Work on something | [GitHub issues](https://github.com/stratosonde/firmware/issues) — the only work tracker |
 | Understand the system design | [FirmwareArchitecture.md](FirmwareArchitecture.md) + module docs (System, PowerManagement, GNSS, EnvironmentalSensors, FlashLogging, Transmission, RegionLookup, LEDStatus, Configuration, ErrorHandler) |
 | Work on wire formats | [LoRaWANApplicationProtocol.md](LoRaWANApplicationProtocol.md) (target spec) · [PayloadFormats.md](PayloadFormats.md) ⚠ known-stale until Gate 3 ⑬ · [GNSSDetailPacket.md](GNSSDetailPacket.md) |

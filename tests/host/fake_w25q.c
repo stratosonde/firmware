@@ -7,7 +7,7 @@
   *
   *   - Erased state is 0xFF.
   *   - Program can only clear bits (AND), never set them. A rewrite without
-  *     erase corrupts, exactly like real NOR. This is what makes DDR-0004's
+  *     erase corrupts, exactly like real NOR. This is what makes FlashStorageNotes.md's
   *     erase-before-write invariant testable.
   *   - Sector erase granularity is W25Q_SECTOR_SIZE (4 KB), so an erase always
   *     destroys the whole sector — the property behind the erase-ahead slack

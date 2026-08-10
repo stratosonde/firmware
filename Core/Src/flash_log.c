@@ -13,7 +13,7 @@
 #include <math.h>
 
 /* Private defines -----------------------------------------------------------*/
-/* T4 FIX (DDR-0004): the two ping-pong headers MUST live in DIFFERENT sectors.
+/* T4 FIX (FlashStorageNotes.md): the two ping-pong headers MUST live in DIFFERENT sectors.
  * Previously A=0x0000 and B=0x0100 were both inside sector 0 — one sector
  * erase killed both copies, and every header rewrite after the first two was
  * a non-erased rewrite (NOR flash cannot flip 0->1 without erase), so the
@@ -192,7 +192,7 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
              * caller's count-based mark ONLY if marking happens from the
              * entry watermark: caller marks (packed + skipped) after TX
              * confirm, landing the watermark exactly past every consumed
-             * sequence. Never silent (DDR-0007): the count is returned. */
+             * sequence. Never silent (DDR-0003): the count is returned. */
             if (skipped_count != NULL) {
                 (*skipped_count)++;
             }
@@ -349,7 +349,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     hlog->active_header = (hlog->active_header == 0) ? 1 : 0;
     write_addr = (hlog->active_header == 0) ? HEADER_A_ADDR : HEADER_B_ADDR;
 
-    /* T4 FIX (DDR-0004): erase-before-write invariant. Each header lives in its
+    /* T4 FIX (FlashStorageNotes.md): erase-before-write invariant. Each header lives in its
      * own sector, so erasing it can only destroy the STALE copy — the other
      * (current) header survives in its own sector. Without this erase, NOR
      * flash rewrites silently corrupt (bits only flip 1->0). */
@@ -488,7 +488,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         }
     }
     
-    /* FW-12 (DDR-0004): the header checkpoints every HEADER_UPDATE_INTERVAL
+    /* FW-12 (FlashStorageNotes.md): the header checkpoints every HEADER_UPDATE_INTERVAL
      * records; recover the uncheckpointed tail before trusting the frontier. */
     if (valid_a || valid_b) {
         status = FlashLog_FrontierScan(hlog);
@@ -504,7 +504,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
 }
 
 /**
-  * @brief  FW-12 (DDR-0004): frontier scan. The header is only persisted every
+  * @brief  FW-12 (FlashStorageNotes.md): frontier scan. The header is only persisted every
   *         HEADER_UPDATE_INTERVAL records, so up to that many records can be
   *         written-but-uncheckpointed when power is cut. Trusting the stale
   *         header blindly would reuse those sequence numbers and wedge
@@ -630,7 +630,7 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     record.voltage_slope = voltage_slope;
     record.power_mode = power_mode;
 
-    /* FW-7 (DDR-0007): archive carries the reading's own freshness */
+    /* FW-7 (DDR-0003): archive carries the reading's own freshness */
     record.flags = (sensor_data->press_stale ? 0x01 : 0)
                  | (sensor_data->temp_stale  ? 0x02 : 0)
                  | (sensor_data->hum_stale   ? 0x04 : 0)

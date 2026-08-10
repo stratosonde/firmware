@@ -391,15 +391,15 @@ static void test_all_corrupt_does_not_wedge(void)
 }
 
 /* ========================================================================== */
-/* T-7b — DDR-0004 erase-before-write invariant on the ping-pong headers      */
+/* T-7b — FlashStorageNotes.md erase-before-write invariant on the ping-pong headers      */
 /* ========================================================================== */
 /* The fake backend enforces real NOR semantics (program can only clear bits),
  * so a header rewrite without an intervening erase produces a CRC failure.
- * This pins T4/DDR-0004: the two headers must live in different sectors and
+ * This pins T4/FlashStorageNotes.md: the two headers must live in different sectors and
  * each write must erase first. */
 static void test_header_pingpong_survives_rewrites(void)
 {
-    printf("-- T-7b / DDR-0004: header ping-pong erase-before-write\n");
+    printf("-- T-7b / FlashStorageNotes.md: header ping-pong erase-before-write\n");
 
     fake_w25q_init();
     W25Q_HandleTypeDef hw;

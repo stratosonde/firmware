@@ -30,7 +30,7 @@
 
 /* GPS coordinate conversion factors */
 #define GPS_BINARY_TO_DEGREES       (90.0f / 8388607.0f)  // Convert sensor_t binary to degrees
-/* DEGREES_TO_100M_RESOLUTION removed — replaced by full-range int16 scaling (see DDR-0005) */
+/* DEGREES_TO_100M_RESOLUTION removed — replaced by full-range int16 scaling (see DDR-0019) */
 #define LAT_SCALE_FACTOR  (32767.0f / 90.0f)   // Maps ±90° to full int16 range (~300m resolution)
 #define LON_SCALE_FACTOR  (32767.0f / 180.0f)  // Maps ±180° to full int16 range (~550m resolution at equator)
 
@@ -344,7 +344,7 @@ bool EncodeBulkPacketV5(uint8_t *buf,
     buf[1] = n;
     uint16_t off = 2;
     for (uint8_t i = 0; i < n; i++) {
-        PutU32LE(buf + off, record_seqs[i]);   /* DDR-0011: explicit identity */
+        PutU32LE(buf + off, record_seqs[i]);   /* DDR-0005: explicit identity */
         off += 4;
         off += SerializeRecordV3LE(buf + off, &records[i]);
     }

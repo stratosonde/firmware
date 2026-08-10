@@ -247,7 +247,7 @@ static void test_gnss_parser(void)
 
 static void test_bulk_v3(void)
 {
-    /* D3 (#33) + DDR-0011 (#34) + FR-07 (#87): variable-length bulk v5,
+    /* D3 (#33) + DDR-0005 (#34) + FR-07 (#87): variable-length bulk v5,
      * packet_type 0x05, per-record explicit sequence identity, explicit LE (D9) */
     sensor_t s = make_nominal_sensors();
     HighResTelemetryRecord_t recs[3];
@@ -267,7 +267,7 @@ static void test_bulk_v3(void)
     CHECK_EQ_I(len, 114);
     CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_V5_EXPLICIT);   /* 0x05 */
     CHECK_EQ_I(buf[1], 3);
-    /* record 0 sequence u32 LE at bytes 2-5 (DDR-0011 explicit identity) */
+    /* record 0 sequence u32 LE at bytes 2-5 (DDR-0005 explicit identity) */
     CHECK_EQ_I((uint32_t)buf[2] | ((uint32_t)buf[3] << 8) |
                ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), 256u);
     /* record 1 sequence at bytes 38-41 */
@@ -432,7 +432,7 @@ static void test_decide_transmit_plan(void)
     CHECK(!p.gps_enabled);
     CHECK_EQ_I(p.tx_interval_ms, 3600000);
 
-    /* FLIGHT + no session -> RF silence veto (DDR-0006); commissioning exempt */
+    /* FLIGHT + no session -> RF silence veto (DDR-0018); commissioning exempt */
     memset(&vs, 0, sizeof(vs));
     p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, false);
     CHECK_EQ_I(p.veto, VETO_RF_SILENCE);

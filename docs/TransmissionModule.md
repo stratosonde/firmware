@@ -102,7 +102,7 @@ Ultra-compact telemetry optimized for SF10 (maximum range). **All multibyte fiel
 
 High-resolution archive transfer at SF7. Wire format **v4** (`packet_type 0x04`), variable length `6 + 32n + 4` bytes:
 
-- Header: 6 bytes — `packet_type` (1 B = 0x04), `record_count` (1 B = n), `base_seq` (4 B uint32 LE, flash sequence of the first record; record i identity = `base_seq + i`, DDR-0011)
+- Header: 6 bytes — `packet_type` (1 B = 0x04), `record_count` (1 B = n), `base_seq` (4 B uint32 LE, flash sequence of the first record; record i identity = `base_seq + i`, DDR-0005)
 - Records: n × 32-byte high-resolution records (n ≤ 6), packed to the runtime payload budget (`LoRaMacQueryTxPossible`)
 - Trailer: 4 bytes CRC32 over all preceding bytes
 

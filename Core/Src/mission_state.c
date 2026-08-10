@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    mission_state.c
-  * @brief   Minimal one-way mission state machine (T3 / DDR-0008)
+  * @brief   Minimal one-way mission state machine (T3 / DDR-0002)
   ******************************************************************************
   * State persists in RTC backup register DR3 (survives reset, not power loss
   * without VBAT backup — hence the door anchor, not the register, decides).
@@ -49,7 +49,7 @@ void MissionState_Init(void)
                      ((raw & 0xFFFFUL) <= (uint32_t)MISSION_FLOAT);
     MissionState_t persisted = (MissionState_t)(raw & 0xFFFFUL);
 
-    /* Door anchor (DDR-0006): the session bank decides, not the lone flag.
+    /* Door anchor (DDR-0018): the session bank decides, not the lone flag.
      * FW-1: the bank is now the Tier-1 credential store — IsRegionJoined()
      * only returns true when a CRC-valid Tier-1 copy supplied the context,
      * so this anchors to Tier-1 presence even if the DR3 record is corrupt. */
@@ -105,7 +105,7 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid)
     /* D8 (#59): ASCENT -> FLOAT by pressure trend, not elapsed time.
      * Float = |ΔP| below threshold for N consecutive work cycles. Stale or
      * invalid pressure cannot prove float — stay in ASCENT (more uplinks,
-     * the safe direction, DDR-0002). No timer to restart on cold-snap reset. */
+     * the safe direction, DDR-0019). No timer to restart on cold-snap reset. */
     if (s_state != MISSION_ASCENT) {
         return;
     }

@@ -30,7 +30,7 @@
 #include <stddef.h>  /* FR-18 (#99): offsetof for the CRC span */
 
 /* Private defines -----------------------------------------------------------*/
-/* Two-tier session storage (FW-1 / DDR-0006).
+/* Two-tier session storage (FW-1 / DDR-0018).
  * Flash map (2KB pages; reserved region is now pages 120-127 = 16KB):
  *   0x0803C000  page 120 - Tier-1 credentials copy A
  *   0x0803C800  page 121 - Tier-1 credentials copy B
@@ -909,12 +909,12 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     // Access external join success flag from lora_app.c
     extern volatile uint8_t g_multiregion_join_success;
 
-    /* F4/T1 (DDR-0006/0008) + FR-12 (#89): joins are COMMISSIONING-ONLY.
+    /* F4/T1 (DDR-0018/0008) + FR-12 (#89): joins are COMMISSIONING-ONLY.
      * This guard previously sat AFTER LmHandlerJoin() — "defense in depth"
      * that fired after the join request it exists to block. In FLIGHT it
      * would have transmitted before returning the error. Check FIRST. */
     if (!MissionState_IsCommissioning()) {
-        SONDE_LOG_STR("JoinRegion: BLOCKED - joins are commissioning-only (DDR-0006)\r\n");
+        SONDE_LOG_STR("JoinRegion: BLOCKED - joins are commissioning-only (DDR-0018)\r\n");
         return LORAMAC_HANDLER_ERROR;
     }
 
@@ -1050,9 +1050,9 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
  */
 bool MultiRegion_PreJoinAllRegions(void)
 {
-    /* F4/T3 (DDR-0008): the entire pre-join ceremony is commissioning-only */
+    /* F4/T3 (DDR-0002): the entire pre-join ceremony is commissioning-only */
     if (!MissionState_IsCommissioning()) {
-        SONDE_LOG_STR("PreJoinAllRegions: BLOCKED - commissioning-only (DDR-0008)\r\n");
+        SONDE_LOG_STR("PreJoinAllRegions: BLOCKED - commissioning-only (DDR-0002)\r\n");
         return false;
     }
 
@@ -1113,7 +1113,7 @@ bool MultiRegion_PreJoinAllRegions(void)
     // Clear pre-join flag to allow TX timer to start
     g_multiregion_in_prejoin = 0;
 
-    /* T3 (DDR-0008) + R30/D6: walk through the one-way door ONLY if at least
+    /* T3 (DDR-0002) + R30/D6: walk through the one-way door ONLY if at least
      * one region bank was actually provisioned. Entering FLIGHT with zero
      * joined banks means permanent RF silence (joins become impossible) — a
      * balloon that can log but never phone home. With zero successes, stay in
@@ -1299,7 +1299,7 @@ static void UpdateContextCRC(MinimalRegionContext_t *ctx)
 /**
  * @brief Read Tier-1 credential bank from flash (three redundant copies).
  *        First CRC-valid copy wins; any invalid copy is repaired from the
- *        good one (DDR-0006 restore-repair: a bad copy is erased/rewritten
+ *        good one (DDR-0018 restore-repair: a bad copy is erased/rewritten
  *        only while at least one good copy remains intact).
  */
 static bool FlashReadTier1(Tier1Bank_t *out)
@@ -1424,7 +1424,7 @@ static bool FlashReadTier2(Tier2Bank_t *out)
 /**
  * @brief Write Tier-2 counter bank to the alternate ping-pong slot.
  *        Erase-before-write on the *idle* slot: a brownout mid-save leaves
- *        the previous slot fully intact (DDR-0004 pattern). The C6 counter
+ *        the previous slot fully intact (FlashStorageNotes.md pattern). The C6 counter
  *        margin (applied by the caller) covers the resulting regression.
  */
 static bool FlashWriteTier2(void)
@@ -1507,7 +1507,7 @@ static bool FlashReadStorage(void)
             ctx->adr_enabled = t2.entries[i].adr_enabled;
         }
     } else {
-        /* Degrade ladder (DDR-0006): keys good, counters lost ->
+        /* Degrade ladder (DDR-0018): keys good, counters lost ->
          * counter = last persisted (Tier-1 commissioning value) + margin.
          * The C6 margin keeps the restored FCntUp ahead of the server. */
         APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: Tier-2 counters lost; using Tier-1 values + margin\r\n");
@@ -1533,7 +1533,7 @@ static bool FlashReadStorage(void)
  *        Tier-2 (counters) is always written (ping-pong, erase-before-write).
  *        Tier-1 (credentials) is written only when static fields changed
  *        (g_tier1_dirty) and only in COMMISSIONING - Tier-1 pages are never
- *        erased in flight (FW-1 / DDR-0006).
+ *        erased in flight (FW-1 / DDR-0018).
  */
 static bool FlashWriteStorage(void)
 {

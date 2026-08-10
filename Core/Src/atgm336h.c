@@ -540,7 +540,7 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   /* F-011 (#25): overrun detection on the absolute counters. If the DMA
    * producer (half/full callbacks, 256-granular) has lapped the consumer,
    * unparsed bytes are already destroyed — count it, drop to the head, and
-   * resync: the parser restarts cleanly at the next '$' (DDR-0007: the gap
+   * resync: the parser restarts cleanly at the next '$' (DDR-0003: the gap
    * is surfaced, never silent). */
   /* R2-19 (#123): dma_produced_total only advances in 256-byte callback
    * quanta, so up to 255 REAL bytes past the counter can already have been

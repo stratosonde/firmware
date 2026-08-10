@@ -1,24 +1,24 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file    lora_app.c
-  * @author  MCD Application Team
-  * @brief   Application of the LRWAN Middleware
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
+/  USER CODE BEGIN Header  /
+/  
+                                                                                
+    @file    lora_app.c
+    @author  MCD Application Team
+    @brief   Application of the LRWAN Middleware
+                                                                                
+    @attention
+   
+    Copyright (c) 2024 STMicroelectronics.
+    All rights reserved.
+   
+    This software is licensed under terms that can be found in the LICENSE file
+    in the root directory of this software component.
+    If no LICENSE file comes with this software, it is provided AS-IS.
+   
+                                                                                
+   /
+/  USER CODE END Header  /
 
-/* Includes ------------------------------------------------------------------*/
+/  Includes ------------------------------------------------------------------ /
 #include "platform.h"
 #include "sys_app.h"
 #include "lora_app.h"
@@ -30,18 +30,18 @@
 #include "subghz_phy_version.h"
 #include "lora_info.h"
 #include "LmHandler.h"
-#include "LoRaMac.h"  /* LoRaMacQueryTxPossible — runtime payload budget (D3, #33) */
+#include "LoRaMac.h"  /  LoRaMacQueryTxPossible — runtime payload budget (D3, #33)  /
 #include "adc_if.h"
 #include "CayenneLpp.h"
 #include "sys_sensors.h"
 #include "flash_if.h"
 
-/* USER CODE BEGIN Includes */
+/  USER CODE BEGIN Includes  /
 #include "stdio.h"
 #include "stdlib.h"
-#include "string.h"  /* memset — R31 full GNSS invalidation (#57) */
+#include "string.h"  /  memset — R31 full GNSS invalidation (#57)  /
 #include "SEGGER_RTT.h"
-#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
+#include "sonde_log.h"  /  R50 (#47): compile-time log gate  /
 #include "atgm336h.h"
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
@@ -50,46 +50,46 @@
 #include "flash_log.h"
 #include "config.h"
 #include "mission_state.h"
-#include "reset_cause.h"      /* F13a: deadman breadcrumb register */
-#include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0003) */
-#include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
-#include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
+#include "reset_cause.h"      /  F13a: deadman breadcrumb register  /
+#include "stm32_systime.h"    /  F12: SysTimeSet (DDR-0013)  /
+#include "transmit_plan.h"    /  R47 (#44): DecideTransmitPlan  /
+#include "RegionUS915.h"      /  R03 (#32): region Datarates [] tables for the SF resolver  /
 #include "RegionEU868.h"
 #include "RegionAS923.h"
 #include "RegionAU915.h"
-/* USER CODE END Includes */
+/  USER CODE END Includes  /
 
-/* External variables ---------------------------------------------------------*/
-/* USER CODE BEGIN EV */
-extern GNSS_HandleTypeDef hgnss;  /* GNSS handle from sys_sensors.c */
-extern FlashLog_HandleTypeDef hflashlog;  /* Flash logging handle from main.c */
-extern IWDG_HandleTypeDef hiwdg;  /* Watchdog handle from main.c */
-/* USER CODE END EV */
+/  External variables --------------------------------------------------------- /
+/  USER CODE BEGIN EV  /
+extern GNSS_HandleTypeDef hgnss;  /  GNSS handle from sys_sensors.c  /
+extern FlashLog_HandleTypeDef hflashlog;  /  Flash logging handle from main.c  /
+extern IWDG_HandleTypeDef hiwdg;  /  Watchdog handle from main.c  /
+/  USER CODE END EV  /
 
-/* Private typedef -----------------------------------------------------------*/
-/**
-  * @brief LoRa State Machine states
-  */
+/  Private typedef ----------------------------------------------------------- /
+/  
+    @brief LoRa State Machine states
+   /
 typedef enum TxEventType_e
 {
-  /**
-    * @brief Appdata Transmission issue based on timer every TxDutyCycleTime
-    */
+  /  
+      @brief Appdata Transmission issue based on timer every TxDutyCycleTime
+     /
   TX_ON_TIMER,
-  /**
-    * @brief Appdata Transmission external event plugged on OnSendEvent( )
-    */
+  /  
+      @brief Appdata Transmission external event plugged on OnSendEvent( )
+     /
   TX_ON_EVENT
-  /* USER CODE BEGIN TxEventType_t */
+  /  USER CODE BEGIN TxEventType_t  /
 
-  /* USER CODE END TxEventType_t */
+  /  USER CODE END TxEventType_t  /
 } TxEventType_t;
 
-/* USER CODE BEGIN PTD */
+/  USER CODE BEGIN PTD  /
 
-/**
-  * @brief Packet queue entry for deferred LoRaWAN transmission
-  */
+/  
+    @brief Packet queue entry for deferred LoRaWAN transmission
+   /
 typedef struct
 {
   uint8_t buffer[150];           // Packet data buffer
@@ -98,9 +98,9 @@ typedef struct
   bool valid;                    // Entry is occupied
 } PacketQueueEntry_t;
 
-/**
-  * @brief Simple circular packet queue
-  */
+/  
+    @brief Simple circular packet queue
+   /
 #define PACKET_QUEUE_SIZE 8      // Max packets in queue
 typedef struct
 {
@@ -110,193 +110,193 @@ typedef struct
   uint8_t count;                 // Current number of packets
 } PacketQueue_t;
 
-/* USER CODE END PTD */
+/  USER CODE END PTD  /
 
-/* Private define ------------------------------------------------------------*/
-/**
-  * LEDs period value of the timer in ms
-  */
+/  Private define ------------------------------------------------------------ /
+/  
+    LEDs period value of the timer in ms
+   /
 #define LED_PERIOD_TIME 500
 
-/**
-  * Join switch period value of the timer in ms
-  */
+/  
+    Join switch period value of the timer in ms
+   /
 #define JOIN_TIME 2000
 
-/*---------------------------------------------------------------------------*/
-/*                             LoRaWAN NVM configuration                     */
-/*---------------------------------------------------------------------------*/
-/**
-  * @brief LoRaWAN NVM Flash address
-  * @note last 2 sector of a 128kBytes device
-  */
-#define LORAWAN_NVM_BASE_ADDRESS                    ((void *)0x0803F000UL)
+/ --------------------------------------------------------------------------- /
+/                              LoRaWAN NVM configuration                      /
+/ --------------------------------------------------------------------------- /
+/  
+    @brief LoRaWAN NVM Flash address
+    @note last 2 sector of a 128kBytes device
+   /
+#define LORAWAN_NVM_BASE_ADDRESS                    ((void  )0x0803F000UL)
 
-/* USER CODE BEGIN PD */
+/  USER CODE BEGIN PD  /
 
-/* USER CODE END PD */
+/  USER CODE END PD  /
 
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
+/  Private macro ------------------------------------------------------------- /
+/  USER CODE BEGIN PM  /
 
-/* USER CODE END PM */
+/  USER CODE END PM  /
 
-/* Private function prototypes -----------------------------------------------*/
-/**
-  * @brief  LoRa End Node send request
-  */
+/  Private function prototypes ----------------------------------------------- /
+/  
+    @brief  LoRa End Node send request
+   /
 static void SendTxData(void);
 
-/**
-  * @brief  TX timer callback function
-  * @param  context ptr of timer context
-  */
-static void OnTxTimerEvent(void *context);
+/  
+    @brief  TX timer callback function
+    @param  context ptr of timer context
+   /
+static void OnTxTimerEvent(void  context);
 
-/**
-  * @brief  join event callback function
-  * @param  joinParams status of join
-  */
-static void OnJoinRequest(LmHandlerJoinParams_t *joinParams);
+/  
+    @brief  join event callback function
+    @param  joinParams status of join
+   /
+static void OnJoinRequest(LmHandlerJoinParams_t  joinParams);
 
-/**
-  * @brief callback when LoRaWAN application has sent a frame
-  * @brief  tx event callback function
-  * @param  params status of last Tx
-  */
-static void OnTxData(LmHandlerTxParams_t *params);
+/  
+    @brief callback when LoRaWAN application has sent a frame
+    @brief  tx event callback function
+    @param  params status of last Tx
+   /
+static void OnTxData(LmHandlerTxParams_t  params);
 
-/**
-  * @brief callback when LoRaWAN application has received a frame
-  * @param appData data received in the last Rx
-  * @param params status of last Rx
-  */
-static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params);
+/  
+    @brief callback when LoRaWAN application has received a frame
+    @param appData data received in the last Rx
+    @param params status of last Rx
+   /
+static void OnRxData(LmHandlerAppData_t  appData, LmHandlerRxParams_t  params);
 
-/**
-  * @brief callback when LoRaWAN Beacon status is updated
-  * @param params status of Last Beacon
-  */
-static void OnBeaconStatusChange(LmHandlerBeaconParams_t *params);
+/  
+    @brief callback when LoRaWAN Beacon status is updated
+    @param params status of Last Beacon
+   /
+static void OnBeaconStatusChange(LmHandlerBeaconParams_t  params);
 
-/**
-  * @brief callback when system time has been updated
-  */
+/  
+    @brief callback when system time has been updated
+   /
 static void OnSysTimeUpdate(void);
 
-/**
-  * @brief callback when LoRaWAN application Class is changed
-  * @param deviceClass new class
-  */
+/  
+    @brief callback when LoRaWAN application Class is changed
+    @param deviceClass new class
+   /
 static void OnClassChange(DeviceClass_t deviceClass);
 
-/**
-  * @brief  LoRa store context in Non Volatile Memory
-  */
+/  
+    @brief  LoRa store context in Non Volatile Memory
+   /
 static void StoreContext(void);
 
-/**
-  * @brief  stop current LoRa execution to switch into non default Activation mode
-  */
-/* F24 FIX: StopJoin removed (dead SOS-button path; OTAA->ABP flip was dangerous) */
+/  
+    @brief  stop current LoRa execution to switch into non default Activation mode
+   /
+/  F24 FIX: StopJoin removed (dead SOS-button path; OTAA->ABP flip was dangerous)  /
 
-/**
-  * @brief  Join switch timer callback function
-  * @param  context ptr of Join switch context
-  */
+/  
+    @brief  Join switch timer callback function
+    @param  context ptr of Join switch context
+   /
 
-/**
-  * @brief  Notifies the upper layer that the NVM context has changed
-  * @param  state Indicates if we are storing (true) or restoring (false) the NVM context
-  */
+/  
+    @brief  Notifies the upper layer that the NVM context has changed
+    @param  state Indicates if we are storing (true) or restoring (false) the NVM context
+   /
 static void OnNvmDataChange(LmHandlerNvmContextStates_t state);
 
-/**
-  * @brief  Store the NVM Data context to the Flash
-  * @param  nvm ptr on nvm structure
-  * @param  nvm_size number of data bytes which were stored
-  */
-static void OnStoreContextRequest(void *nvm, uint32_t nvm_size);
+/  
+    @brief  Store the NVM Data context to the Flash
+    @param  nvm ptr on nvm structure
+    @param  nvm_size number of data bytes which were stored
+   /
+static void OnStoreContextRequest(void  nvm, uint32_t nvm_size);
 
-/**
-  * @brief  Restore the NVM Data context from the Flash
-  * @param  nvm ptr on nvm structure
-  * @param  nvm_size number of data bytes which were restored
-  */
-static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size);
+/  
+    @brief  Restore the NVM Data context from the Flash
+    @param  nvm ptr on nvm structure
+    @param  nvm_size number of data bytes which were restored
+   /
+static void OnRestoreContextRequest(void  nvm, uint32_t nvm_size);
 
-/**
-  * Will be called each time a Radio IRQ is handled by the MAC layer
-  *
-  */
+/  
+    Will be called each time a Radio IRQ is handled by the MAC layer
+   
+   /
 static void OnMacProcessNotify(void);
 
-/**
-  * @brief Change the periodicity of the uplink frames
-  * @param periodicity uplink frames period in ms
-  * @note Compliance test protocol callbacks
-  */
+/  
+    @brief Change the periodicity of the uplink frames
+    @param periodicity uplink frames period in ms
+    @note Compliance test protocol callbacks
+   /
 static void OnTxPeriodicityChanged(uint32_t periodicity);
 
-/**
-  * @brief Change the confirmation control of the uplink frames
-  * @param isTxConfirmed Indicates if the uplink requires an acknowledgement
-  * @note Compliance test protocol callbacks
-  */
+/  
+    @brief Change the confirmation control of the uplink frames
+    @param isTxConfirmed Indicates if the uplink requires an acknowledgement
+    @note Compliance test protocol callbacks
+   /
 static void OnTxFrameCtrlChanged(LmHandlerMsgTypes_t isTxConfirmed);
 
-/**
-  * @brief Change the periodicity of the ping slot frames
-  * @param pingSlotPeriodicity ping slot frames period in ms
-  * @note Compliance test protocol callbacks
-  */
+/  
+    @brief Change the periodicity of the ping slot frames
+    @param pingSlotPeriodicity ping slot frames period in ms
+    @note Compliance test protocol callbacks
+   /
 static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity);
 
-/**
-  * @brief Will be called to reset the system
-  * @note Compliance test protocol callbacks
-  */
+/  
+    @brief Will be called to reset the system
+    @note Compliance test protocol callbacks
+   /
 static void OnSystemReset(void);
 
-/* USER CODE BEGIN PFP */
+/  USER CODE BEGIN PFP  /
 #if ENABLE_GNSS_DETAIL_PACKET
-static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size);
-static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port);
+static uint16_t EncodeGNSSDetailPacket(uint8_t  buffer, uint16_t max_size);
+static bool PacketQueue_Push(PacketQueue_t  queue, const uint8_t  data, uint16_t size, uint8_t port);
 #endif
-static void PacketQueue_Init(PacketQueue_t *queue);
-static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry);
-static bool PacketQueue_IsEmpty(PacketQueue_t *queue);
-/* USER CODE END PFP */
+static void PacketQueue_Init(PacketQueue_t  queue);
+static bool PacketQueue_Pop(PacketQueue_t  queue, PacketQueueEntry_t  entry);
+static bool PacketQueue_IsEmpty(PacketQueue_t  queue);
+/  USER CODE END PFP  /
 
-/* Private variables ---------------------------------------------------------*/
-/* USER CODE BEGIN PV_MULTIREGION */
-/* Multi-region pre-join support */
+/  Private variables --------------------------------------------------------- /
+/  USER CODE BEGIN PV_MULTIREGION  /
+/  Multi-region pre-join support  /
 volatile uint8_t g_multiregion_join_success = 0;
 volatile uint8_t g_multiregion_in_prejoin = 0;
-/* USER CODE END PV_MULTIREGION */
+/  USER CODE END PV_MULTIREGION  /
 
-/**
-  * @brief LoRaWAN default activation type
-  */
+/  
+    @brief LoRaWAN default activation type
+   /
 static ActivationType_t ActivationType = LORAWAN_DEFAULT_ACTIVATION_TYPE;
 
-/**
-  * @brief LoRaWAN force rejoin even if the NVM context is restored
-  */
+/  
+    @brief LoRaWAN force rejoin even if the NVM context is restored
+   /
 static bool ForceRejoin = LORAWAN_FORCE_REJOIN_AT_BOOT;
 
-/* FW-10: this flag must NEVER be true in a build flashed to a flight unit —
- * combined with the T1 ladder it produces FLIGHT + virgin bank = permanent
- * RF silence. The runtime gate in LoRaWAN_Init() (commissioning-only clear)
- * is the real protection; this compile-time tripwire makes a mis-configured
- * build loud at build time. */
+/  FW-10: this flag must NEVER be true in a build flashed to a flight unit —
+   combined with the T1 ladder it produces FLIGHT + virgin bank = permanent
+   RF silence. The runtime gate in LoRaWAN_Init() (commissioning-only clear)
+   is the real protection; this compile-time tripwire makes a mis-configured
+   build loud at build time.  /
 #if LORAWAN_FORCE_REJOIN_AT_BOOT
 #warning "LORAWAN_FORCE_REJOIN_AT_BOOT=true: commissioning builds only - never flash to a flight unit"
 #endif
 
-/**
-  * @brief LoRaWAN handler Callbacks
-  */
+/  
+    @brief LoRaWAN handler Callbacks
+   /
 static LmHandlerCallbacks_t LmHandlerCallbacks =
 {
   .GetBatteryLevel =              GetBatteryLevel,
@@ -319,10 +319,10 @@ static LmHandlerCallbacks_t LmHandlerCallbacks =
   .OnSystemReset =                OnSystemReset,
 };
 
-/**
-  * @brief LoRaWAN handler parameters
-  * @note Made non-static to allow access from multiregion_context.c
-  */
+/  
+    @brief LoRaWAN handler parameters
+    @note Made non-static to allow access from multiregion_context.c
+   /
 LmHandlerParams_t LmHandlerParams =
 {
   .ActiveRegion =             ACTIVE_REGION,
@@ -335,33 +335,33 @@ LmHandlerParams_t LmHandlerParams =
   .RxBCTimeout =              LORAWAN_DEFAULT_CLASS_B_C_RESP_TIMEOUT
 };
 
-/**
-  * @brief Type of Event to generate application Tx
-  */
+/  
+    @brief Type of Event to generate application Tx
+   /
 static TxEventType_t EventType = TX_ON_TIMER;
 
-/**
-  * @brief Timer to handle the application Tx
-  */
+/  
+    @brief Timer to handle the application Tx
+   /
 static UTIL_TIMER_Object_t TxTimer;
 
-/**
-  * @brief Tx Timer period
-  */
+/  
+    @brief Tx Timer period
+   /
 static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
 
-/**
-  * @brief Join Timer period
-  */
+/  
+    @brief Join Timer period
+   /
 
-/* USER CODE BEGIN PV */
+/  USER CODE BEGIN PV  /
 #ifdef PROVISIONING_BUILD
-/* R30/D6 (#24): ABP provisioning table — build-time alternative to the OTAA
- * ceremony. Entry macros live in the gitignored se-identity.h, e.g.:
- *   #define ABP_DEV_ADDR_US915   0x78000005
- *   #define ABP_APP_SKEY_US915   0x14,0x47,...  (16 bytes, brace-less)
- *   #define ABP_NWK_SKEY_US915   0x84,0x2d,...
- * A region with no macros defined is simply absent from the table. */
+/  R30/D6 (#24): ABP provisioning table — build-time alternative to the OTAA
+   ceremony. Entry macros live in the gitignored se-identity.h, e.g.:
+     #define ABP_DEV_ADDR_US915   0x78000005
+     #define ABP_APP_SKEY_US915   0x14,0x47,...  (16 bytes, brace-less)
+     #define ABP_NWK_SKEY_US915   0x84,0x2d,...
+   A region with no macros defined is simply absent from the table.  /
 #include "se-identity.h"
 typedef struct {
   LoRaMacRegion_t region;
@@ -385,23 +385,23 @@ static const ABPProvisioningEntry_t abp_provisioning_table[] = {
 };
 #endif
 
-/* Packet queue for deferred transmission after RX windows */
+/  Packet queue for deferred transmission after RX windows  /
 static PacketQueue_t g_packet_queue = {0};
 
-/* Adaptive transmission strategy state */
+/  Adaptive transmission strategy state  /
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
-static uint32_t g_bulk_commit_through = 0;  /* C4/R2-02 (#106): absolute commit point (exclusive seq) after confirmed TX */
-/* USER CODE END PV */
+static uint32_t g_bulk_commit_through = 0;  /  C4/R2-02 (#106): absolute commit point (exclusive seq) after confirmed TX  /
+/  USER CODE END PV  /
 
-/* Exported functions ---------------------------------------------------------*/
-/* USER CODE BEGIN EF */
+/  Exported functions --------------------------------------------------------- /
+/  USER CODE BEGIN EF  /
 
-/**
- * @brief Reinitialize the entire LoRaWAN stack for a new region
- * @note This performs DeInit/Init cycle to clear ALL state between region joins
- * @note Caller must set DevEUI and call LmHandlerConfigure() after this returns
- */
+/  
+   @brief Reinitialize the entire LoRaWAN stack for a new region
+   @note This performs DeInit/Init cycle to clear ALL state between region joins
+   @note Caller must set DevEUI and call LmHandlerConfigure() after this returns
+  /
 void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
 {
   SONDE_LOG_STR("LoRaApp_ReInitStack: Starting full stack reset...\r\n");
@@ -427,83 +427,83 @@ void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
   SONDE_LOG_STR("LoRaApp_ReInitStack: Stack reset complete (region set, not configured)\r\n");
 }
 
-/* USER CODE END EF */
+/  USER CODE END EF  /
 
 void LoRaWAN_Init(void)
 {
-  /* USER CODE BEGIN LoRaWAN_Init_LV */
+  /  USER CODE BEGIN LoRaWAN_Init_LV  /
 
-  /* USER CODE END LoRaWAN_Init_LV */
+  /  USER CODE END LoRaWAN_Init_LV  /
 
-  /* USER CODE BEGIN LoRaWAN_Init_1 */
+  /  USER CODE BEGIN LoRaWAN_Init_1  /
 
-  /* USER CODE END LoRaWAN_Init_1 */
+  /  USER CODE END LoRaWAN_Init_1  /
 
-  /* F24 FIX: StopJoinTimer removed */
+  /  F24 FIX: StopJoinTimer removed  /
 
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LmHandlerProcess), UTIL_SEQ_RFU, LmHandlerProcess);
 
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), UTIL_SEQ_RFU, SendTxData);
   UTIL_SEQ_RegTask((1 << CFG_SEQ_Task_LoRaStoreContextEvent), UTIL_SEQ_RFU, StoreContext);
-  /* F24 FIX: StopJoin task removed */
+  /  F24 FIX: StopJoin task removed  /
 
-  /* Init Info table used by LmHandler*/
+  /  Init Info table used by LmHandler /
   LoraInfo_Init();
 
-  /* Init the Lora Stack*/
+  /  Init the Lora Stack /
   LmHandlerInit(&LmHandlerCallbacks, APP_VERSION);
 
   LmHandlerConfigure(&LmHandlerParams);
 
-  /* USER CODE BEGIN LoRaWAN_Init_2 */
+  /  USER CODE BEGIN LoRaWAN_Init_2  /
   
-  /* Initialize Multi-region context manager */
+  /  Initialize Multi-region context manager  /
   MultiRegion_Init();
   APP_LOG(TS_ON, VLEVEL_H, "Multi-region context manager initialized\r\n");
 
-  /* T3 (DDR-0008): decide mission state now that the session bank is loaded —
-   * the bank, not a lone flag, anchors the one-way door. Idempotent. */
+  /  T3 (DDR-0002): decide mission state now that the session bank is loaded —
+     the bank, not a lone flag, anchors the one-way door. Idempotent.  /
   MissionState_Init();
   
-  /* Check ForceRejoin flag - if true, clear all saved contexts.
-   * FW-10: gated behind COMMISSIONING. MissionState_Init() above has already
-   * anchored the door to the bank, so a flight unit booting a mis-flashed
-   * build reads FLIGHT and skips the wipe (its bank stays intact). */
+  /  Check ForceRejoin flag - if true, clear all saved contexts.
+     FW-10: gated behind COMMISSIONING. MissionState_Init() above has already
+     anchored the door to the bank, so a flight unit booting a mis-flashed
+     build reads FLIGHT and skips the wipe (its bank stays intact).  /
   if (ForceRejoin) {
     if (MissionState_IsCommissioning()) {
-      SONDE_LOG_STR("\r\n*** FORCE REJOIN ENABLED - Clearing all saved contexts ***\r\n");
+      SONDE_LOG_STR("\r\n    FORCE REJOIN ENABLED - Clearing all saved contexts    \r\n");
       MultiRegion_ClearAllContexts();
-      SONDE_LOG_STR("*** Contexts cleared - will perform fresh OTAA join ***\r\n\r\n");
+      SONDE_LOG_STR("    Contexts cleared - will perform fresh OTAA join    \r\n\r\n");
     } else {
       SONDE_LOG_STR("FORCE REJOIN ignored: mission is FLIGHT (FW-10)\r\n");
     }
   }
   
-  /* F22 FIX (DDR-0008): GNSS reconfiguration is COMMISSIONING-ONLY.
-   * PCAS03/04/05/11 are saved to the GNSS module's internal flash via PCAS00 —
-   * writing that flash on every boot wears it for zero benefit. */
+  /  F22 FIX (DDR-0002): GNSS reconfiguration is COMMISSIONING-ONLY.
+     PCAS03/04/05/11 are saved to the GNSS module's internal flash via PCAS00 —
+     writing that flash on every boot wears it for zero benefit.  /
   if (MissionState_IsCommissioning()) {
-    SONDE_LOG_STR("*** COMMISSIONING: Reconfiguring GPS module (all constellations) ***\r\n");
+    SONDE_LOG_STR("    COMMISSIONING: Reconfiguring GPS module (all constellations)    \r\n");
     GNSS_PowerOn(&hgnss);
     HAL_Delay(1000);  // Let GPS boot
     GNSS_Configure(&hgnss);  // Sends PCAS04,7 + PCAS11 airborne + PCAS00 (save)
     HAL_Delay(500);   // Let GPS save to flash
     GNSS_PowerOff(&hgnss);
-    SONDE_LOG_STR("*** GPS reconfigured and saved to flash ***\r\n\r\n");
+    SONDE_LOG_STR("    GPS reconfigured and saved to flash    \r\n\r\n");
   }
   
-  /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
-  /* Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path */
+  /  Auto-detect provision state: Check if we have valid saved ABP context for US915  /
+  /  Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path  /
   if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
     
-    /* Already provisioned - use saved ABP context from flash */
+    /  Already provisioned - use saved ABP context from flash  /
     SONDE_LOG_STR("Found valid ABP context - using saved session\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP context for US915\r\n");
     
-    /* Switch to US915 as starting region */
+    /  Switch to US915 as starting region  /
     MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
     
-    /* Display session keys for Chirpstack verification (F-017: commissioning only) */
+    /  Display session keys for Chirpstack verification (F-017: commissioning only)  /
     if (MissionState_IsCommissioning()) {
       SONDE_LOG_STR("\r\n=== VERIFY THESE KEYS MATCH YOUR CHIRPSTACK CONFIG ===\r\n");
       MultiRegion_DisplaySessionKeys();
@@ -511,20 +511,20 @@ void LoRaWAN_Init(void)
     
   } else {
     
-    /* Not provisioned yet - run OTAA provision sequence */
+    /  Not provisioned yet - run OTAA provision sequence  /
     SONDE_LOG_STR("No valid contexts found - running OTAA provision\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "Starting OTAA multi-region provision\r\n");
     
     if (MissionState_IsCommissioning()) {
 #ifdef PROVISIONING_BUILD
-      /* R30/D6 (#24): ABP provisioning from a build-time table. Keys come from
-       * the gitignored se-identity.h (F6/DDR-0006 — never committed). Define
-       * PROVISIONING_BUILD plus any of ABP_DEV_ADDR_xxx / ABP_APP_SKEY_xxx /
-       * ABP_NWK_SKEY_xxx (brace-less byte lists) to provision that region
-       * without the OTAA ceremony. */
+      /  R30/D6 (#24): ABP provisioning from a build-time table. Keys come from
+         the gitignored se-identity.h (F6/DDR-0018 — never committed). Define
+         PROVISIONING_BUILD plus any of ABP_DEV_ADDR_xxx / ABP_APP_SKEY_xxx /
+         ABP_NWK_SKEY_xxx (brace-less byte lists) to provision that region
+         without the OTAA ceremony.  /
       uint8_t abp_count = 0;
       for (uint32_t i = 0; i < sizeof(abp_provisioning_table)/sizeof(abp_provisioning_table[0]); i++) {
-        const ABPProvisioningEntry_t *e = &abp_provisioning_table[i];
+        const ABPProvisioningEntry_t  e = &abp_provisioning_table[i];
         if (MultiRegion_InitializeRegionFromNetworkServer(e->region, e->dev_addr, e->app_s_key, e->nwk_s_key)) {
           abp_count++;
         }
@@ -536,32 +536,32 @@ void LoRaWAN_Init(void)
         SONDE_LOG_STR("PROVISIONING FAILED: no regions initialized - staying in COMMISSIONING\r\n");
       }
 #else
-      /* Pre-join all regions via OTAA (includes post-join data packets) */
-      /* This will: */
-      /*   1. Join each region via OTAA */
-      /*   2. Save session keys/DevAddr/counters to flash */
-      /*   3. Send 2 post-join data packets per region */
-      /*   4. Display session keys via RTT (for Chirpstack server setup) */
-      /* D6 (#24): act on the return — commissioning is ground-only and MUST
-       * complete; on failure say so loudly with remediation, not "complete". */
+      /  Pre-join all regions via OTAA (includes post-join data packets)  /
+      /  This will:  /
+      /    1. Join each region via OTAA  /
+      /    2. Save session keys/DevAddr/counters to flash  /
+      /    3. Send 2 post-join data packets per region  /
+      /    4. Display session keys via RTT (for Chirpstack server setup)  /
+      /  D6 (#24): act on the return — commissioning is ground-only and MUST
+         complete; on failure say so loudly with remediation, not "complete".  /
       bool provision_ok = MultiRegion_PreJoinAllRegions();
       if (provision_ok) {
         APP_LOG(TS_ON, VLEVEL_H, "OTAA provision complete - contexts saved to flash\r\n");
       } else {
         APP_LOG(TS_ON, VLEVEL_H, "PROVISION INCOMPLETE: fix gateway/credentials and power cycle to retry (still COMMISSIONING)\r\n");
-        SONDE_LOG_STR("*** PROVISION INCOMPLETE - unit stays in COMMISSIONING, fix and power-cycle ***\r\n");
+        SONDE_LOG_STR("    PROVISION INCOMPLETE - unit stays in COMMISSIONING, fix and power-cycle    \r\n");
       }
 #endif
     } else {
-      /* T1 ladder (DDR-0006), rung 3: FLIGHT with a virgin session bank means
-       * RF silence. Keep flying the profile — GPS, flash logging, timers —
-       * but never attempt a join. */
+      /  T1 ladder (DDR-0018), rung 3: FLIGHT with a virgin session bank means
+         RF silence. Keep flying the profile — GPS, flash logging, timers —
+         but never attempt a join.  /
       APP_LOG(TS_ON, VLEVEL_H, "FLIGHT: no valid session bank - RF silence, logging only\r\n");
-      SONDE_LOG_STR("FLIGHT MODE with no saved session: RF SILENCE (DDR-0006)\r\n");
+      SONDE_LOG_STR("FLIGHT MODE with no saved session: RF SILENCE (DDR-0018)\r\n");
     }
   }
 
-  /* USER CODE END LoRaWAN_Init_2 */
+  /  USER CODE END LoRaWAN_Init_2  /
 
   // Skip LmHandlerJoin - already handled by auto-provision logic above
   // LmHandlerJoin(ActivationType, ForceRejoin);
@@ -569,53 +569,53 @@ void LoRaWAN_Init(void)
 
   if (EventType == TX_ON_TIMER)
   {
-    /* send every time timer elapses */
+    /  send every time timer elapses  /
     UTIL_TIMER_Create(&TxTimer, TxPeriodicity, UTIL_TIMER_ONESHOT, OnTxTimerEvent, NULL);
     UTIL_TIMER_Start(&TxTimer);
 
-    /* Trigger first transmission immediately (don't wait for timer) */
+    /  Trigger first transmission immediately (don't wait for timer)  /
     SONDE_LOG_STR("Triggering first transmission immediately...\r\n");
     UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
   }
   else
   {
-    /* USER CODE BEGIN LoRaWAN_Init_3 */
+    /  USER CODE BEGIN LoRaWAN_Init_3  /
 
-    /* USER CODE END LoRaWAN_Init_3 */
+    /  USER CODE END LoRaWAN_Init_3  /
   }
 
-  /* USER CODE BEGIN LoRaWAN_Init_Last */
-  /* Initialize packet queue for deferred transmission */
+  /  USER CODE BEGIN LoRaWAN_Init_Last  /
+  /  Initialize packet queue for deferred transmission  /
   PacketQueue_Init(&g_packet_queue);
   SONDE_LOG_STR("Packet queue initialized\r\n");
-  /* USER CODE END LoRaWAN_Init_Last */
+  /  USER CODE END LoRaWAN_Init_Last  /
 }
 
-/* USER CODE BEGIN PB_Callbacks */
+/  USER CODE BEGIN PB_Callbacks  /
 
-/* USER CODE END PB_Callbacks */
+/  USER CODE END PB_Callbacks  /
 
-/* Private functions ---------------------------------------------------------*/
-/* USER CODE BEGIN PrFD */
+/  Private functions --------------------------------------------------------- /
+/  USER CODE BEGIN PrFD  /
 
-/**
-  * @brief  F16 FIX: Resolve a datarate by SPREADING FACTOR, not hardcoded index.
-  *         DR indices are region-specific: "DR_3" means SF7@125kHz in US915/AU915
-  *         but SF7 means DR_5 in EU868/AS923, and "DR_0" is SF10 in US915 but
-  *         SF12 in EU868. Hardcoding an index silently changes airtime (and can
-  *         even select an invalid DR) when the balloon crosses into another
-  *         region. Resolve SF -> DR per active region.
-  * @param  sf: desired spreading factor (7..10 supported here)
-  * @retval Datarate enum for the currently active region
-  */
+/  
+    @brief  F16 FIX: Resolve a datarate by SPREADING FACTOR, not hardcoded index.
+            DR indices are region-specific: "DR_3" means SF7@125kHz in US915/AU915
+            but SF7 means DR_5 in EU868/AS923, and "DR_0" is SF10 in US915 but
+            SF12 in EU868. Hardcoding an index silently changes airtime (and can
+            even select an invalid DR) when the balloon crosses into another
+            region. Resolve SF -> DR per active region.
+    @param  sf: desired spreading factor (7..10 supported here)
+    @retval Datarate enum for the currently active region
+   /
 static int8_t DatarateFromSF(uint8_t sf)
 {
-  /* R03/F-026 (#32): table-driven — search the ACTIVE region's own
-   * Datarates*[] table for the SF. The old per-region switch hardcoded the
-   * US915 mapping for AU915, but in-tree DataratesAU915 = {12,11,10,9,8,7,..}
-   * (SF10 = DR_2, SF7 = DR_5), so every AU915 bulk uplink was rejected by the
-   * MAC. Entries of 0 (unused) and 50 (FSK) are skipped; first match wins. */
-  const uint8_t *table;
+  /  R03/F-026 (#32): table-driven — search the ACTIVE region's own
+     Datarates [] table for the SF. The old per-region switch hardcoded the
+     US915 mapping for AU915, but in-tree DataratesAU915 = {12,11,10,9,8,7,..}
+     (SF10 = DR_2, SF7 = DR_5), so every AU915 bulk uplink was rejected by the
+     MAC. Entries of 0 (unused) and 50 (FSK) are skipped; first match wins.  /
+  const uint8_t  table;
   uint8_t table_len;
   switch (LmHandlerParams.ActiveRegion) {
     case LORAMAC_REGION_US915:
@@ -638,99 +638,99 @@ static int8_t DatarateFromSF(uint8_t sf)
   return LORAWAN_DEFAULT_DATA_RATE;
 }
 
-#if ENABLE_GNSS_DETAIL_PACKET  /* FR-19 (#100): unused when the debug packet is off */
-/**
-  * @brief  Encode detailed GNSS telemetry packet (satellite tracking + 3D speed)
-  * @param  buffer: Destination buffer
-  * @param  max_size: Maximum buffer size
-  * @retval Actual packet size in bytes
-  * @note   Custom binary format on Port 3 for detailed analysis
-  */
-static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
+#if ENABLE_GNSS_DETAIL_PACKET  /  FR-19 (#100): unused when the debug packet is off  /
+/  
+    @brief  Encode detailed GNSS telemetry packet (satellite tracking + 3D speed)
+    @param  buffer: Destination buffer
+    @param  max_size: Maximum buffer size
+    @retval Actual packet size in bytes
+    @note   Custom binary format on Port 3 for detailed analysis
+   /
+static uint16_t EncodeGNSSDetailPacket(uint8_t  buffer, uint16_t max_size)
 {
   uint16_t idx = 0;
   
   if (buffer == NULL || max_size < 20)
     return 0;
   
-  /* Header (4 bytes) - Version 2 format separates constellation counts */
+  /  Header (4 bytes) - Version 2 format separates constellation counts  /
   buffer[idx++] = 0x02;  // Packet version (v2 - separate constellation counts)
   buffer[idx++] = hgnss.extended.gps_count;
   buffer[idx++] = hgnss.extended.glonass_count;
   buffer[idx++] = hgnss.extended.beidou_count;
   
-  /* GPS satellites (PRN + SNR for each) */
+  /  GPS satellites (PRN + SNR for each)  /
   for (int i = 0; i < hgnss.extended.gps_count && idx < (max_size - 2); i++)
   {
     buffer[idx++] = hgnss.extended.gps_sats[i].prn;
     buffer[idx++] = hgnss.extended.gps_sats[i].snr;
   }
   
-  /* GLONASS satellites */
+  /  GLONASS satellites  /
   for (int i = 0; i < hgnss.extended.glonass_count && idx < (max_size - 2); i++)
   {
     buffer[idx++] = hgnss.extended.glonass_sats[i].prn;
     buffer[idx++] = hgnss.extended.glonass_sats[i].snr;
   }
   
-  /* BeiDou satellites */
+  /  BeiDou satellites  /
   for (int i = 0; i < hgnss.extended.beidou_count && idx < (max_size - 2); i++)
   {
     buffer[idx++] = hgnss.extended.beidou_sats[i].prn;
     buffer[idx++] = hgnss.extended.beidou_sats[i].snr;
   }
   
-  /* Speed data (12 bytes) - check we have room */
+  /  Speed data (12 bytes) - check we have room  /
   if (idx + 12 > max_size)
     return idx;  // Return what we have so far
   
-  /* Ground speed (2 bytes, 0.1 km/h resolution, 0-6553.5 km/h) */
-  uint16_t ground_speed = (uint16_t)(hgnss.extended.ground_speed_kmh * 10.0f);
+  /  Ground speed (2 bytes, 0.1 km/h resolution, 0-6553.5 km/h)  /
+  uint16_t ground_speed = (uint16_t)(hgnss.extended.ground_speed_kmh   10.0f);
   buffer[idx++] = (ground_speed >> 8) & 0xFF;
   buffer[idx++] = ground_speed & 0xFF;
   
-  /* Vertical speed (2 bytes signed, 0.01 m/s resolution, -327.68 to +327.67 m/s) */
-  int16_t vertical_speed = (int16_t)(hgnss.extended.vertical_speed_ms * 100.0f);
+  /  Vertical speed (2 bytes signed, 0.01 m/s resolution, -327.68 to +327.67 m/s)  /
+  int16_t vertical_speed = (int16_t)(hgnss.extended.vertical_speed_ms   100.0f);
   buffer[idx++] = (vertical_speed >> 8) & 0xFF;
   buffer[idx++] = vertical_speed & 0xFF;
   
-  /* 3D speed (2 bytes, 0.1 km/h resolution) */
-  uint16_t speed_3d = (uint16_t)(hgnss.extended.speed_3d_kmh * 10.0f);
+  /  3D speed (2 bytes, 0.1 km/h resolution)  /
+  uint16_t speed_3d = (uint16_t)(hgnss.extended.speed_3d_kmh   10.0f);
   buffer[idx++] = (speed_3d >> 8) & 0xFF;
   buffer[idx++] = speed_3d & 0xFF;
   
-  /* Track/course (2 bytes, 0.1° resolution, 0-359.9°) */
-  uint16_t track = (uint16_t)(hgnss.extended.track_true * 10.0f);
+  /  Track/course (2 bytes, 0.1° resolution, 0-359.9°)  /
+  uint16_t track = (uint16_t)(hgnss.extended.track_true   10.0f);
   buffer[idx++] = (track >> 8) & 0xFF;
   buffer[idx++] = track & 0xFF;
   
-  /* HDOP (2 bytes, 0.01 resolution) */
-  uint16_t hdop = (uint16_t)(hgnss.data.hdop * 100.0f);
+  /  HDOP (2 bytes, 0.01 resolution)  /
+  uint16_t hdop = (uint16_t)(hgnss.data.hdop   100.0f);
   buffer[idx++] = (hdop >> 8) & 0xFF;
   buffer[idx++] = hdop & 0xFF;
   
-  /* Fix quality (1 byte) */
+  /  Fix quality (1 byte)  /
   buffer[idx++] = (uint8_t)hgnss.data.fix_quality;
   
-  /* Satellites used in fix (1 byte) */
+  /  Satellites used in fix (1 byte)  /
   buffer[idx++] = hgnss.data.satellites;
 
   return idx;
 }
-#endif  /* ENABLE_GNSS_DETAIL_PACKET */
+#endif  /  ENABLE_GNSS_DETAIL_PACKET  /
 
-/* ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ========== */
-/* R49 (#46): NormalizeBatteryVoltage, CalculateVoltageSlope, PredictTimeToVoltage,
- * SelectModeFromPredictions and GetModeName moved verbatim to Core/Src/power_model.c
- * (declared in Core/Inc/power_model.h) so the pure decision logic is host-testable.
- * R47 (#44): ApplyOperatingMode + the whole decide block moved to
- * Core/Src/transmit_plan.c (DecideTransmitPlan). */
+/  ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ==========  /
+/  R49 (#46): NormalizeBatteryVoltage, CalculateVoltageSlope, PredictTimeToVoltage,
+   SelectModeFromPredictions and GetModeName moved verbatim to Core/Src/power_model.c
+   (declared in Core/Inc/power_model.h) so the pure decision logic is host-testable.
+   R47 (#44): ApplyOperatingMode + the whole decide block moved to
+   Core/Src/transmit_plan.c (DecideTransmitPlan).  /
 
-/* USER CODE END PrFD */
+/  USER CODE END PrFD  /
 
-static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
+static void OnRxData(LmHandlerAppData_t  appData, LmHandlerRxParams_t  params)
 {
-  /* USER CODE BEGIN OnRxData_1 */
+  /  USER CODE BEGIN OnRxData_1  /
   SONDE_LOG_STR("\r\n=== OnRxData Callback ===\r\n");
   
   // Read real LinkCheck results from LmHandler RxParams
@@ -746,11 +746,11 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     SONDE_LOG("LinkCheckAns: Margin=%ddB, Gateways=%d\r\n", margin, gw_count);
   }
   
-  /* DDR-0011 (#34): the archive opportunity opens on the confirmed probe's ACK
-   * (OnTxData), not on LinkCheckAns. LinkCheckAns now rides the FIRST archive
-   * packet (protocol §5.2) and gates burst continuation (§5.3): poor margin /
-   * gateway count — or no LinkCheckAns at all — ends the burst after the
-   * (already ACKed) first archive packet. */
+  /  DDR-0005 (#34): the archive opportunity opens on the confirmed probe's ACK
+     (OnTxData), not on LinkCheckAns. LinkCheckAns now rides the FIRST archive
+     packet (protocol §5.2) and gates burst continuation (§5.3): poor margin /
+     gateway count — or no LinkCheckAns at all — ends the burst after the
+     (already ACKed) first archive packet.  /
   if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent == 1) {
     bool link_good = (linkcheck_received &&
                       margin >= LINK_MARGIN_THRESHOLD &&
@@ -760,15 +760,15 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
                       margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
                       link_good ? "BURST CONTINUES" : "FALLBACK");
     if (!link_good) {
-      /* Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
-       * The first packet's records were already committed on its ACK — no loss. */
+      /  Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
+         The first packet's records were already committed on its ACK — no loss.  /
       g_tx_state = TX_STATE_COMPLETE;
       g_bulk_packets_sent = 0;
     } else {
-      /* FR-14 (#88): continuation of the burst after packet 1 is owned HERE,
-       * by the LinkCheck evaluation — OnTxData no longer re-arms for
-       * g_bulk_packets_sent == 1 (it runs before this callback; the race
-       * produced a spurious full extra work cycle). */
+      /  FR-14 (#88): continuation of the burst after packet 1 is owned HERE,
+         by the LinkCheck evaluation — OnTxData no longer re-arms for
+         g_bulk_packets_sent == 1 (it runs before this callback; the race
+         produced a spurious full extra work cycle).  /
       if (FlashLog_HasUnsentData(&hflashlog) &&
           g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
         SONDE_LOG_STR("OnRxData: link good - re-arming bulk transfer...\r\n");
@@ -789,35 +789,35 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
   }
   
   SONDE_LOG_STR("=== OnRxData Callback END ===\r\n");
-  /* USER CODE END OnRxData_1 */
+  /  USER CODE END OnRxData_1  /
 }
 
-/**
-  * @brief  F13a (DDR-0001): progress deadman. SendTxData is the only place a
-  *         full work cycle provably begins — mark RTC seconds here. If the
-  *         sequencer/timer wedges (no cycle for 3x the worst-case interval),
-  *         Deadman_Check breadcrumbs and resets. COMMISSIONING is exempt:
-  *         on the bench a human can sit idle for hours legitimately.
-  */
-/* R01/R02: DR2 collided with timer_if SysTime MSBTICKS — moved to DR5.
- * Allocation map lives in backup_regs.h. */
+/  
+    @brief  F13a (DDR-0009): progress deadman. SendTxData is the only place a
+            full work cycle provably begins — mark RTC seconds here. If the
+            sequencer/timer wedges (no cycle for 3x the worst-case interval),
+            Deadman_Check breadcrumbs and resets. COMMISSIONING is exempt:
+            on the bench a human can sit idle for hours legitimately.
+   /
+/  R01/R02: DR2 collided with timer_if SysTime MSBTICKS — moved to DR5.
+   Allocation map lives in backup_regs.h.  /
 #include "backup_regs.h"
 #define DEADMAN_BKP_REG     BKP_REG_DEADMAN
-#define DEADMAN_TIMEOUT_S   (3U * 3600U)   /* 3x worst-case cycle (SURVIVAL=1h) */
+#define DEADMAN_TIMEOUT_S   (3U   3600U)   /  3x worst-case cycle (SURVIVAL=1h)  /
 
 static void Deadman_MarkProgress(void)
 {
   extern RTC_HandleTypeDef hrtc;
   uint16_t ms_unused;
   HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, TIMER_IF_GetTime(&ms_unused));
-  ResetCause_ClearBootAttempts();  /* F-03 (#65): a work cycle started — boot was good */
+  ResetCause_ClearBootAttempts();  /  F-03 (#65): a work cycle started — boot was good  /
 }
 
-/* F-15 (#72): last-valid position parked in backup registers so a reset does
- * not restore the compile-time default (Kansas) and feed a garbage position
- * into region selection via the deliberate F-06 stale-position hold. VALID is
- * written LAST so a mid-write reset never validates a partial triple. */
-#define LASTPOS_VALID_MAGIC  0x4C415454UL  /* 'LATT' */
+/  F-15 (#72): last-valid position parked in backup registers so a reset does
+   not restore the compile-time default (Kansas) and feed a garbage position
+   into region selection via the deliberate F-06 stale-position hold. VALID is
+   written LAST so a mid-write reset never validates a partial triple.  /
+#define LASTPOS_VALID_MAGIC  0x4C415454UL  /  'LATT'  /
 static void LastPos_Store(float lat, float lon, float alt)
 {
   extern RTC_HandleTypeDef hrtc;
@@ -829,76 +829,76 @@ static void LastPos_Store(float lat, float lon, float alt)
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_VALID, LASTPOS_VALID_MAGIC);
 }
 
-static bool LastPos_Load(float *lat, float *lon, float *alt)
+static bool LastPos_Load(float  lat, float  lon, float  alt)
 {
   extern RTC_HandleTypeDef hrtc;
   if (HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_VALID) != LASTPOS_VALID_MAGIC) {
-    return false;  /* cold boot or backup wipe — caller applies the default */
+    return false;  /  cold boot or backup wipe — caller applies the default  /
   }
   union { float f; uint32_t u; } la, lo, al;
   la.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_LAT);
   lo.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_LON);
   al.u = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_ALT);
-  *lat = la.f; *lon = lo.f; *alt = al.f;
+   lat = la.f;  lon = lo.f;  alt = al.f;
   return true;
 }
 
 void Deadman_Check(void)
 {
-  /* R45: Deadman deliberately keeps boot-relative MCU time (TIMER_IF), NOT
-   * SysTime — a GPS sync would jump the clock by decades and false-trip the
-   * watchdog. Two clocks, two jobs: UTC for science records, monotonic MCU
-   * time for liveness. */
+  /  R45: Deadman deliberately keeps boot-relative MCU time (TIMER_IF), NOT
+     SysTime — a GPS sync would jump the clock by decades and false-trip the
+     watchdog. Two clocks, two jobs: UTC for science records, monotonic MCU
+     time for liveness.  /
   extern RTC_HandleTypeDef hrtc;
   uint16_t ms_unused;
   uint32_t now = TIMER_IF_GetTime(&ms_unused);
   uint32_t last = HAL_RTCEx_BKUPRead(&hrtc, DEADMAN_BKP_REG);
 
   if (last == 0) {
-    HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);  /* first boot: seed */
+    HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);  /  first boot: seed  /
     return;
   }
   if (MissionState_IsCommissioning()) {
-    return;  /* bench: human idle is legitimate */
+    return;  /  bench: human idle is legitimate  /
   }
   if (now < last) {
-    /* F-05 (#63): time jumped backward (e.g. pre-F-04 MSB stomp or backup
-     * corruption). (now - last) is unsigned and would wrap huge, false-firing
-     * the deadman. Re-seed and continue — never fire on a backward delta. */
+    /  F-05 (#63): time jumped backward (e.g. pre-F-04 MSB stomp or backup
+       corruption). (now - last) is unsigned and would wrap huge, false-firing
+       the deadman. Re-seed and continue — never fire on a backward delta.  /
     HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);
     return;
   }
   if ((now - last) > DEADMAN_TIMEOUT_S) {
     SONDE_LOG_STR("DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
     HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
-                        RESET_CAUSE_FAULT_MAGIC | 6U);  /* 6 = deadman */
-    /* F-05 (#63): re-seed BEFORE resetting — otherwise the post-reset boot
-     * sees the same stale timestamp and fires again (deadman reset loop). */
+                        RESET_CAUSE_FAULT_MAGIC | 6U);  /  6 = deadman  /
+    /  F-05 (#63): re-seed BEFORE resetting — otherwise the post-reset boot
+       sees the same stale timestamp and fires again (deadman reset loop).  /
     HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);
     NVIC_SystemReset();
   }
 }
 
-/**
-  * @brief  F12 (DDR-0003): discipline system time from a good GPS fix so flash
-  *         records carry absolute UTC epoch seconds instead of boot-relative
-  *         time. GPS is the only trustworthy clock source on the balloon.
-  *         date = DDMMYY, timestamp = HHMMSS (NMEA RMC).
-  */
+/  
+    @brief  F12 (DDR-0013): discipline system time from a good GPS fix so flash
+            records carry absolute UTC epoch seconds instead of boot-relative
+            time. GPS is the only trustworthy clock source on the balloon.
+            date = DDMMYY, timestamp = HHMMSS (NMEA RMC).
+   /
 static uint32_t DaysFromCivil(int y, unsigned m, unsigned d)
 {
   y -= (m <= 2);
   int era = (y >= 0 ? y : y - 399) / 400;
-  unsigned yoe = (unsigned)(y - era * 400);
-  unsigned doy = (153U * (m + (m > 2 ? (unsigned)-3 : 9U)) + 2U) / 5U + d - 1U;
-  unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
-  return (uint32_t)(era * 146097 + (int)doe - 719468);
+  unsigned yoe = (unsigned)(y - era   400);
+  unsigned doy = (153U   (m + (m > 2 ? (unsigned)-3 : 9U)) + 2U) / 5U + d - 1U;
+  unsigned doe = yoe   365U + yoe / 4U - yoe / 100U + doy;
+  return (uint32_t)(era   146097 + (int)doe - 719468);
 }
 
 static void SysTimeSyncFromGnss(void)
 {
-  uint32_t d = hgnss.data.date;       /* DDMMYY */
-  uint32_t t = hgnss.data.timestamp;  /* HHMMSS */
+  uint32_t d = hgnss.data.date;       /  DDMMYY  /
+  uint32_t t = hgnss.data.timestamp;  /  HHMMSS  /
   if (d == 0 || t == 0) return;
 
   int day = (int)(d / 10000U);
@@ -906,8 +906,8 @@ static void SysTimeSyncFromGnss(void)
   int yr  = 2000 + (int)(d % 100U);
   if (yr < 2024 || mon < 1 || mon > 12 || day < 1 || day > 31) return;
 
-  uint32_t epoch = DaysFromCivil(yr, (unsigned)mon, (unsigned)day) * 86400U
-                 + (t / 10000U) * 3600U + ((t / 100U) % 100U) * 60U + (t % 100U);
+  uint32_t epoch = DaysFromCivil(yr, (unsigned)mon, (unsigned)day)   86400U
+                 + (t / 10000U)   3600U + ((t / 100U) % 100U)   60U + (t % 100U);
 
   SysTime_t st;
   st.Seconds = epoch;
@@ -916,31 +916,31 @@ static void SysTimeSyncFromGnss(void)
   SONDE_LOG("SysTime disciplined from GPS: %lu epoch seconds\r\n",
                     (unsigned long)epoch);
 }
-/* =============================================================================
- * F-R1 (#74): SendTxData decomposed into phases. Pure code motion — every
- * hardware call, delay, log, and decision is byte-for-byte the code that used
- * to be inlined; only the surrounding braces changed. Deadman_MarkProgress()
- * remains the FIRST statement of SendTxData (DDR-0001) and the mission-state
- * early-returns stay top-level.
- * =============================================================================*/
+/  =============================================================================
+   F-R1 (#74): SendTxData decomposed into phases. Pure code motion — every
+   hardware call, delay, log, and decision is byte-for-byte the code that used
+   to be inlined; only the surrounding braces changed. Deadman_MarkProgress()
+   remains the FIRST statement of SendTxData (DDR-0009) and the mission-state
+   early-returns stay top-level.
+   ============================================================================= /
 
-/**
- * @brief F-R1 (#74): power-cycle the GNSS, acquire a fix within gps_timeout_ms,
- *        maintain last-known-good (F-15 backup regs; F8/T2 stale marking), then
- *        return the GPS to full power-off. Feeds the IWDG during acquisition.
- * @param gps_timeout_ms acquisition bound from the power plan
- * @param ttf_ms out: time-to-fix (0 if no fix / wake failed)
- * @retval true  GPS woke and the cycle ran (fix or documented fallback)
- * @retval false wake from standby failed — caller must skip region selection
- */
-static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
+/  
+   @brief F-R1 (#74): power-cycle the GNSS, acquire a fix within gps_timeout_ms,
+          maintain last-known-good (F-15 backup regs; F8/T2 stale marking), then
+          return the GPS to full power-off. Feeds the IWDG during acquisition.
+   @param gps_timeout_ms acquisition bound from the power plan
+   @param ttf_ms out: time-to-fix (0 if no fix / wake failed)
+   @retval true  GPS woke and the cycle ran (fix or documented fallback)
+   @retval false wake from standby failed — caller must skip region selection
+  /
+static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t  ttf_ms)
 {
-  #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
+  #define GNSS_MIN_SATS_FOR_FIX    4      /  Minimum satellites needed for fix  /
   
-  /* Last known GPS position storage (persistent across transmission cycles) */
-  /* F-15 (#72): on first use after boot, restore from backup registers if a
-   * real fix was parked there; only a true cold boot falls back to the
-   * Kansas default. */
+  /  Last known GPS position storage (persistent across transmission cycles)  /
+  /  F-15 (#72): on first use after boot, restore from backup registers if a
+     real fix was parked there; only a true cold boot falls back to the
+     Kansas default.  /
   static float last_valid_lat, last_valid_lon, last_valid_alt;
   static bool have_previous_fix = false;
   static bool last_position_loaded = false;
@@ -950,15 +950,15 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
       have_previous_fix = true;
       SONDE_LOG_STR("GPS: last known position restored from backup regs\r\n");
     } else {
-      last_valid_lat = 39.8283f;   /* Default: Central US (Kansas) */
+      last_valid_lat = 39.8283f;   /  Default: Central US (Kansas)  /
       last_valid_lon = -98.5795f;
       last_valid_alt = 500.0f;
     }
   }
   
-  /* gps_start local; ttf_ms is the out-param */
+  /  gps_start local; ttf_ms is the out-param  /
   uint32_t gps_start = 0;
-  *ttf_ms = 0;  /* Will be updated when fix is obtained */
+   ttf_ms = 0;  /  Will be updated when fix is obtained  /
   
   SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
@@ -968,11 +968,11 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     return false;
   }
 
-    /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
-    /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
-    /* R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
-     * partial sentence must never meet last cycle's sats/hdop/lat/lon.
-     * Last-known-good lives in the last_valid_* statics below. */
+    /  CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences  /
+    /  This prevents reusing data from previous cycle (which would give false 0ms TTF)  /
+    /  R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
+       partial sentence must never meet last cycle's sats/hdop/lat/lon.
+       Last-known-good lives in the last_valid_  statics below.  /
     memset(&hgnss.data, 0, sizeof(hgnss.data));
     SONDE_LOG_STR("GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
     
@@ -980,28 +980,28 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     bool got_fix = false;
     uint32_t last_status_print = 0;
     
-    /* Process GPS data for up to gps_timeout_ms (dynamic based on power mode) */
+    /  Process GPS data for up to gps_timeout_ms (dynamic based on power mode)  /
     while ((HAL_GetTick() - gps_start) < gps_timeout_ms)
     {
-      /* Process DMA buffer - parses NMEA and updates hgnss.data */
+      /  Process DMA buffer - parses NMEA and updates hgnss.data  /
       GNSS_ProcessDMABuffer(&hgnss);
       
-      /* CRITICAL: Refresh watchdog during GPS acquisition to prevent timeout reset */
-      /* GPS can take up to 60s, approaching the 32.76s watchdog timeout */
+      /  CRITICAL: Refresh watchdog during GPS acquisition to prevent timeout reset  /
+      /  GPS can take up to 60s, approaching the 32.76s watchdog timeout  /
       HAL_IWDG_Refresh(&hiwdg);
       
-      /* Check if we have a good quality fix */
+      /  Check if we have a good quality fix  /
       if (GNSS_IsFixGoodQuality(&hgnss))
       {
         got_fix = true;
-        *ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
+         ttf_ms = HAL_GetTick() - gps_start;  /  Capture TTF at moment of fix  /
         
-        /* Convert floats to integers for safe printf (no float support needed) */
-        int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);
-        int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000);
-        int32_t alt_int = (int32_t)(hgnss.data.altitude * 10);
-        int32_t hdop_int = (int32_t)(hgnss.data.hdop * 10);
-        (void)lat_int; (void)lon_int; (void)alt_int; (void)hdop_int;  /* FR-19: log-only in flight */
+        /  Convert floats to integers for safe printf (no float support needed)  /
+        int32_t lat_int = (int32_t)(hgnss.data.latitude   1000000);
+        int32_t lon_int = (int32_t)(hgnss.data.longitude   1000000);
+        int32_t alt_int = (int32_t)(hgnss.data.altitude   10);
+        int32_t hdop_int = (int32_t)(hgnss.data.hdop   10);
+        (void)lat_int; (void)lon_int; (void)alt_int; (void)hdop_int;  /  FR-19: log-only in flight  /
 
         SONDE_LOG("GPS FIX! Lat=%ld.%06ld Lon=%ld.%06ld Alt=%ld.%ldm Sats:%d HDOP=%ld.%ld (took %lums)\r\n",
                  (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
@@ -1010,16 +1010,16 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
                  hgnss.data.satellites,
                  (long)(hdop_int / 10), (long)labs(hdop_int % 10),
                  (unsigned long)ttf_ms);
-        break;  /* Exit early - we have what we need */
+        break;  /  Exit early - we have what we need  /
       }
       
-      /* Print status every 5 seconds during acquisition */
+      /  Print status every 5 seconds during acquisition  /
       uint32_t elapsed = HAL_GetTick() - gps_start;
       if (elapsed - last_status_print >= 5000)
       {
-        /* F27 FIX: integer-only print (no float printf support linked) */
-        int hdop_deci = (int)(hgnss.data.hdop * 10.0f);
-        (void)hdop_deci;  /* FR-19: log-only in flight */
+        /  F27 FIX: integer-only print (no float printf support linked)  /
+        int hdop_deci = (int)(hgnss.data.hdop   10.0f);
+        (void)hdop_deci;  /  FR-19: log-only in flight  /
         SONDE_LOG("[GPS %lus] Sats:%d/%d HDOP:%d.%d Fix:%s\r\n",
                  (unsigned long)(elapsed / 1000),
                  hgnss.data.satellites, hgnss.data.satellites_in_view,
@@ -1028,115 +1028,115 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_status_print = elapsed;
       }
       
-      /* Enter SLEEP mode - CPU halts but peripherals (UART/DMA) continue operating */
-      /* CPU wakes automatically on any interrupt (DMA, SysTick, etc.) */
-      /* This saves ~3-8mA during GPS acquisition compared to busy-wait polling */
+      /  Enter SLEEP mode - CPU halts but peripherals (UART/DMA) continue operating  /
+      /  CPU wakes automatically on any interrupt (DMA, SysTick, etc.)  /
+      /  This saves ~3-8mA during GPS acquisition compared to busy-wait polling  /
       HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
     }
     
     if (!got_fix)
     {
-      /* Check if we have at least basic fix */
+      /  Check if we have at least basic fix  /
       if (GNSS_IsFixValid(&hgnss))
       {
         SONDE_LOG_STR("GPS: Basic fix (not high quality)\r\n");
-        /* Update last known position even for basic fix */
+        /  Update last known position even for basic fix  /
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
-        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
+        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /  F-15 (#72)  /
         have_previous_fix = true;
-        EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
+        EnvSensors_MarkGnssStale(false);  /  F8/T2: fresh data, not stale  /
       }
       else
       {
-        /* GPS timeout - use last known position if available */
+        /  GPS timeout - use last known position if available  /
         if (have_previous_fix)
         {
-          /* F8/T2 (DDR-0007): last-known-good position still flows, but the
-           * GPS-stale bit is set so nothing downstream mistakes it for live. */
+          /  F8/T2 (DDR-0003): last-known-good position still flows, but the
+             GPS-stale bit is set so nothing downstream mistakes it for live.  /
           SONDE_LOG_STR("GPS: Timeout - using last known position (STALE)\r\n");
           hgnss.data.latitude = last_valid_lat;
           hgnss.data.longitude = last_valid_lon;
           hgnss.data.altitude = last_valid_alt;
-          hgnss.data.valid = true;  /* Mark as valid to proceed with transmission */
-          hgnss.data.fix_quality = GNSS_FIX_GPS;  /* Indicate GPS fix type */
+          hgnss.data.valid = true;  /  Mark as valid to proceed with transmission  /
+          hgnss.data.fix_quality = GNSS_FIX_GPS;  /  Indicate GPS fix type  /
           EnvSensors_MarkGnssStale(true);
         }
         else
         {
           SONDE_LOG_STR("GPS: No fix and no previous position - sending zeros\r\n");
-          /* hgnss.data.valid remains false, will send zeros as fallback */
+          /  hgnss.data.valid remains false, will send zeros as fallback  /
         }
       }
     }
     else
     {
-      /* Successful fix - update last known position */
+      /  Successful fix - update last known position  /
       last_valid_lat = hgnss.data.latitude;
       last_valid_lon = hgnss.data.longitude;
       last_valid_alt = hgnss.data.altitude;
-      LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
+      LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /  F-15 (#72)  /
       have_previous_fix = true;
-      EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
-      SysTimeSyncFromGnss();            /* F12 (DDR-0003): epoch seconds */
+      EnvSensors_MarkGnssStale(false);  /  F8/T2: fresh fix, clear stale  /
+      SysTimeSyncFromGnss();            /  F12 (DDR-0013): epoch seconds  /
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
     }
     
-    /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
+    /  Put GPS back to full power-off (0µA) and allow MCU to sleep  /
     GNSS_EnterStandby(&hgnss);
     SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
   return true;
 }
 
-/**
- * @brief F-R1 (#74): H3 region lookup + auto-switch for the current position.
- *        F-06/DDR-0013: deliberately runs on possibly-stale last-known
- *        position (see comment inline). REGION_RESTRICTED sets *rf_silence;
- *        REGION_UNKNOWN keeps the current region and transmits normally.
- */
-static void SelectRegionAndSession(bool *rf_silence)
-{    /* Perform H3lite region lookup if we have a valid fix */
+/  
+   @brief F-R1 (#74): H3 region lookup + auto-switch for the current position.
+          F-06/DDR-0015: deliberately runs on possibly-stale last-known
+          position (see comment inline). REGION_RESTRICTED sets  rf_silence;
+          REGION_UNKNOWN keeps the current region and transmits normally.
+  /
+static void SelectRegionAndSession(bool  rf_silence)
+{    /  Perform H3lite region lookup if we have a valid fix  /
     if (GNSS_IsFixValid(&hgnss) && 
         GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
     {
-      /* Start timing for H3 region lookup */
+      /  Start timing for H3 region lookup  /
       uint32_t h3_start = HAL_GetTick();
       
-      /* F-R4 (#77): ONE geofence resolution per cycle — previously three
-       * (DetectFromGPS_H3 for the name print, latLngToRegion for policy, and
-       * another DetectFromGPS_H3 inside AutoSwitchForLocation). */
+      /  F-R4 (#77): ONE geofence resolution per cycle — previously three
+         (DetectFromGPS_H3 for the name print, latLngToRegion for policy, and
+         another DetectFromGPS_H3 inside AutoSwitchForLocation).  /
       RegionId h3_region_id = latLngToRegion(hgnss.data.latitude, hgnss.data.longitude);
       LoRaMacRegion_t detected_region = MultiRegion_DetectFromH3Region(
           h3_region_id, hgnss.data.latitude, hgnss.data.longitude);
       
-      /* Calculate elapsed time for H3 lookup */
+      /  Calculate elapsed time for H3 lookup  /
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
-      (void)h3_elapsed;  /* FR-19: log-only in flight */
+      (void)h3_elapsed;  /  FR-19: log-only in flight  /
       
-      /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
-       * NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
-       * field in the packed table could never emit 255; ID 15 was repurposed from
-       * the CD900-1A test plan slot. This macro comparison keeps working because
-       * both sides use the same h3lite.h definition.
-       * REGION_UNKNOWN means open ocean or uncovered H3 cells — keep current region and
-       * transmit normally (standard convention over international waters). Previously this
-       * also blocked UNKNOWN, causing the balloon to go silent over every ocean crossing. */
-      /* F-06 (#64), DDR-0013: region selection DELIBERATELY runs on
-       * possibly-stale (last-known) position. Holding the last region across
-       * a GPS gap is intentional and safer than the alternatives: a missed
-       * fix does not mean the sonde teleported, snapping region on a
-       * minutes-old position would be the dangerous action, and going
-       * radio-silent on stale position risks the whole mission. The DDR-0007
-       * GPS-stale bit governs SCIENCE DATA HONESTY, not region selection.
-       * Do not "fix" this without revisiting DDR-0013. */
+      /  BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
+         NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
+         field in the packed table could never emit 255; ID 15 was repurposed from
+         the CD900-1A test plan slot. This macro comparison keeps working because
+         both sides use the same h3lite.h definition.
+         REGION_UNKNOWN means open ocean or uncovered H3 cells — keep current region and
+         transmit normally (standard convention over international waters). Previously this
+         also blocked UNKNOWN, causing the balloon to go silent over every ocean crossing.  /
+      /  F-06 (#64), DDR-0015: region selection DELIBERATELY runs on
+         possibly-stale (last-known) position. Holding the last region across
+         a GPS gap is intentional and safer than the alternatives: a missed
+         fix does not mean the sonde teleported, snapping region on a
+         minutes-old position would be the dangerous action, and going
+         radio-silent on stale position risks the whole mission. The DDR-0003
+         GPS-stale bit governs SCIENCE DATA HONESTY, not region selection.
+         Do not "fix" this without revisiting DDR-0015.  /
       if (h3_region_id == REGION_RESTRICTED) {
-        /* R11 (#56): don't RETURN here — that discarded the sample entirely.
-         * The archive exists precisely for data that can't be transmitted:
-         * use the rf_silence pattern (DDR-0006) — GPS + re-read + flash write
-         * proceed below; only the TX state machine is skipped. */
+        /  R11 (#56): don't RETURN here — that discarded the sample entirely.
+           The archive exists precisely for data that can't be transmitted:
+           use the rf_silence pattern (DDR-0018) — GPS + re-read + flash write
+           proceed below; only the TX state machine is skipped.  /
         SONDE_LOG_STR("RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
-        *rf_silence = true;
+         rf_silence = true;
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
@@ -1144,21 +1144,21 @@ static void SelectRegionAndSession(bool *rf_silence)
         // Do NOT return — continue with current region
       }
       
-      /* Convert floats to integers for printing (safe for all printf implementations) */
-      int32_t lat_int = (int32_t)(hgnss.data.latitude * 1000000);  // 6 decimal places
-      int32_t lon_int = (int32_t)(hgnss.data.longitude * 1000000); // 6 decimal places
+      /  Convert floats to integers for printing (safe for all printf implementations)  /
+      int32_t lat_int = (int32_t)(hgnss.data.latitude   1000000);  // 6 decimal places
+      int32_t lon_int = (int32_t)(hgnss.data.longitude   1000000); // 6 decimal places
 
-      /* #77: shared RegionToString — the open-coded switch is gone */
-      const char* region_name = RegionToString(detected_region);
-      (void)lat_int; (void)lon_int; (void)region_name;  /* FR-19: log-only in flight */
+      /  #77: shared RegionToString — the open-coded switch is gone  /
+      const char  region_name = RegionToString(detected_region);
+      (void)lat_int; (void)lon_int; (void)region_name;  /  FR-19: log-only in flight  /
 
-      /* FR-16 (#97): SONDE_LOG directly — an ungated snprintf still ran in flight */
+      /  FR-16 (#97): SONDE_LOG directly — an ungated snprintf still ran in flight  /
       SONDE_LOG("H3 Region Lookup: Lat=%ld.%06ld Lon=%ld.%06ld -> %s (took %lums)\r\n",
                (long)(lat_int / 1000000), (long)labs(lat_int % 1000000),
                (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
       
-      /* Production: Auto-switch region based on H3lite lookup */
+      /  Production: Auto-switch region based on H3lite lookup  /
       LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchToRegion(detected_region);
       
       if (switch_status == LORAMAC_HANDLER_SUCCESS) {
@@ -1173,37 +1173,37 @@ static void SelectRegionAndSession(bool *rf_silence)
     }
 }
 
-/**
- * @brief F-R1 (#74): archive the freshly-sampled record to the flash ring.
- *        F11: runs AFTER the GPS fix + post-fix sensor re-read so position,
- *        time, and environment describe the same moment. F-07 (#68): bulk
- *        retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
- */
-static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
+/  
+   @brief F-R1 (#74): archive the freshly-sampled record to the flash ring.
+          F11: runs AFTER the GPS fix + post-fix sensor re-read so position,
+          time, and environment describe the same moment. F-07 (#68): bulk
+          retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
+  /
+static void ArchiveSample(sensor_t  sensor_data, uint32_t  now_timestamp,
                           int16_t slope_mv_per_hour, OperatingMode_t current_mode)
 {
-  /* ========== FLASH LOGGING: Store high-resolution data ========== */
-  /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
-   * sensor re-read — so position, time, and environment in a record describe
-   * the same moment. Timestamp is taken fresh at write time. */
-  /* F-07 (#68): only archive genuine, freshly-sampled telemetry records.
-   * OnTxData re-arms this task once per BULK packet (DDR-0011/#34); the bulk
-   * path skips GPS entirely (hgnss.data memset above), so archiving those
-   * passes wrote up to 20 junk records (gnss_valid=0) per bulk cycle —
-   * accelerating ring wrap and burning W25Q + Tier-2 internal-flash erase
-   * cycles (worst case ~33 days to internal-flash endurance). */
+  /  ========== FLASH LOGGING: Store high-resolution data ==========  /
+  /  F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
+     sensor re-read — so position, time, and environment in a record describe
+     the same moment. Timestamp is taken fresh at write time.  /
+  /  F-07 (#68): only archive genuine, freshly-sampled telemetry records.
+     OnTxData re-arms this task once per BULK packet (DDR-0005/#34); the bulk
+     path skips GPS entirely (hgnss.data memset above), so archiving those
+     passes wrote up to 20 junk records (gnss_valid=0) per bulk cycle —
+     accelerating ring wrap and burning W25Q + Tier-2 internal-flash erase
+     cycles (worst case ~33 days to internal-flash endurance).  /
   if (g_tx_state != TX_STATE_BULK_TRANSFER) {
     SONDE_LOG_STR("Logging high-resolution data to flash...\r\n");
-    /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
-     * delta stored in backup regs), NOT boot-relative RTC calendar time.
-     * Before the first GPS fix this falls back to boot-relative seconds —
-     * honest, monotonic, and distinguishable (small values) from epoch. */
-    *now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
-    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data, *now_timestamp,
+    /  R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
+       delta stored in backup regs), NOT boot-relative RTC calendar time.
+       Before the first GPS fix this falls back to boot-relative seconds —
+       honest, monotonic, and distinguishable (small values) from epoch.  /
+     now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
+    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data,  now_timestamp,
                                                              slope_mv_per_hour, (uint8_t)current_mode);
     if (log_status == FLASH_LOG_OK) {
       uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
-      (void)record_count;  /* FR-19: log-only in flight */
+      (void)record_count;  /  FR-19: log-only in flight  /
       SONDE_LOG("Flash log: Written record %lu (total records: %lu)\r\n",
                         record_count, record_count);
     } else {
@@ -1215,12 +1215,12 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
 }
 
 #if ENABLE_DEBUG_LPP
-/**
- * @brief F-R1 (#74): build the CayenneLPP debug payload. Only transmitted when
- *        ENABLE_DEBUG_LPP is set (see SendTxData tail); the build itself stays
- *        unconditional here, exactly as before the extraction.
- */
-static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
+/  
+   @brief F-R1 (#74): build the CayenneLPP debug payload. Only transmitted when
+          ENABLE_DEBUG_LPP is set (see SendTxData tail); the build itself stays
+          unconditional here, exactly as before the extraction.
+  /
+static void BuildDebugLppPayload(const sensor_t  sensor_data, uint32_t ttf_ms,
                                  int16_t slope_mv_per_hour, int16_t time_to_target_signed,
                                  OperatingMode_t current_mode)
 {
@@ -1241,8 +1241,8 @@ static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
   float lat, lon, alt;
   if (sensor_data->gnss_valid) {
     // Convert from binary format back to decimal degrees for Cayenne
-    lat = (sensor_data->latitude * 90.0f) / 8388607.0f;
-    lon = (sensor_data->longitude * 180.0f) / 8388607.0f;
+    lat = (sensor_data->latitude   90.0f) / 8388607.0f;
+    lon = (sensor_data->longitude   180.0f) / 8388607.0f;
     alt = (float)sensor_data->altitudeGps;
     
     SONDE_LOG_STR("GNSS data valid\r\n");
@@ -1287,32 +1287,32 @@ static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
   // Channel 14: Operating mode (0=NORMAL, 1=CONSERVATIVE, 2=REDUCED, 3=RECOVERY, 4=SURVIVAL)
   CayenneLppAddAnalogInput(14, (float)current_mode);
 
-  /* Safe RTT output - use integer conversion for HDOP to avoid float printf issues */
-  int hdop_int = (int)(sensor_data->gnss_hdop * 10);
+  /  Safe RTT output - use integer conversion for HDOP to avoid float printf issues  /
+  int hdop_int = (int)(sensor_data->gnss_hdop   10);
   SONDE_LOG("Cayenne LPP: HDOP=%d.%d TTF=%lums Slope=%+d Time=%d Mode=%d\r\n",
            hdop_int / 10, hdop_int % 10, (unsigned long)ttf_ms,
            slope_mv_per_hour, time_to_target_signed, current_mode);
 }
-#endif  /* ENABLE_DEBUG_LPP */
+#endif  /  ENABLE_DEBUG_LPP  /
 
-/**
- * @brief F-R1 (#74): the adaptive transmit state machine (probe SF10 -> wait
- *        ACK -> bulk transfer -> complete). DDR-0011 confirmed uplinks; D3
- *        (#33) v3 variable-length bulk; F-005/F-006 (#51) watermark semantics.
- *        rf_silence (DDR-0006/R11) parks the machine without transmitting.
- */
-static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestamp,
+/  
+   @brief F-R1 (#74): the adaptive transmit state machine (probe SF10 -> wait
+          ACK -> bulk transfer -> complete). DDR-0005 confirmed uplinks; D3
+          (#33) v3 variable-length bulk; F-005/F-006 (#51) watermark semantics.
+          rf_silence (DDR-0018/R11) parks the machine without transmitting.
+  /
+static void RunTxStateMachine(const sensor_t  sensor_data, uint32_t now_timestamp,
                               int16_t slope_mv_per_hour, OperatingMode_t current_mode,
                               bool rf_silence)
 {
-  /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
+  /  ========== ADAPTIVE TRANSMISSION STRATEGY ==========  /
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
   
-  /* C2 FIX: Reset stale TX states so every timer cycle sends actual data.
-   * If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
-   * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
-   * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData. */
+  /  C2 FIX: Reset stale TX states so every timer cycle sends actual data.
+     If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
+     COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
+     BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData.  /
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
     SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
     g_tx_state = TX_STATE_PROBE_SF10;
@@ -1321,10 +1321,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
   
   SONDE_LOG("Adaptive TX: State=%d\r\n", g_tx_state);
 
-  /* T1 (DDR-0006): RF silence skips the entire transmit state machine —
-   * GPS acquisition and flash logging above have already run. */
+  /  T1 (DDR-0018): RF silence skips the entire transmit state machine —
+     GPS acquisition and flash logging above have already run.  /
   if (rf_silence) {
-    g_tx_state = TX_STATE_PROBE_SF10;  /* keep state machine parked */
+    g_tx_state = TX_STATE_PROBE_SF10;  /  keep state machine parked  /
   } else
   switch (g_tx_state) {
     case TX_STATE_PROBE_SF10:
@@ -1336,9 +1336,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       if (EncodeCompactBinaryPacket(&compact_packet, sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
         
-      /* D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
-       * exact fit there with zero headroom; SF9 buys 42 B for ~2.5 dB link
-       * budget. Elsewhere keep SF10. Resolved per-region via DatarateFromSF. */
+      /  D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
+         exact fit there with zero headroom; SF9 buys 42 B for ~2.5 dB link
+         budget. Elsewhere keep SF10. Resolved per-region via DatarateFromSF.  /
       uint8_t probe_sf = ((LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915) ||
                           (LmHandlerParams.ActiveRegion == LORAMAC_REGION_AU915)) ? 9 : 10;
       LmHandlerSetTxDatarate(DatarateFromSF(probe_sf));
@@ -1347,16 +1347,16 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       LmHandlerAppData_t compactData;
       compactData.Port = LORAWAN_COMPACT_PORT;  // Port 10
       compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
-      compactData.Buffer = (uint8_t*)&compact_packet;
+      compactData.Buffer = (uint8_t )&compact_packet;
       
-      /* DDR-0011 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
-       * No archive opportunity opens without its network ACK (evaluated in
-       * OnTxData via params->AckReceived). LinkCheck no longer rides the probe —
-       * it attaches to the first archive packet (protocol §5.2, §14). */
+      /  DDR-0005 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
+         No archive opportunity opens without its network ACK (evaluated in
+         OnTxData via params->AckReceived). LinkCheck no longer rides the probe —
+         it attaches to the first archive packet (protocol §5.2, §14).  /
       LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
-          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /* Wait for the confirmed-uplink ACK (OnTxData) */
+          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /  Wait for the confirmed-uplink ACK (OnTxData)  /
           SONDE_LOG_STR("Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
           SONDE_LOG("Compact packet send failed (status: %d)\r\n", status);
@@ -1370,11 +1370,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
     }
     
     case TX_STATE_WAIT_PROBE_ACK:
-      /* Should not reach here - stale states are reset above before the switch.
-       * Fall through to PROBE_SF10 as safety fallback. */
+      /  Should not reach here - stale states are reset above before the switch.
+         Fall through to PROBE_SF10 as safety fallback.  /
       SONDE_LOG_STR("WARN: Unexpected WAIT_PROBE_ACK in switch, resetting\r\n");
       g_tx_state = TX_STATE_PROBE_SF10;
-      /* fall through to PROBE_SF10 - will send on next cycle */
+      /  fall through to PROBE_SF10 - will send on next cycle  /
       break;
       
     case TX_STATE_BULK_TRANSFER:
@@ -1389,10 +1389,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
         // first, so MarkRecordsTransmitted advances the watermark correctly)
         FlashLog_Record_t flash_records[6];
         uint32_t record_count;
-        uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
-        /* R2-02 (#106): no entry-watermark pin - the read path may clamp the
-         * watermark (BUG 1.7) under any base pinned here. Commits below are
-         * ABSOLUTE (FlashLog_CommitThrough), derived from record sequences. */
+        uint32_t skipped_count = 0;  /  F-006/R13 (#51): corrupt skips are explicit  /
+        /  R2-02 (#106): no entry-watermark pin - the read path may clamp the
+           watermark (BUG 1.7) under any base pinned here. Commits below are
+           ABSOLUTE (FlashLog_CommitThrough), derived from record sequences.  /
 
         FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
                                                                             flash_records,
@@ -1400,7 +1400,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
                                                                             &record_count,
                                                                             &skipped_count);
         if (skipped_count > 0) {
-          /* DDR-0007: a skipped record is visible, not silent */
+          /  DDR-0003: a skipped record is visible, not silent  /
           SONDE_LOG("Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
                             (unsigned long)skipped_count);
         }
@@ -1409,32 +1409,32 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           SONDE_LOG("Retrieved %lu unsent records from flash\r\n", record_count);
           
           // Convert flash records to high-res format for bulk packet
-          /* F10 FIX: Failed conversion => skip that record entirely.
-           * Previously the loop logged a warning and still packed the record
-           * (zero-filled) — fabricated data transmitted as science.
-           * A gap is honest; fabricated data is not. */
+          /  F10 FIX: Failed conversion => skip that record entirely.
+             Previously the loop logged a warning and still packed the record
+             (zero-filled) — fabricated data transmitted as science.
+             A gap is honest; fabricated data is not.  /
           HighResTelemetryRecord_t highres_records[6];
-          uint32_t highres_seqs[6];   /* FR-07 (#87): per-record explicit identity */
+          uint32_t highres_seqs[6];   /  FR-07 (#87): per-record explicit identity  /
           uint8_t packed_count = 0;
           for (uint32_t i = 0; i < record_count && i < 6; i++) {
             if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count],
                                          slope_mv_per_hour, current_mode)) {
               SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
-              continue;  /* Skip bad record, keep packing the rest */
+              continue;  /  Skip bad record, keep packing the rest  /
             }
             highres_seqs[packed_count] = flash_records[i].sequence;
             packed_count++;
           }
 
           if (packed_count == 0) {
-            /* R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL
-             * consumed batch, not just the corrupt skips: a record that reads
-             * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
-             * unconvertible — leaving it pending re-probes it forever and
-             * wedges bulk transfer. Positional mark covers corrupt + read. */
-            /* R2-02 (#106): absolute retire point. Read probes are consecutive
-             * sequences from the (post-clamp) watermark, so when nothing read
-             * clean the corrupt run spans watermark..watermark+skipped-1. */
+            /  R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL
+               consumed batch, not just the corrupt skips: a record that reads
+               CRC-clean but fails ConvertFlashLogToHighRes is deterministically
+               unconvertible — leaving it pending re-probes it forever and
+               wedges bulk transfer. Positional mark covers corrupt + read.  /
+            /  R2-02 (#106): absolute retire point. Read probes are consecutive
+               sequences from the (post-clamp) watermark, so when nothing read
+               clean the corrupt run spans watermark..watermark+skipped-1.  /
             uint32_t retire_through = (record_count > 0)
                 ? flash_records[record_count - 1].sequence + 1U
                 : hflashlog.last_transmitted_sequence + skipped_count;
@@ -1451,17 +1451,17 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
           LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
 
-          /* D3 (#33) + FR-07 (#87): wire v5 variable-length bulk (packet_type
-           * 0x05, per-record explicit sequence). Query the runtime payload
-           * budget (current DR + pending FOpts, protocol §11) and pack only
-           * complete records that fit. Records that don't fit stay pending
-           * for the next cycle (stable identity, DDR-0011). */
+          /  D3 (#33) + FR-07 (#87): wire v5 variable-length bulk (packet_type
+             0x05, per-record explicit sequence). Query the runtime payload
+             budget (current DR + pending FOpts, protocol §11) and pack only
+             complete records that fit. Records that don't fit stay pending
+             for the next cycle (stable identity, DDR-0005).  /
           LoRaMacTxInfo_t txInfo;
           uint16_t max_payload = 0;
           for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
-            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE),
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V5_OVERHEAD + try_n   BULK_V5_RECORD_WIRE),
                                        &txInfo) == LORAMAC_STATUS_OK) {
-              max_payload = (uint16_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE);
+              max_payload = (uint16_t)(BULK_V5_OVERHEAD + try_n   BULK_V5_RECORD_WIRE);
               break;
             }
           }
@@ -1471,7 +1471,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             break;
           }
 
-          uint8_t v5_buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
+          uint8_t v5_buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS   BULK_V5_RECORD_WIRE];
           uint8_t v5_packed = 0;
           uint16_t v5_len = 0;
 
@@ -1479,12 +1479,12 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
                                  highres_records, highres_seqs, packed_count,
                                  &v5_packed, &v5_len)) {
 
-            /* DDR-0011 (#34): archive packets are CONFIRMED uplinks. The FIRST
-             * archive packet of a burst carries LinkCheckReq (protocol §5.2);
-             * records commit only on network ACK (OnTxData). */
+            /  DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
+               archive packet of a burst carries LinkCheckReq (protocol §5.2);
+               records commit only on network ACK (OnTxData).  /
             if (g_bulk_packets_sent == 0) {
               LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
-              (void)lc_status;  /* FR-19: log-only in flight; the call has the side effect */
+              (void)lc_status;  /  FR-19: log-only in flight; the call has the side effect  /
               SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
             }
 
@@ -1501,17 +1501,17 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
               
-              /* F-005/R21 (#51) + FR-08 (#91): positional commit point. The
-               * old arithmetic (packed + skipped) was only correct when every
-               * skip sat before the packing cut — a trailing corrupt record
-               * plus a truncating budget committed a record that was never
-               * transmitted. Now: everything from the entry watermark through
-               * the last PACKED record's own sequence is consumed (packed
-               * records + any corrupt slots below them); records read but cut
-               * by the budget stay pending. The exact-identity ack lands with
-               * the confirmed-delivery rework (#34).
-               * R2-02 (#106): the commit point is ABSOLUTE - not a count vs a
-               * base the read path may have clamped. */
+              /  F-005/R21 (#51) + FR-08 (#91): positional commit point. The
+                 old arithmetic (packed + skipped) was only correct when every
+                 skip sat before the packing cut — a trailing corrupt record
+                 plus a truncating budget committed a record that was never
+                 transmitted. Now: everything from the entry watermark through
+                 the last PACKED record's own sequence is consumed (packed
+                 records + any corrupt slots below them); records read but cut
+                 by the budget stay pending. The exact-identity ack lands with
+                 the confirmed-delivery rework (#34).
+                 R2-02 (#106): the commit point is ABSOLUTE - not a count vs a
+                 base the read path may have clamped.  /
               if (v5_packed != record_count) {
                 SONDE_LOG("WARN: packed %u of %lu read - marking through seq %lu only\r\n",
                                   v5_packed, (unsigned long)record_count,
@@ -1565,30 +1565,30 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
 
 static void SendTxData(void)
 {
-  /* USER CODE BEGIN SendTxData_1 */
-  Deadman_MarkProgress();  /* F13a: a work cycle provably started */
+  /  USER CODE BEGIN SendTxData_1  /
+  Deadman_MarkProgress();  /  F13a: a work cycle provably started  /
 
-  /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
+  /  ========== POWER MANAGEMENT — decide half (R47, #44) ==========  /
   static VoltageSlope_t voltage_slope = {0};
 
   // Read current sensor data for temperature
-  sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
+  sensor_t sensor_data = {0};  /  #35: zero-init — uninitialized members were archived as authentic  /
   EnvSensors_Read(&sensor_data);
-  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
+  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /  D8 (#59): pressure-trend float detection, each work cycle  /
   float temperature_c = sensor_data.temperature;
 
   // Read raw voltages
   uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
   uint16_t solar_mv = SYS_GetSolarVoltage();
-  (void)solar_mv;  /* FR-19: log-only in flight */
+  (void)solar_mv;  /  FR-19: log-only in flight  /
 
   // Use RTC-based time that continues during STOP2 sleep
   uint16_t ms_unused;
   uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
 
-  /* R47: mode selection, slope/prediction, GPS temperature lockout and the
-   * RF-silence veto all live in the pure decide half (transmit_plan.c) —
-   * host-testable with zero hardware. The plan records WHY, not just THAT. */
+  /  R47: mode selection, slope/prediction, GPS temperature lockout and the
+     RF-silence veto all live in the pure decide half (transmit_plan.c) —
+     host-testable with zero hardware. The plan records WHY, not just THAT.  /
   TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
                                            temperature_c, sensor_data.temp_stale != 0,
                                            now_timestamp,
@@ -1600,7 +1600,7 @@ static void SendTxData(void)
   int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
   int16_t time_to_target_signed = plan.time_to_target_h;
   uint16_t battery_mv_normalized = plan.battery_mv_normalized;
-  (void)battery_mv_normalized;  /* FR-19: log-only in flight */
+  (void)battery_mv_normalized;  /  FR-19: log-only in flight  /
 
   // Update timer interval if changed
   UTIL_TIMER_Stop(&TxTimer);
@@ -1608,10 +1608,10 @@ static void SendTxData(void)
   UTIL_TIMER_Start(&TxTimer);
   
   // Log power management status
-  /* F27 FIX: integer-only print (no float printf support linked) */
-  int temp_deci_pm = (int)(temperature_c * 10.0f);
-  (void)temp_deci_pm;  /* FR-19: log-only in flight */
-  /* FR-16 (#97): ungated snprintf+STR pairs still executed in flight builds */
+  /  F27 FIX: integer-only print (no float printf support linked)  /
+  int temp_deci_pm = (int)(temperature_c   10.0f);
+  (void)temp_deci_pm;  /  FR-19: log-only in flight  /
+  /  FR-16 (#97): ungated snprintf+STR pairs still executed in flight builds  /
   SONDE_LOG("\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
            temp_deci_pm / 10, abs(temp_deci_pm % 10),
            battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
@@ -1627,23 +1627,23 @@ static void SendTxData(void)
   SONDE_LOG("Mode=%s GPS=%s ===\r\n",
            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
   
-  /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
-   * (see below). Previously the record was written here with the PREVIOUS
-   * cycle's position and the CURRENT timestamp — the whole track was
-   * spatially stale by one interval. */
+  /  F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
+     (see below). Previously the record was written here with the PREVIOUS
+     cycle's position and the CURRENT timestamp — the whole track was
+     spatially stale by one interval.  /
 
-  /* ========== END POWER MANAGEMENT ========== */
+  /  ========== END POWER MANAGEMENT ==========  /
   
-  /* T1 ladder (DDR-0006): rejoin is a COMMISSIONING-ONLY operation.
-   * In FLIGHT, an invalid session means RF silence — keep flying the profile
-   * (GPS + flash logging below), skip only the transmission. */
+  /  T1 ladder (DDR-0018): rejoin is a COMMISSIONING-ONLY operation.
+     In FLIGHT, an invalid session means RF silence — keep flying the profile
+     (GPS + flash logging below), skip only the transmission.  /
   bool rf_silence = false;
   if (LmHandlerJoinStatus() != LORAMAC_HANDLER_SET)
   {
     if (MissionState_IsCommissioning()) {
       SONDE_LOG_STR("SendTxData: Not joined yet, triggering join retry...\r\n");
       LmHandlerJoin(ActivationType, true);
-      return; /* Exit - will send data after join succeeds */
+      return; /  Exit - will send data after join succeeds  /
     }
     rf_silence = true;
     SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
@@ -1651,39 +1651,39 @@ static void SendTxData(void)
 
   SONDE_LOG_STR("\r\n=== SendTxData START ===\r\n");
 
-  /* ========== GPS POWER-CYCLING MODE ========== */
-  /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
-   * is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
-   * flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
-   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected. */
+  /  ========== GPS POWER-CYCLING MODE ==========  /
+  /  FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
+     is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
+     flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
+     sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected.  /
   // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
   
-  /* Declare ttf_ms at function scope so it's available for telemetry */
+  /  Declare ttf_ms at function scope so it's available for telemetry  /
   uint32_t ttf_ms = 0;
   
   // Check if GPS is disabled by power management or bulk transfer mode
   // C7a FIX: Skip GPS during bulk transfer - we're sending cached flash data, not live telemetry
   if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
-    /* GPS disabled - skip acquisition */
+    /  GPS disabled - skip acquisition  /
     if (g_tx_state == TX_STATE_BULK_TRANSFER) {
       SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
     } else {
       SONDE_LOG_STR("GPS disabled by power management - skipping acquisition\r\n");
     }
-    /* R31 (#57): FULL invalidation before/without acquisition — clear all of
-     * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
-     * The GGA parser skips empty tokens, so a partial sentence must never meet
-     * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
+    /  R31 (#57): FULL invalidation before/without acquisition — clear all of
+       hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
+       The GGA parser skips empty tokens, so a partial sentence must never meet
+       last cycle's fields. Last-known-good lives in the last_valid_  statics.  /
     memset(&hgnss.data, 0, sizeof(hgnss.data));
     ttf_ms = 0;  // No GPS acquisition performed
   } else {
   
   #ifdef GPS_DISABLED_FOR_TESTING
   
-  /* Use fake GPS data for testing MCU sleep mode */
+  /  Use fake GPS data for testing MCU sleep mode  /
   SONDE_LOG_STR("GPS DISABLED FOR TESTING - using fake coordinates\r\n");
   
-  /* Simulate GPS fix data */
+  /  Simulate GPS fix data  /
   hgnss.data.valid = true;
   hgnss.data.fix_quality = GNSS_FIX_GPS;
   hgnss.data.latitude = 39.8283;    // Geographic center of contiguous USA (Kansas)
@@ -1692,19 +1692,19 @@ static void SendTxData(void)
   hgnss.data.satellites = 8;
   hgnss.data.hdop = 1.2f;
   
-  ttf_ms = 0;  /* No actual fix acquired */
+  ttf_ms = 0;  /  No actual fix acquired  /
   
   SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
   
   #else  
-  /* F-R1 (#74): acquisition and region selection are extracted phases. */
+  /  F-R1 (#74): acquisition and region selection are extracted phases.  /
   if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {
     SelectRegionAndSession(&rf_silence);
   }
   
-  #endif  /* GPS_DISABLED_FOR_TESTING */
-  }  /* End of else block for gps_enabled_by_power_mgmt */
-  /* Add separator before continuing to telemetry */
+  #endif  /  GPS_DISABLED_FOR_TESTING  /
+  }  /  End of else block for gps_enabled_by_power_mgmt  /
+  /  Add separator before continuing to telemetry  /
   SONDE_LOG_STR("\r\n");
   
   // CRITICAL: fold in the fresh GPS fix acquired above.
@@ -1719,7 +1719,7 @@ static void SendTxData(void)
   #endif
 
   RunTxStateMachine(&sensor_data, now_timestamp, slope_mv_per_hour, current_mode, rf_silence);
-  /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */
+  /  ========== LEGACY: Also send CayenneLPP for debug (during development) ==========  /
   #if ENABLE_DEBUG_LPP
   static uint32_t tx_count = 0;
   tx_count++;
@@ -1746,9 +1746,9 @@ static void SendTxData(void)
   }
   #endif
   
-  /* ========== END ADAPTIVE TRANSMISSION STRATEGY ========== */
+  /  ========== END ADAPTIVE TRANSMISSION STRATEGY ==========  /
   
-  /* ========== DEBUG: Queue detailed GNSS packet (compile-time controlled) ========== */
+  /  ========== DEBUG: Queue detailed GNSS packet (compile-time controlled) ==========  /
   #if ENABLE_GNSS_DETAIL_PACKET
   static uint32_t gnss_tx_count = 0;
   gnss_tx_count++;
@@ -1767,7 +1767,7 @@ static void SendTxData(void)
                gnss_packet_size, hgnss.extended.gps_count,
                hgnss.extended.beidou_count, hgnss.extended.glonass_count);
       
-      /* Push to queue - will be sent after RX windows complete */
+      /  Push to queue - will be sent after RX windows complete  /
       if (PacketQueue_Push(&g_packet_queue, gnss_detail_buffer, gnss_packet_size, LORAWAN_GNSS_DETAIL_PORT))
       {
         SONDE_LOG("GNSS packet queued (queue size: %d)\r\n",
@@ -1792,48 +1792,48 @@ static void SendTxData(void)
   #endif
   
   SONDE_LOG_STR("=== SendTxData END ===\r\n");
-  /* USER CODE END SendTxData_1 */
+  /  USER CODE END SendTxData_1  /
 }
 
-static void OnTxTimerEvent(void *context)
+static void OnTxTimerEvent(void  context)
 {
-  /* USER CODE BEGIN OnTxTimerEvent_1 */
-  SONDE_LOG_STR("\r\n*** OnTxTimerEvent FIRED ***\r\n");
-  /* USER CODE END OnTxTimerEvent_1 */
+  /  USER CODE BEGIN OnTxTimerEvent_1  /
+  SONDE_LOG_STR("\r\n    OnTxTimerEvent FIRED    \r\n");
+  /  USER CODE END OnTxTimerEvent_1  /
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
 
-  /*Wait for next tx slot*/
+  / Wait for next tx slot /
   UTIL_TIMER_Start(&TxTimer);
-  /* USER CODE BEGIN OnTxTimerEvent_2 */
+  /  USER CODE BEGIN OnTxTimerEvent_2  /
   SONDE_LOG_STR("Timer restarted for next cycle\r\n");
-  /* USER CODE END OnTxTimerEvent_2 */
+  /  USER CODE END OnTxTimerEvent_2  /
 }
 
-/* USER CODE BEGIN PrFD_LedEvents */
+/  USER CODE BEGIN PrFD_LedEvents  /
 
-/* USER CODE END PrFD_LedEvents */
+/  USER CODE END PrFD_LedEvents  /
 
-static void OnTxData(LmHandlerTxParams_t *params)
+static void OnTxData(LmHandlerTxParams_t  params)
 {
-  /* USER CODE BEGIN OnTxData_1 */
+  /  USER CODE BEGIN OnTxData_1  /
   SONDE_LOG("\r\nOnTxData: Status=%d DR=%d Ch=%lu FCnt=%lu\r\n",
                     params->Status, params->Datarate,
                     (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
   
-  /* CRITICAL: Capture context after successful TX (not before region switch) */
-  /* This ensures correct DevAddr, FCnt, and session state are saved */
+  /  CRITICAL: Capture context after successful TX (not before region switch)  /
+  /  This ensures correct DevAddr, FCnt, and session state are saved  /
   if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
     MultiRegion_SaveCurrentContext();
   }
 
-  /* DDR-0011 (#34): delivery commit requires the NETWORK acknowledgement of a
-   * confirmed uplink — never bare radio-TX completion (F-004/N-04). Records
-   * without an ACK stay pending and are retransmitted later; the backend
-   * deduplicates by (device, base_seq + i). */
+  /  DDR-0005 (#34): delivery commit requires the NETWORK acknowledgement of a
+     confirmed uplink — never bare radio-TX completion (F-004/N-04). Records
+     without an ACK stay pending and are retransmitted later; the backend
+     deduplicates by (device, base_seq + i).  /
   if (g_bulk_commit_through > 0) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      /* R2-02 (#106): absolute commit - cannot over-advance even if the
-       * read path clamped the watermark after this batch was read. */
+      /  R2-02 (#106): absolute commit - cannot over-advance even if the
+         read path clamped the watermark after this batch was read.  /
       FlashLog_CommitThrough(&hflashlog, g_bulk_commit_through);
       SONDE_LOG("OnTxData: ACK received — archive committed through seq %lu\r\n",
                         (unsigned long)g_bulk_commit_through);
@@ -1845,8 +1845,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
     g_bulk_commit_through = 0;
   }
 
-  /* DDR-0011 (#34): the confirmed probe heartbeat opens the archive opportunity.
-   * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
+  /  DDR-0005 (#34): the confirmed probe heartbeat opens the archive opportunity.
+     No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15).  /
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       uint16_t battery_mv = SYS_GetBatteryVoltage();
@@ -1870,8 +1870,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
     }
   }
 
-  /* DDR-0011 (#34): burst continues only while archive packets are ACKed
-   * (protocol §5.3). First archive packet unACKed -> immediate fallback. */
+  /  DDR-0005 (#34): burst continues only while archive packets are ACKed
+     (protocol §5.3). First archive packet unACKed -> immediate fallback.  /
   if (g_tx_state == TX_STATE_BULK_TRANSFER &&
       g_bulk_packets_sent >= 1 && !params->AckReceived) {
     SONDE_LOG_STR("Archive packet unACKed — FALLBACK to heartbeat mode\r\n");
@@ -1879,8 +1879,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
     g_bulk_packets_sent = 0;
   }
   
-  /* Drain packet queue after RX windows complete */
-  /* This callback fires AFTER RX2 window closes, so MAC is ready for next TX */
+  /  Drain packet queue after RX windows complete  /
+  /  This callback fires AFTER RX2 window closes, so MAC is ready for next TX  /
   if (!PacketQueue_IsEmpty(&g_packet_queue))
   {
     PacketQueueEntry_t entry;
@@ -1892,20 +1892,20 @@ static void OnTxData(LmHandlerTxParams_t *params)
       queuedData.Buffer = entry.buffer;
       
       LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-      (void)queue_status;  /* FR-19: log-only in flight; the call has the side effect */
+      (void)queue_status;  /  FR-19: log-only in flight; the call has the side effect  /
       SONDE_LOG("OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
                         entry.port, entry.size, queue_status, g_packet_queue.count);
     }
   }
   
-  /* C7b FIX: Continue bulk transfer if active - re-arm send task for next packet.
-   * After TX+RX windows complete, if we're still in BULK_TRANSFER with data remaining,
-   * schedule another SendTxData call to send the next bulk packet immediately.
-   * FR-14 (#88): EXCEPT for the first archive packet — its continuation is
-   * decided by OnRxData's LinkCheck evaluation, which runs after us. Re-arming
-   * here for packet 1 raced that evaluation: a poor-link COMPLETE verdict
-   * reset to PROBE_SF10 while our task was already armed, producing a
-   * spurious full work cycle (GPS power-up, sensor reads, archive write). */
+  /  C7b FIX: Continue bulk transfer if active - re-arm send task for next packet.
+     After TX+RX windows complete, if we're still in BULK_TRANSFER with data remaining,
+     schedule another SendTxData call to send the next bulk packet immediately.
+     FR-14 (#88): EXCEPT for the first archive packet — its continuation is
+     decided by OnRxData's LinkCheck evaluation, which runs after us. Re-arming
+     here for packet 1 raced that evaluation: a poor-link COMPLETE verdict
+     reset to PROBE_SF10 while our task was already armed, producing a
+     spurious full work cycle (GPS power-up, sensor reads, archive write).  /
   if (g_tx_state == TX_STATE_BULK_TRANSFER &&
       g_bulk_packets_sent > 1 &&
       FlashLog_HasUnsentData(&hflashlog) &&
@@ -1917,12 +1917,12 @@ static void OnTxData(LmHandlerTxParams_t *params)
     g_tx_state = TX_STATE_COMPLETE;
     g_bulk_packets_sent = 0;
   }
-  /* USER CODE END OnTxData_1 */
+  /  USER CODE END OnTxData_1  /
 }
 
-static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
+static void OnJoinRequest(LmHandlerJoinParams_t  joinParams)
 {
-  /* USER CODE BEGIN OnJoinRequest_1 */
+  /  USER CODE BEGIN OnJoinRequest_1  /
   SONDE_LOG_STR("\r\n=== OnJoinRequest Callback ===\r\n");
   SONDE_LOG("  Status: %s (%d)\r\n",
            (joinParams->Status == LORAMAC_HANDLER_SUCCESS) ? "SUCCESS" : "FAILED",
@@ -1936,14 +1936,14 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
   {
     SONDE_LOG_STR("JOIN SUCCESS!\r\n");
     
-    /* Set flag for multi-region pre-join */
+    /  Set flag for multi-region pre-join  /
     g_multiregion_join_success = true;
     
-    /* ONLY start timer if NOT in pre-join mode */
+    /  ONLY start timer if NOT in pre-join mode  /
     if (g_multiregion_in_prejoin) {
       SONDE_LOG_STR("Pre-join mode: Skipping Tx timer start\r\n");
     } else {
-      /* Start the Tx timer now that we're joined */
+      /  Start the Tx timer now that we're joined  /
       if (EventType == TX_ON_TIMER)
       {
         SONDE_LOG_STR("Restarting Tx timer after rejoin...\r\n");
@@ -1957,111 +1957,111 @@ static void OnJoinRequest(LmHandlerJoinParams_t *joinParams)
     SONDE_LOG_STR("JOIN FAILED - will retry on next timer event\r\n");
     g_multiregion_join_success = false;
   }
-  /* USER CODE END OnJoinRequest_1 */
+  /  USER CODE END OnJoinRequest_1  /
 }
 
-static void OnBeaconStatusChange(LmHandlerBeaconParams_t *params)
+static void OnBeaconStatusChange(LmHandlerBeaconParams_t  params)
 {
-  /* USER CODE BEGIN OnBeaconStatusChange_1 */
-  /* USER CODE END OnBeaconStatusChange_1 */
+  /  USER CODE BEGIN OnBeaconStatusChange_1  /
+  /  USER CODE END OnBeaconStatusChange_1  /
 }
 
 static void OnSysTimeUpdate(void)
 {
-  /* USER CODE BEGIN OnSysTimeUpdate_1 */
+  /  USER CODE BEGIN OnSysTimeUpdate_1  /
 
-  /* USER CODE END OnSysTimeUpdate_1 */
+  /  USER CODE END OnSysTimeUpdate_1  /
 }
 
 static void OnClassChange(DeviceClass_t deviceClass)
 {
-  /* USER CODE BEGIN OnClassChange_1 */
-  /* USER CODE END OnClassChange_1 */
+  /  USER CODE BEGIN OnClassChange_1  /
+  /  USER CODE END OnClassChange_1  /
 }
 
 static void OnMacProcessNotify(void)
 {
-  /* USER CODE BEGIN OnMacProcessNotify_1 */
-  /* NOTE: Do NOT refresh the watchdog here - this runs in IRQ context and
-   * refreshing from an interrupt would defeat the watchdog's purpose
-   * (a hung main loop with live radio IRQs would never reset) */
-  /* USER CODE END OnMacProcessNotify_1 */
+  /  USER CODE BEGIN OnMacProcessNotify_1  /
+  /  NOTE: Do NOT refresh the watchdog here - this runs in IRQ context and
+     refreshing from an interrupt would defeat the watchdog's purpose
+     (a hung main loop with live radio IRQs would never reset)  /
+  /  USER CODE END OnMacProcessNotify_1  /
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LmHandlerProcess), CFG_SEQ_Prio_0);
 
-  /* USER CODE BEGIN OnMacProcessNotify_2 */
+  /  USER CODE BEGIN OnMacProcessNotify_2  /
 
-  /* USER CODE END OnMacProcessNotify_2 */
+  /  USER CODE END OnMacProcessNotify_2  /
 }
 
 static void OnTxPeriodicityChanged(uint32_t periodicity)
 {
-  /* USER CODE BEGIN OnTxPeriodicityChanged_1 */
+  /  USER CODE BEGIN OnTxPeriodicityChanged_1  /
 
-  /* USER CODE END OnTxPeriodicityChanged_1 */
+  /  USER CODE END OnTxPeriodicityChanged_1  /
   TxPeriodicity = periodicity;
 
   if (TxPeriodicity == 0)
   {
-    /* Revert to application default periodicity */
+    /  Revert to application default periodicity  /
     TxPeriodicity = APP_TX_DUTYCYCLE;
   }
 
-  /* Update timer periodicity */
+  /  Update timer periodicity  /
   UTIL_TIMER_Stop(&TxTimer);
   UTIL_TIMER_SetPeriod(&TxTimer, TxPeriodicity);
   UTIL_TIMER_Start(&TxTimer);
-  /* USER CODE BEGIN OnTxPeriodicityChanged_2 */
+  /  USER CODE BEGIN OnTxPeriodicityChanged_2  /
 
-  /* USER CODE END OnTxPeriodicityChanged_2 */
+  /  USER CODE END OnTxPeriodicityChanged_2  /
 }
 
 static void OnTxFrameCtrlChanged(LmHandlerMsgTypes_t isTxConfirmed)
 {
-  /* USER CODE BEGIN OnTxFrameCtrlChanged_1 */
+  /  USER CODE BEGIN OnTxFrameCtrlChanged_1  /
 
-  /* USER CODE END OnTxFrameCtrlChanged_1 */
+  /  USER CODE END OnTxFrameCtrlChanged_1  /
   LmHandlerParams.IsTxConfirmed = isTxConfirmed;
-  /* USER CODE BEGIN OnTxFrameCtrlChanged_2 */
+  /  USER CODE BEGIN OnTxFrameCtrlChanged_2  /
 
-  /* USER CODE END OnTxFrameCtrlChanged_2 */
+  /  USER CODE END OnTxFrameCtrlChanged_2  /
 }
 
 static void OnPingSlotPeriodicityChanged(uint8_t pingSlotPeriodicity)
 {
-  /* USER CODE BEGIN OnPingSlotPeriodicityChanged_1 */
+  /  USER CODE BEGIN OnPingSlotPeriodicityChanged_1  /
 
-  /* USER CODE END OnPingSlotPeriodicityChanged_1 */
+  /  USER CODE END OnPingSlotPeriodicityChanged_1  /
   LmHandlerParams.PingSlotPeriodicity = pingSlotPeriodicity;
-  /* USER CODE BEGIN OnPingSlotPeriodicityChanged_2 */
+  /  USER CODE BEGIN OnPingSlotPeriodicityChanged_2  /
 
-  /* USER CODE END OnPingSlotPeriodicityChanged_2 */
+  /  USER CODE END OnPingSlotPeriodicityChanged_2  /
 }
 
 static void OnSystemReset(void)
 {
-  /* USER CODE BEGIN OnSystemReset_1 */
+  /  USER CODE BEGIN OnSystemReset_1  /
 
-  /* USER CODE END OnSystemReset_1 */
+  /  USER CODE END OnSystemReset_1  /
   if ((LORAMAC_HANDLER_SUCCESS == LmHandlerHalt()) && (LmHandlerJoinStatus() == LORAMAC_HANDLER_SET))
   {
     NVIC_SystemReset();
   }
-  /* USER CODE BEGIN OnSystemReset_Last */
+  /  USER CODE BEGIN OnSystemReset_Last  /
 
-  /* USER CODE END OnSystemReset_Last */
+  /  USER CODE END OnSystemReset_Last  /
 }
 
-/* F24 FIX: StopJoin() and OnStopJoinTimerEvent() deleted. The SOS button EXTI
- * was dead (PB3 reconfigured to analog for solar), and the OTAA<->ABP flip
- * plus unconditional rejoin would be dangerous if ever triggered in flight. */
+/  F24 FIX: StopJoin() and OnStopJoinTimerEvent() deleted. The SOS button EXTI
+   was dead (PB3 reconfigured to analog for solar), and the OTAA<->ABP flip
+   plus unconditional rejoin would be dangerous if ever triggered in flight.  /
 
 static void StoreContext(void)
 {
   LmHandlerErrorStatus_t status = LORAMAC_HANDLER_ERROR;
 
-  /* USER CODE BEGIN StoreContext_1 */
+  /  USER CODE BEGIN StoreContext_1  /
 
-  /* USER CODE END StoreContext_1 */
+  /  USER CODE END StoreContext_1  /
   status = LmHandlerNvmDataStore();
 
   if (status == LORAMAC_HANDLER_NVM_DATA_UP_TO_DATE)
@@ -2072,16 +2072,16 @@ static void StoreContext(void)
   {
     APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORE FAILED\r\n");
   }
-  /* USER CODE BEGIN StoreContext_Last */
+  /  USER CODE BEGIN StoreContext_Last  /
 
-  /* USER CODE END StoreContext_Last */
+  /  USER CODE END StoreContext_Last  /
 }
 
 static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
 {
-  /* USER CODE BEGIN OnNvmDataChange_1 */
+  /  USER CODE BEGIN OnNvmDataChange_1  /
 
-  /* USER CODE END OnNvmDataChange_1 */
+  /  USER CODE END OnNvmDataChange_1  /
   if (state == LORAMAC_HANDLER_NVM_STORE)
   {
     APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA STORED\r\n");
@@ -2090,48 +2090,48 @@ static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
   {
     APP_LOG(TS_OFF, VLEVEL_M, "NVM DATA RESTORED\r\n");
   }
-  /* USER CODE BEGIN OnNvmDataChange_Last */
+  /  USER CODE BEGIN OnNvmDataChange_Last  /
 
-  /* USER CODE END OnNvmDataChange_Last */
+  /  USER CODE END OnNvmDataChange_Last  /
 }
 
-/* F-016 (#54): two-slot transactional NVM context persistence, matching the
- * proven Tier-2 ping-pong pattern (T1/FW-1). Slot A = page 126, slot B =
- * page 127 (the retired legacy store, repurposed). Each slot carries
- * magic/length/generation/CRC; newest valid generation wins. A torn write
- * can only kill the slot being written — the other survives. */
-#define NVM_SLOT_MAGIC    0x4E564D43UL  /* "NVMC" */
+/  F-016 (#54): two-slot transactional NVM context persistence, matching the
+   proven Tier-2 ping-pong pattern (T1/FW-1). Slot A = page 126, slot B =
+   page 127 (the retired legacy store, repurposed). Each slot carries
+   magic/length/generation/CRC; newest valid generation wins. A torn write
+   can only kill the slot being written — the other survives.  /
+#define NVM_SLOT_MAGIC    0x4E564D43UL  /  "NVMC"  /
 #define NVM_SLOT_A_ADDR   LORAWAN_NVM_BASE_ADDRESS
-#define NVM_SLOT_B_ADDR   ((void *)((uint32_t)LORAWAN_NVM_BASE_ADDRESS + FLASH_PAGE_SIZE))
+#define NVM_SLOT_B_ADDR   ((void  )((uint32_t)LORAWAN_NVM_BASE_ADDRESS + FLASH_PAGE_SIZE))
 
 typedef struct {
   uint32_t magic;
   uint32_t generation;
   uint32_t length;
-  uint32_t crc32;      /* over the payload only */
+  uint32_t crc32;      /  over the payload only  /
 } NvmSlotHeader_t;
 
 static uint32_t g_nvm_generation = 0;
 
-/* FR-03 (#85): ST passes two DIFFERENT lengths for the same object —
- * store gets (sizeof(LoRaMacNvmData_t)+7)&~7 (measured 1496), restore gets
- * sizeof(LoRaMacNvmData_t) (1492). The header/CRC must use the LOGICAL
- * length so both sides agree; only the physical flash write needs the
- * 64-bit-padded length. These asserts pin that contract at compile time. */
+/  FR-03 (#85): ST passes two DIFFERENT lengths for the same object —
+   store gets (sizeof(LoRaMacNvmData_t)+7)&~7 (measured 1496), restore gets
+   sizeof(LoRaMacNvmData_t) (1492). The header/CRC must use the LOGICAL
+   length so both sides agree; only the physical flash write needs the
+   64-bit-padded length. These asserts pin that contract at compile time.  /
 _Static_assert(sizeof(NvmSlotHeader_t) % 8U == 0U, "NVM slot header must be 8-byte aligned");
 _Static_assert(((sizeof(LoRaMacNvmData_t) + 7U) & ~7U) + sizeof(NvmSlotHeader_t) <= FLASH_PAGE_SIZE,
                "padded NVM payload + header must fit one flash page");
 
-static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
+static void OnStoreContextRequest(void  nvm, uint32_t nvm_size)
 {
-  /* USER CODE BEGIN OnStoreContextRequest_1 */
+  /  USER CODE BEGIN OnStoreContextRequest_1  /
 
-  /* USER CODE END OnStoreContextRequest_1 */
-  /* FR-03 (#85): logical length = the true object size (what restore checks
-   * and what the CRC covers); padded length = what FLASH_IF_Write's 64-bit
-   * alignment precondition requires. Using the passed nvm_size (already
-   * padded by LmHandler) for the header made every restore reject every
-   * slot (1496 != 1492) and read 4 bytes out of bounds past the object. */
+  /  USER CODE END OnStoreContextRequest_1  /
+  /  FR-03 (#85): logical length = the true object size (what restore checks
+     and what the CRC covers); padded length = what FLASH_IF_Write's 64-bit
+     alignment precondition requires. Using the passed nvm_size (already
+     padded by LmHandler) for the header made every restore reject every
+     slot (1496 != 1492) and read 4 bytes out of bounds past the object.  /
   const uint32_t logical_len = sizeof(LoRaMacNvmData_t);
   const uint32_t padded_len  = (logical_len + 7U) & ~7U;
   static uint8_t staging[(sizeof(LoRaMacNvmData_t) + 7U) & ~7U];
@@ -2140,50 +2140,50 @@ static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
       padded_len + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
     SONDE_LOG("NVM store REJECTED (size %lu too large or bad ptr)\r\n",
                       (unsigned long)nvm_size);
-    return;  /* honest failure, no silent drop */
+    return;  /  honest failure, no silent drop  /
   }
 
-  /* Ping-pong: write the OTHER slot with the next generation */
+  /  Ping-pong: write the OTHER slot with the next generation  /
   uint32_t slot_addr = (g_nvm_generation % 2 == 0) ? (uint32_t)NVM_SLOT_A_ADDR
                                                    : (uint32_t)NVM_SLOT_B_ADDR;
   NvmSlotHeader_t hdr;
   hdr.magic = NVM_SLOT_MAGIC;
   hdr.generation = g_nvm_generation + 1;
   hdr.length = logical_len;
-  hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, logical_len);
+  hdr.crc32 = FlashLog_CRC32((const uint8_t  )nvm, logical_len);
 
-  /* Stage the payload so the padded tail is defined bytes, not an
-   * out-of-bounds read past the caller's object. */
+  /  Stage the payload so the padded tail is defined bytes, not an
+     out-of-bounds read past the caller's object.  /
   memcpy(staging, nvm, logical_len);
   memset(staging + logical_len, 0, padded_len - logical_len);
 
-  if (FLASH_IF_Erase((void *)slot_addr, FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+  if (FLASH_IF_Erase((void  )slot_addr, FLASH_PAGE_SIZE) != FLASH_IF_OK) {
     SONDE_LOG_STR("NVM store: slot erase FAILED\r\n");
     return;
   }
-  if (FLASH_IF_Write((void *)slot_addr, &hdr, sizeof(hdr)) != FLASH_IF_OK ||
-      FLASH_IF_Write((void *)(slot_addr + sizeof(hdr)), staging, padded_len) != FLASH_IF_OK) {
+  if (FLASH_IF_Write((void  )slot_addr, &hdr, sizeof(hdr)) != FLASH_IF_OK ||
+      FLASH_IF_Write((void  )(slot_addr + sizeof(hdr)), staging, padded_len) != FLASH_IF_OK) {
     SONDE_LOG_STR("NVM store: slot write FAILED\r\n");
     return;
   }
   g_nvm_generation = hdr.generation;
-  /* USER CODE BEGIN OnStoreContextRequest_Last */
+  /  USER CODE BEGIN OnStoreContextRequest_Last  /
 
-  /* USER CODE END OnStoreContextRequest_Last */
+  /  USER CODE END OnStoreContextRequest_Last  /
 }
 
-static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
+static void OnRestoreContextRequest(void  nvm, uint32_t nvm_size)
 {
-  /* USER CODE BEGIN OnRestoreContextRequest_1 */
+  /  USER CODE BEGIN OnRestoreContextRequest_1  /
 
-  /* USER CODE END OnRestoreContextRequest_1 */
-  /* Newest valid slot wins; validate magic + length + payload CRC */
+  /  USER CODE END OnRestoreContextRequest_1  /
+  /  Newest valid slot wins; validate magic + length + payload CRC  /
   const uint32_t slots[2] = { (uint32_t)NVM_SLOT_A_ADDR, (uint32_t)NVM_SLOT_B_ADDR };
   int best = -1;
   NvmSlotHeader_t best_hdr = {0};
   for (int i = 0; i < 2; i++) {
     NvmSlotHeader_t hdr;
-    if (FLASH_IF_Read(&hdr, (void *)slots[i], sizeof(hdr)) != FLASH_IF_OK) continue;
+    if (FLASH_IF_Read(&hdr, (void  )slots[i], sizeof(hdr)) != FLASH_IF_OK) continue;
     if (hdr.magic != NVM_SLOT_MAGIC) continue;
     if (hdr.length != nvm_size) continue;
     if (hdr.length + sizeof(hdr) > FLASH_PAGE_SIZE) continue;
@@ -2193,27 +2193,27 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   }
   if (best < 0) {
     SONDE_LOG_STR("NVM restore: no valid slot (fresh start)\r\n");
-    return;  /* leave nvm untouched — MAC treats as no context */
+    return;  /  leave nvm untouched — MAC treats as no context  /
   }
-  if (FLASH_IF_Read(nvm, (void *)(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK) {
+  if (FLASH_IF_Read(nvm, (void  )(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK) {
     SONDE_LOG_STR("NVM restore: payload read FAILED\r\n");
     return;
   }
-  if (FlashLog_CRC32((const uint8_t *)nvm, nvm_size) != best_hdr.crc32) {
+  if (FlashLog_CRC32((const uint8_t  )nvm, nvm_size) != best_hdr.crc32) {
     SONDE_LOG_STR("NVM restore: payload CRC FAILED\r\n");
     return;
   }
   g_nvm_generation = best_hdr.generation;
-  /* USER CODE BEGIN OnRestoreContextRequest_Last */
+  /  USER CODE BEGIN OnRestoreContextRequest_Last  /
 
-  /* USER CODE END OnRestoreContextRequest_Last */
+  /  USER CODE END OnRestoreContextRequest_Last  /
 }
 
-/* FR-11 (#94): single owner for NVM slot erasure. The commissioning paths in
- * multiregion_context.c used to erase only page 126 via a hardcoded
- * 0x0803F000UL literal, leaving a valid older-generation slot B that restore
- * would then select — the "clean state" erase survived itself. Erasing BOTH
- * slots and resetting the generation counter is the only correct semantic. */
+/  FR-11 (#94): single owner for NVM slot erasure. The commissioning paths in
+   multiregion_context.c used to erase only page 126 via a hardcoded
+   0x0803F000UL literal, leaving a valid older-generation slot B that restore
+   would then select — the "clean state" erase survived itself. Erasing BOTH
+   slots and resetting the generation counter is the only correct semantic.  /
 bool LoRaApp_EraseNvmSlots(void)
 {
   bool ok = true;
@@ -2223,31 +2223,31 @@ bool LoRaApp_EraseNvmSlots(void)
   return ok;
 }
 
-/**
-  * @brief  Initialize packet queue
-  * @param  queue: Pointer to queue structure
-  * @retval None
-  */
-static void PacketQueue_Init(PacketQueue_t *queue)
+/  
+    @brief  Initialize packet queue
+    @param  queue: Pointer to queue structure
+    @retval None
+   /
+static void PacketQueue_Init(PacketQueue_t  queue)
 {
   memset(queue, 0, sizeof(PacketQueue_t));
 }
 
-#if ENABLE_GNSS_DETAIL_PACKET  /* FR-19 (#100): sole producer is the debug packet */
-/**
-  * @brief  Push packet to queue
-  * @param  queue: Pointer to queue structure
-  * @param  data: Packet data
-  * @param  size: Packet size
-  * @param  port: LoRaWAN port
-  * @retval true if successful, false if queue full
-  */
-static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port)
+#if ENABLE_GNSS_DETAIL_PACKET  /  FR-19 (#100): sole producer is the debug packet  /
+/  
+    @brief  Push packet to queue
+    @param  queue: Pointer to queue structure
+    @param  data: Packet data
+    @param  size: Packet size
+    @param  port: LoRaWAN port
+    @retval true if successful, false if queue full
+   /
+static bool PacketQueue_Push(PacketQueue_t  queue, const uint8_t  data, uint16_t size, uint8_t port)
 {
   if (queue->count >= PACKET_QUEUE_SIZE || size > sizeof(queue->entries[0].buffer))
     return false;
 
-  PacketQueueEntry_t *entry = &queue->entries[queue->head];
+  PacketQueueEntry_t  entry = &queue->entries[queue->head];
   memcpy(entry->buffer, data, size);
   entry->size = size;
   entry->port = port;
@@ -2258,20 +2258,20 @@ static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t
 
   return true;
 }
-#endif  /* ENABLE_GNSS_DETAIL_PACKET */
+#endif  /  ENABLE_GNSS_DETAIL_PACKET  /
 
-/**
-  * @brief  Pop packet from queue
-  * @param  queue: Pointer to queue structure
-  * @param  entry: Destination for popped entry
-  * @retval true if successful, false if queue empty
-  */
-static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry)
+/  
+    @brief  Pop packet from queue
+    @param  queue: Pointer to queue structure
+    @param  entry: Destination for popped entry
+    @retval true if successful, false if queue empty
+   /
+static bool PacketQueue_Pop(PacketQueue_t  queue, PacketQueueEntry_t  entry)
 {
   if (queue->count == 0)
     return false;
 
-  *entry = queue->entries[queue->tail];
+   entry = queue->entries[queue->tail];
   queue->entries[queue->tail].valid = false;
 
   queue->tail = (queue->tail + 1) % PACKET_QUEUE_SIZE;
@@ -2280,15 +2280,15 @@ static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry)
   return true;
 }
 
-/**
-  * @brief  Check if queue is empty
-  * @param  queue: Pointer to queue structure
-  * @retval true if empty
-  */
-static bool PacketQueue_IsEmpty(PacketQueue_t *queue)
+/  
+    @brief  Check if queue is empty
+    @param  queue: Pointer to queue structure
+    @retval true if empty
+   /
+static bool PacketQueue_IsEmpty(PacketQueue_t  queue)
 {
   return (queue->count == 0);
 }
 
-/* FR-19 (#100): PacketQueue_Count deleted — its only callers were log lines;
- * use g_packet_queue.count directly. */
+/  FR-19 (#100): PacketQueue_Count deleted — its only callers were log lines;
+   use g_packet_queue.count directly.  /

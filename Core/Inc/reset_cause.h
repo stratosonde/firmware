@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    reset_cause.h
-  * @brief   Reset cause capture and condensation (F13b / DDR-0007)
+  * @brief   Reset cause capture and condensation (F13b / DDR-0003)
   ******************************************************************************
  * Reads RCC->CSR once at boot, condenses to a 2-bit code for the uplink
  * status byte, then clears the flags (RMVF) so the next boot reads clean.
