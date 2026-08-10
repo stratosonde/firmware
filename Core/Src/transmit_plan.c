@@ -193,7 +193,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
 
     /* F9/T2 (DDR-0003): stale/unknown temperature is treated as COLD — the GPS
-     * stays locked out. Fail safe, not fail sunny. */
+     * stays locked out. Fail safe, not fail sunny.
+     * NOTE: this rule was REVISED 2026-08-09 — DDR-0016 INV-PWR-007 requires
+     * last-known-good temperature, and DDR-0021 removes the cold-lockout
+     * entirely. This veto is retained pending the conformance work queued in
+     * docs/decisions/README.md. */
     if (temp_stale) {
         plan.gps_enabled = false;
         plan.veto = VETO_TEMP_STALE;
