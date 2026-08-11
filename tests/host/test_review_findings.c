@@ -89,23 +89,29 @@ static int parse_define(const char *src, const char *name, int *out)
  * SURVIVAL (3600 s) always hits the ceiling ~10 min early and pays a full
  * PWR_ExitStopMode()/re-enter cycle every hour — in the mode that exists to
  * save power. Fix: 180 chunks (180 x 20 s = 3600 s). */
+/* F-7 (#182) update: the bound is now DERIVED - MAX_SLEEP_CHUNKS =
+ * (MAX_TX_INTERVAL_MS/1000/IWDG_SAFE_SLEEP_SECONDS)+1, where MAX_TX_INTERVAL_MS
+ * mirrors the Config_Validate tx_interval_survival ceiling (7200000 ms). The
+ * invariant strengthens from "covers 3600 s SURVIVAL" to "covers the maximum
+ * validated interval". */
 static void test_chunk_bound_covers_survival_interval(void)
 {
-    printf("-- finding #3: IWDG chunk bound must cover the 3600 s SURVIVAL interval\n");
+    printf("-- finding #3: IWDG chunk bound must cover the max validated interval\n");
 
     char *src = slurp("../../Core/Src/stm32_lpm_if.c");
 
     int seconds = 0;
     CHECK(parse_define(src, "IWDG_SAFE_SLEEP_SECONDS", &seconds));
 
-    int bound = 0;
-    const char *p = strstr(src, "chunks >");
-    if (p) { bound = atoi(p + strlen("chunks >")); }
-    CHECK(bound > 0);
+    int max_interval_ms = 0;
+    CHECK(parse_define(src, "MAX_TX_INTERVAL_MS", &max_interval_ms));
 
-    printf("   IWDG_SAFE_SLEEP_SECONDS=%d, chunk bound=%d -> max sleep %d s (need >= 3600)\n",
-           seconds, bound, seconds * bound);
-    CHECK_REGRESSION(seconds * bound >= 3600, "FINDING-3");
+    /* derived bound: (max_s / seconds) + 1 chunks */
+    long bound = (max_interval_ms / 1000L) / seconds + 1L;
+
+    printf("   IWDG_SAFE_SLEEP_SECONDS=%d, MAX_TX_INTERVAL_MS=%d -> bound=%ld -> max sleep %ld s (need >= %d)\n",
+           seconds, max_interval_ms, bound, bound * seconds, max_interval_ms / 1000);
+    CHECK_REGRESSION(bound * seconds >= max_interval_ms / 1000L, "FINDING-3");
 
     free(src);
 }

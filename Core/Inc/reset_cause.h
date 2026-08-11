@@ -52,8 +52,10 @@ uint8_t ResetCause_Get(void);
 
 /**
  * @brief Consecutive boots since the last proven work cycle (F-03/#65).
- *        Incremented in ResetCause_CaptureBoot; cleared by the first
- *        Deadman_MarkProgress() of a successful cycle. Error_Handler_Fatal()
+ *        Incremented in ResetCause_CaptureBoot; cleared at successful cycle
+ *        COMPLETION (end of SendTxData; F-6/#181 - clearing at cycle entry
+ *        let an in-cycle fault erase its own evidence on every boot).
+ *        Error_Handler_Fatal()
  *        uses it to break reset loops (FR-23/#104: boot-time fatals degrade
  *        instead of resetting past 5 consecutive unproductive boots).
  */

@@ -83,6 +83,18 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
  * True margin at 25 s was ~4–5 s. 20 s restores real margin for free. */
 #define IWDG_SAFE_SLEEP_SECONDS   20     /* Must be < ~31 s worst-case IWDG timeout */
 #define IWDG_WAKEUP_COUNTS        (IWDG_SAFE_SLEEP_SECONDS * 2048)  /* 40960 */
+/* F-7 (#182): the chunk ceiling is DERIVED, not a literal. It must cover the
+ * largest interval Config_Validate accepts (tx_interval_survival <=
+ * 7200000 ms, config.c) in IWDG_SAFE_SLEEP_SECONDS chunks, plus one - the
+ * hardcoded 180 (181 x 20 s = 3620 s) aborted chunked sleep every cycle for
+ * any validated survival interval above ~1 h and spun the main loop at full
+ * power in the mode that exists to save power (#134 recurring). Keep
+ * MAX_TX_INTERVAL_MS in step with the config ceiling: the _Static_assert
+ * below makes drift a build error. */
+#define MAX_TX_INTERVAL_MS        7200000UL
+#define MAX_SLEEP_CHUNKS          ((MAX_TX_INTERVAL_MS / 1000UL / IWDG_SAFE_SLEEP_SECONDS) + 1UL)
+_Static_assert(MAX_SLEEP_CHUNKS * IWDG_SAFE_SLEEP_SECONDS >= MAX_TX_INTERVAL_MS / 1000UL,
+               "chunk ceiling must cover the maximum validated TX interval");
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -251,7 +263,8 @@ void PWR_EnterStopMode(void)
    * ticking, this loop would sleep in 20s chunks forever with a satisfied
    * IWDG. Two guards: (1) run the progress deadman here — it reads RTC time
    * and self-resets; (2) bound the chunk count past the worst-case cycle
-   * (SURVIVAL = 1h -> 180 chunks of 20s = 60 min).
+   * (MAX_SLEEP_CHUNKS, derived from the maximum validated TX interval -
+   * F-7/#182; was the hardcoded 180 that only covered 3620 s).
    * #134: the bound tracks IWDG_SAFE_SLEEP_SECONDS — 150 chunks x 20s = 50 min
    * aborted every SURVIVAL sleep ~10 min early (R2-09 shrank the chunk, not
    * the count), paying a full PWR_ExitStopMode()/re-enter cycle per hour. */
@@ -309,7 +322,7 @@ void PWR_EnterStopMode(void)
      * chunk-overflow break used to skip this, leaving the WUT armed. */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 
-    if (++chunks > 180) break;  /* FW-4: never sleep forever; #134: 180 x 20s = 60min covers SURVIVAL */
+    if (++chunks > MAX_SLEEP_CHUNKS) break;  /* FW-4: never sleep forever; F-7 (#182): derived from the max validated interval */
 
     /* Alarm A (LoRaWAN timer event) wins over the IWDG chunk timer. */
     if (is_alarm_a)

@@ -872,7 +872,11 @@ static void Deadman_MarkProgress(void)
   extern RTC_HandleTypeDef hrtc;
   uint16_t ms_unused;
   HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, TIMER_IF_GetTime(&ms_unused));
-  ResetCause_ClearBootAttempts();  /* F-03 (#65): a work cycle started — boot was good */
+  /* F-6 (#181): boot-attempt evidence is NOT cleared here. Marking the
+   * deadman at cycle ENTRY is liveness (DDR-0009); clearing boot attempts is
+   * PROGRESS and belongs at successful cycle COMPLETION (end of SendTxData).
+   * Cleared at entry, any deterministic fault inside a cycle reset the
+   * counter on every boot and the FR-23 escape could never engage. */
 }
 
 /* F-15 (#72): last-valid position parked in backup registers so a reset does
@@ -1490,6 +1494,12 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
   /* T1 (DDR-0018): RF silence skips the entire transmit state machine —
    * GPS acquisition and flash logging above have already run. */
   if (rf_silence) {
+    /* F-5 (#180): a park that interrupts a burst must not strand the
+     * deferred header sync (FlashLog_DeferHeaderSync at burst open) -
+     * otherwise the persisted watermark freezes for the rest of the flight
+     * and every later commit lives only in RAM, silently (the RAM copy
+     * looks current). Flush here too; no-op when nothing is deferred. */
+    FlashLog_FlushHeaderSync(&hflashlog);
     g_tx_state = TX_STATE_PROBE_SF10;  /* keep state machine parked */
   } else
   switch (g_tx_state) {
@@ -2102,6 +2112,11 @@ static void SendTxData(void)
   SONDE_LOG_STR("GNSS detail packets disabled (ENABLE_GNSS_DETAIL_PACKET = 0)\r\n");
   #endif
   
+  /* F-6 (#181): a full work cycle COMPLETED - the boot was productive, so
+   * the consecutive-boot counter resets here (F-03/#65). A deterministic
+   * in-cycle fatal now accumulates evidence across boots and the FR-23/#104
+   * escape (degrade instead of the 6th reset) can actually engage. */
+  ResetCause_ClearBootAttempts();
   SONDE_LOG_STR("=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
 }

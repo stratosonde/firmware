@@ -42,9 +42,10 @@ void ResetCause_CaptureBoot(void)
     }
 
     /* F-03 (#65): persistent consecutive-boot counter. Incremented on every
-     * boot; cleared by lora_app.c Deadman_MarkProgress() once a work cycle
-     * provably starts. FR-23 (#104): Error_Handler_Fatal() reads it to break
-     * deterministic fatal reset loops (degrade instead of the 6th reset). */
+     * boot; cleared by lora_app.c at successful cycle COMPLETION (end of
+     * SendTxData; F-6/#181). FR-23 (#104): Error_Handler_Fatal() reads it to
+     * break deterministic fatal reset loops (degrade instead of the 6th
+     * reset). */
     uint32_t attempts = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_BOOT_ATTEMPTS);
     HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_BOOT_ATTEMPTS, attempts + 1U);
 
