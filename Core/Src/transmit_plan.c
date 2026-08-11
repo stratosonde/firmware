@@ -142,25 +142,32 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     plan.voltage_slope_mv_per_hour =
         CalculateVoltageSlope(slope_state, battery_mv_raw, now_timestamp);
 
-    uint16_t time_to_critical =
-        PredictTimeToVoltage(plan.battery_mv_normalized, plan.voltage_slope_mv_per_hour, 4500);
-    uint16_t time_to_full =
-        PredictTimeToVoltage(plan.battery_mv_normalized, plan.voltage_slope_mv_per_hour, 5500);
+    /* STAB-08 (#155): direction-aware prediction states. Wire semantics
+     * unchanged: negative = hours to critical, -1 = critical now (R2-17),
+     * positive = hours to full, 0 = genuinely stable. New: PRED_AT_OR_PAST on
+     * the lower threshold covers ANY slope (the old rounding hole rendered a
+     * below-critical but slowly-charging battery as "Stable": 50/150 = 0h). */
+    uint16_t crit_hours = 0, full_hours = 0;
+    PredictionState_t crit_state =
+        PredictTimeToLowerThreshold(plan.battery_mv_normalized,
+                                    plan.voltage_slope_mv_per_hour, 4500, &crit_hours);
+    PredictionState_t full_state =
+        PredictTimeToUpperThreshold(plan.battery_mv_normalized,
+                                    plan.voltage_slope_mv_per_hour, 5500, &full_hours);
 
-    if (time_to_critical != 0xFFFF) {
-        plan.time_to_target_h = -(int16_t)time_to_critical;
-    } else if (time_to_full != 0xFFFF) {
-        plan.time_to_target_h = (int16_t)time_to_full;
-    } else if (plan.battery_mv_normalized <= 4500 &&
-               plan.voltage_slope_mv_per_hour < 0) {
-        /* R2-17 (#121): already at/below the 4500 mV critical threshold and
-         * still discharging - PredictTimeToVoltage returns 0xFFFF for both
-         * targets ("moving away"), and emitting 0 here made the log path and
-         * Cayenne ch 12 render a dying battery as "Stable". 0 is reserved
-         * for genuinely stable; -1 = critical now, no computable ETA. */
-        plan.time_to_target_h = -1;
+    /* time_to_critical keeps the SelectModeFromPredictions contract:
+     * 0xFFFF = not approaching; a real hour count otherwise (0 = now). */
+    uint16_t time_to_critical = (crit_state == PRED_AT_OR_PAST) ? 0 :
+                                (crit_state == PRED_REACHABLE)  ? crit_hours : 0xFFFF;
+
+    if (crit_state == PRED_AT_OR_PAST) {
+        plan.time_to_target_h = -1;          /* critical now, no computable ETA */
+    } else if (crit_state == PRED_REACHABLE) {
+        plan.time_to_target_h = (crit_hours > 0) ? -(int16_t)crit_hours : -1;
+    } else if (full_state == PRED_REACHABLE) {
+        plan.time_to_target_h = (int16_t)full_hours;
     } else {
-        plan.time_to_target_h = 0;
+        plan.time_to_target_h = 0;           /* genuinely stable / moving away */
     }
 
     /* Mode selection + application (R10: floor reads RAW voltage) */

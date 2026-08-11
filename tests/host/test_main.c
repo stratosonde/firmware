@@ -531,11 +531,41 @@ static void test_power_model(void)
                (int)wrapped);
     }
 
-    /* PredictTimeToVoltage */
-    CHECK_EQ_I(PredictTimeToVoltage(5000, -100, 4500), 5);
-    CHECK_EQ_I(PredictTimeToVoltage(5000, 0, 4500), 0xFFFF);
-    CHECK_EQ_I(PredictTimeToVoltage(5000, 100, 4500), 0xFFFF);
-    CHECK_EQ_I(PredictTimeToVoltage(4500, -100, 4500), 0);
+    /* STAB-08 (#155): direction-aware prediction API. The old
+     * PredictTimeToVoltage had logically dead boundary tests (delta>0 &&
+     * current>=target can never hold) and folded "already past" into the same
+     * 0xFFFF as "stable/never". Exhaustive table: current {<,=,>} target x
+     * slope {<,0,>}, both directions. */
+    {
+        uint16_t hrs = 0xAAAA;
+        /* LOWER threshold (e.g. 4500 mV critical) */
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4400, -100, 4500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4500, -100, 4500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4400,    0, 4500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4400,  100, 4500, &hrs), PRED_AT_OR_PAST); /* rising but still below */
+        CHECK_EQ_I(PredictTimeToLowerThreshold(5000, -100, 4500, &hrs), PRED_REACHABLE);
+        CHECK_EQ_I(hrs, 5);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(5000,    0, 4500, &hrs), PRED_STABLE);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(5000,  100, 4500, &hrs), PRED_MOVING_AWAY);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4500,    0, 4500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToLowerThreshold(4500,  100, 4500, &hrs), PRED_AT_OR_PAST);
+        /* saturation: clamps to 9999, never wraps */
+        CHECK_EQ_I(PredictTimeToLowerThreshold(65535, -1, 0, &hrs), PRED_REACHABLE);
+        CHECK_EQ_I(hrs, 9999);
+        /* UPPER threshold (e.g. 5500 mV full) */
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5600,  100, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5500,  100, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5600,    0, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5600, -100, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5000,  100, 5500, &hrs), PRED_REACHABLE);
+        CHECK_EQ_I(hrs, 5);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5000,    0, 5500, &hrs), PRED_STABLE);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5000, -100, 5500, &hrs), PRED_MOVING_AWAY);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5500,    0, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(5500, -100, 5500, &hrs), PRED_AT_OR_PAST);
+        CHECK_EQ_I(PredictTimeToUpperThreshold(0, 1, 65535, &hrs), PRED_REACHABLE);
+        CHECK_EQ_I(hrs, 9999);  /* saturation, upper direction */
+    }
 
     /* SelectModeFromPredictions — floor MUST win over positive slope (BUG 1.5) */
     CHECK_EQ_I(SelectModeFromPredictions(50, 4200, 0xFFFF, 4200), MODE_SURVIVAL);
@@ -619,6 +649,21 @@ static void test_r2_17_already_critical_never_reports_stable(void)
     CHECK_EQ_I(p2.voltage_slope_mv_per_hour, -200);  /* guard: discharging */
     CHECK(p2.power_mode != MODE_NORMAL);             /* guard: not charging */
     CHECK_REGRESSION(p2.time_to_target_h != 0, "R2-17");
+
+    /* STAB-08 (#155): RISING but still below critical. Old code: delta=50,
+     * slope=+150 -> hours = 50/150 = 0 -> time_to_target_h = -0 = 0 -> the
+     * log path and Cayenne ch 12 render a below-critical battery "Stable".
+     * PRED_AT_OR_PAST must map to -1 (critical now), never 0. */
+    {
+        VoltageSlope_t vs2;
+        memset(&vs2, 0, sizeof(vs2));
+        TransmitPlan_t q1 = DecideTransmitPlan(&vs2, 4300, 25.0f, false, 3600, true, false);
+        (void)q1;
+        TransmitPlan_t q2 = DecideTransmitPlan(&vs2, 4450, 25.0f, false, 7200, true, false);
+        CHECK(q2.voltage_slope_mv_per_hour > 0);       /* guard: charging */
+        CHECK(q2.battery_mv_normalized < 4500);        /* guard: below critical */
+        CHECK_REGRESSION(q2.time_to_target_h == -1, "STAB-08");
+    }
 }
 
 static void test_r2_30_rmc_valid_clears_on_void(void)

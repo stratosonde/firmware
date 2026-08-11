@@ -123,39 +123,49 @@ int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32
 }
 
 
-uint16_t PredictTimeToVoltage(uint16_t current_voltage_mv,
-                                      int16_t slope_mv_per_hour,
-                                      uint16_t target_voltage_mv) {
-
-    int32_t voltage_delta = target_voltage_mv - current_voltage_mv;
-
-    // Stable voltage - never reaches target
+/* STAB-08 (#155): the old PredictTimeToVoltage tested (voltage_delta > 0 &&
+ * current >= target) and its mirror - both contradictory by construction, so
+ * already-past was unreachable there and fell into the same 0xFFFF as
+ * stable/never. Direction-specific functions with explicit states replace
+ * it; hours are computed only in the REACHABLE state and saturate at 9999. */
+PredictionState_t PredictTimeToLowerThreshold(uint16_t current_voltage_mv,
+                                              int16_t slope_mv_per_hour,
+                                              uint16_t lower_mv,
+                                              uint16_t *hours_out) {
+    if (current_voltage_mv <= lower_mv) {
+        return PRED_AT_OR_PAST;
+    }
     if (slope_mv_per_hour == 0) {
-        return 0xFFFF;
+        return PRED_STABLE;
     }
-
-    // Check if moving toward or away from target
-    if ((voltage_delta > 0 && slope_mv_per_hour < 0) ||  // Target higher but discharging
-        (voltage_delta < 0 && slope_mv_per_hour > 0)) {  // Target lower but charging
-        return 0xFFFF;  // Moving away from target
+    if (slope_mv_per_hour > 0) {
+        return PRED_MOVING_AWAY;
     }
+    uint32_t hours = (uint32_t)(current_voltage_mv - lower_mv) /
+                     (uint32_t)(-slope_mv_per_hour);
+    if (hours > 9999) hours = 9999;
+    if (hours_out) *hours_out = (uint16_t)hours;
+    return PRED_REACHABLE;
+}
 
-    // Already at or past target
-    if (voltage_delta == 0 ||
-        (voltage_delta > 0 && current_voltage_mv >= target_voltage_mv) ||
-        (voltage_delta < 0 && current_voltage_mv <= target_voltage_mv)) {
-        return 0;
+PredictionState_t PredictTimeToUpperThreshold(uint16_t current_voltage_mv,
+                                              int16_t slope_mv_per_hour,
+                                              uint16_t upper_mv,
+                                              uint16_t *hours_out) {
+    if (current_voltage_mv >= upper_mv) {
+        return PRED_AT_OR_PAST;
     }
-
-    // Calculate time: |voltage_delta| / |slope|
-    int32_t hours_to_target = abs(voltage_delta) / abs(slope_mv_per_hour);
-
-    // Clamp to reasonable range
-    if (hours_to_target > 9999) {
-        hours_to_target = 9999;
+    if (slope_mv_per_hour == 0) {
+        return PRED_STABLE;
     }
-
-    return (uint16_t)hours_to_target;
+    if (slope_mv_per_hour < 0) {
+        return PRED_MOVING_AWAY;
+    }
+    uint32_t hours = (uint32_t)(upper_mv - current_voltage_mv) /
+                     (uint32_t)slope_mv_per_hour;
+    if (hours > 9999) hours = 9999;
+    if (hours_out) *hours_out = (uint16_t)hours;
+    return PRED_REACHABLE;
 }
 
 OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
