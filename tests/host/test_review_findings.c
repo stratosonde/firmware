@@ -435,10 +435,36 @@ static void test_position_age_persistence_wiring(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* STAB-10 (#157) — protocol docs must not drift from the wire format again    */
+/* ========================================================================== */
+/* The audit found the docs describing PRE_FLIGHT/FLIGHT/RECOVERY mission
+ * states (code: ASCENT/FLOAT), a STARTUP/.../GPS_LOCKOUT power table that
+ * never matched OperatingMode_t, and "archive v4 current" two formats behind.
+ * Pin the corrected statements so the drift cannot silently return. */
+static void test_protocol_docs_match_code(void)
+{
+    printf("-- STAB-10/#157: protocol docs match the wire format\n");
+
+    char *pf = slurp("../../docs/PayloadFormats.md");
+    CHECK_REGRESSION(strstr(pf, "0x06") != NULL, "STAB-10-v6");          /* v6 documented */
+    CHECK_REGRESSION(strstr(pf, "sensor_quality") != NULL, "STAB-10-quality");
+    CHECK_REGRESSION(strstr(pf, "\"ASCENT\"") != NULL, "STAB-10-mission");
+    CHECK_REGRESSION(strstr(pf, "SURVIVAL") != NULL, "STAB-10-powermode");
+    CHECK_REGRESSION(strstr(pf, "PRE_FLIGHT") == NULL, "STAB-10-nostale");
+    free(pf);
+
+    char *proto = slurp("../../docs/LoRaWANApplicationProtocol.md");
+    CHECK_REGRESSION(strstr(proto, "1=ASCENT, 2=FLOAT") != NULL, "STAB-10-proto-mission");
+    CHECK_REGRESSION(strstr(proto, "Archive v6 (current firmware") != NULL, "STAB-10-proto-v6");
+    free(proto);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_protocol_docs_match_code();
     test_ts_wrap_persistence_wiring();
     test_position_age_persistence_wiring();
     test_fatal_escape_scoped();

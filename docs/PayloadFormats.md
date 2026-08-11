@@ -53,7 +53,7 @@ Status v2 bits:
 | 3 | Pressure stale |
 | 4 | RTC GNSS-disciplined this cycle (timestamp is UTC-traceable) |
 | 5 | timestamp has wrapped its 45.5-day uint16 range |
-| 6-7 | Mission state: 0=COMMISSIONING, 1=PRE_FLIGHT, 2=FLIGHT, 3=RECOVERY |
+| 6-7 | Mission state: 0=COMMISSIONING, 1=ASCENT, 2=FLOAT, 3=reserved (matches `MissionState_t`, STAB-10/#157) |
 
 **Note**: Altitude is NOT transmitted - it must be calculated on the backend from pressure + temperature using the barometric formula.
 
@@ -108,7 +108,7 @@ voltage_volts = payload[9] * 0.050
 ```python
 import struct
 
-MISSION_STATES = ["COMMISSIONING", "PRE_FLIGHT", "FLIGHT", "RECOVERY"]
+MISSION_STATES = ["COMMISSIONING", "ASCENT", "FLOAT", "RESERVED"]  # STAB-10 (#157): matches MissionState_t
 
 def decode_heartbeat_v2(payload: bytes) -> dict:
     """Decode 11-byte heartbeat v2 from LoRaWAN Port 10 (little-endian)."""
@@ -205,29 +205,36 @@ Bulk transfer of historical high-resolution records at SF7, sent when link quali
 | `0x02` | Legacy v2, 198 B fixed (FW-20) | 198 |
 | `0x03` | Variable, no record identity (CI-only <1 day, never deployed — superseded) | 2+32n+4 |
 | `0x04` | v4, variable `6 + 32n + 4` with base sequence (never deployed — superseded by v5, FR-07/#87) | 42-202 |
-| `0x05` | **Current v5, variable** `6 + 36n` with per-record explicit sequence (FR-07/#87) | 42-186 |
+| `0x05` | v5, variable `6 + 36n` with per-record explicit sequence (FR-07/#87; **never deployed** — superseded by v6 before the first real burst, STAB-04/#151) | 42-186 |
+| `0x06` | **Current v6, variable** `6 + 38n` with per-record sequence + data-honesty provenance (STAB-04/#151) | 44-196 |
 
-### Packet Structure v5 (variable length)
+### Packet Structure v6 (variable length)
 
 #### Header (2 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 0 | Packet Type | uint8 | 1 | 0x05 = variable-length + per-record identity |
+| 0 | Packet Type | uint8 | 1 | 0x06 = variable-length + per-record identity + provenance |
 | 1 | Record Count | uint8 | 1 | n records (1-5) |
 
-n complete 36-byte wire records follow immediately at offset 2, each being
-`sequence uint32 LE` + the 32-byte high-resolution record (layout below,
+n complete 38-byte wire records follow immediately at offset 2, each being
+`sequence uint32 LE` + the 34-byte v6 high-resolution record (layout below,
 explicitly little-endian on the wire). The packet ends with a 4-byte CRC32
-(LE) over all preceding bytes: total length `6 + 36n`.
+(LE) over all preceding bytes: total length `6 + 38n`.
 
 **Identity is explicit per record (FR-07, #87).** v4 derived identity
 implicitly (`base_seq + i`), which misattributed every record after a skipped
 one (corrupt flash slot or failed conversion compacting the candidate array).
-v5 serializes each record's own flash sequence, so the ground-side
+v5/v6 serialize each record's own flash sequence, so the ground-side
 `(DevEUI, sequence)` dedup key (DDR-0005) is correct for ANY subset of the
 archive, and the sender's watermark commit point is exactly
 `sequence_of(last packed record) + 1` (FR-08, #91).
+
+**Provenance survives the archive hop (STAB-04, #151).** v6 adds the
+`sensor_quality` and `veto_reason` bytes so a stale/fallback measurement
+stored honestly in flash can never arrive at the backend looking fresh
+(DDR-0007), and the flags byte's power-mode field is the HISTORICAL mode
+(STAB-05, #152).
 
 The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0005).
 
@@ -243,9 +250,9 @@ The firmware queries the runtime payload budget before each packet (`LoRaMacQuer
 
 n complete 32-byte records follow immediately at offset 6 (layout below, explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `6 + 32n + 4`.
 
-#### High-Resolution Records (n × 32 bytes)
+#### High-Resolution Records (n × 34 bytes in v6; n × 32 bytes in v5 and earlier)
 
-Each record is 32 bytes, little-endian:
+Each v6 record is 34 bytes, little-endian:
 
 | Offset | Field | Type | Size | Resolution | Range | Description |
 |--------|-------|------|------|------------|-------|-------------|
@@ -261,9 +268,11 @@ Each record is 32 bytes, little-endian:
 | 24 | Voltage Slope | int16 LE | 2 | 1 mV/hour | ±32.767 V/h | Charge rate |
 | 26 | Satellites | uint8 | 1 | 1 | 0-255 | GPS satellite count |
 | 27 | HDOP | uint8 | 1 | 0.1 | 0-25.5 | HDOP × 10 |
-| 28 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode |
+| 28 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode at write time |
 | 29 | Flags | uint8 | 1 | bitfield | - | Status flags (table below) |
-| 30 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-29 |
+| 30 | Sensor Quality | uint8 | 1 | bitfield | - | **v6**: per-sensor staleness at acquisition (table below) |
+| 31 | Veto Reason | uint8 | 1 | enum | 0-4 | **v6**: TransmitVeto_t at write time (0 = none) |
+| 32 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-31 (v5 and earlier: bytes 0-29, CRC at 30) |
 
 #### Status Flags (byte 29 of each record)
 
@@ -271,13 +280,34 @@ Each record is 32 bytes, little-endian:
 |-----|------|-------|-------------|
 | 0 | 0x01 | GPS Valid | GPS fix valid (1) or invalid (0) |
 | 1-4 | 0x1E | Satellite Count | Satellite count 0-15 (duplicates byte 26) |
-| 5-7 | 0xE0 | Power Mode | Operating mode 0-7 (duplicates byte 28) |
+| 5-7 | 0xE0 | Power Mode | Operating mode 0-7 at WRITE time (STAB-05/#152; duplicates byte 28 deliberately) |
+
+#### Sensor Quality (byte 30 of each v6 record, STAB-04/#151)
+
+| Bit | Mask | Field | Description |
+|-----|------|-------|-------------|
+| 0 | 0x01 | Pressure stale | Last-known-good MS5607 value |
+| 1 | 0x02 | Temperature stale | Last-known-good SHT31 value |
+| 2 | 0x04 | Humidity stale | Last-known-good SHT31 value |
+| 3 | 0x08 | GNSS stale | Last-known-good position |
+| 4 | 0x10 | Battery stale | Last-known-good ADC value (#136) |
+| 5-7 | 0xE0 | Reserved | 0 |
+
+#### Veto Reason (byte 31 of each v6 record, STAB-04/#151)
+
+| Value | Meaning |
+|------:|---------|
+| 0 | VETO_NONE — cycle was a full go |
+| 1 | VETO_TEMP_STALE — stale temperature treated as cold (fail-safe) |
+| 2 | VETO_TEMP_LOCKOUT — below GPS temperature lockout |
+| 3 | VETO_RF_SILENCE — FLIGHT with no valid session (DDR-0018) |
+| 4 | VETO_RESTRICTED_REGION — regulatory RF prohibition |
 
 #### Trailer (4 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 2+36n (v5) / 6+32n (v4) | CRC32 | uint32 LE | 4 | CRC32/IEEE over all preceding bytes |
+| 2+38n (v6) / 2+36n (v5) / 6+32n (v4) | CRC32 | uint32 LE | 4 | CRC32/IEEE over all preceding bytes |
 
 ### Legacy v2 (packet_type 0x02, fixed 198 B)
 
@@ -285,29 +315,38 @@ Same header with type `0x02`, record count 1-6, six fixed 32-byte record slots a
 
 ### Power Mode Enum
 
+STAB-10 (#157) audit fix — the previous table (STARTUP/.../CRITICAL/GPS_LOCKOUT)
+never matched the firmware. These are the `OperatingMode_t` values in
+`Core/Inc/power_model.h`:
+
 | Value | Mode | Description | TX Interval |
 |-------|------|-------------|-------------|
-| 0 | STARTUP | Initial boot | - |
-| 1 | NORMAL | Normal operation | 300s (5 min) |
-| 2 | CONSERVATIVE | Battery saving | 600s (10 min) |
-| 3 | REDUCED | Low battery | 900s (15 min) |
-| 4 | CRITICAL | Critical battery | 1800s (30 min) |
-| 5 | GPS_LOCKOUT | GPS disabled | As configured |
+| 0 | NORMAL | Normal operation | 300s (5 min) |
+| 1 | CONSERVATIVE | Battery saving | 600s (10 min) |
+| 2 | REDUCED | Low battery, GPS disabled | 900s (15 min) |
+| 3 | RECOVERY | Critical battery | 1800s (30 min) |
+| 4 | SURVIVAL | LTO floor, minimal activity | 3600s (60 min) |
 
-### Python Decoder Example (v5 + legacy)
+Mission cadence (DDR-0002) overrides these only when the power model is
+healthy (NORMAL/CONSERVATIVE): ASCENT = 10 s, FLOAT = 5 min.
+
+### Python Decoder Example (v6 + legacy)
 
 ```python
 import struct
 
-RECORD_SIZE = 32
-V5_RECORD_WIRE = 36  # seq u32 LE + 32-byte record (v5)
+RECORD_SIZE = 32          # v5 and earlier record
+V6_RECORD_SIZE = 34       # v6 record (adds sensor_quality + veto_reason)
+V5_RECORD_WIRE = 36       # seq u32 LE + 32-byte record (v5, never deployed)
+V6_RECORD_WIRE = 38       # seq u32 LE + 34-byte record (v6)
 
 def decode_archive_packet(payload: bytes) -> dict:
     """
     Decode core science archive packet from LoRaWAN Port 11 (LITTLE-ENDIAN).
 
     Branches on payload[0]:
-      0x05 = v5 variable length: 6 + 36n bytes, per-record sequence (current firmware)
+      0x06 = v6 variable length: 6 + 38n bytes, per-record sequence + provenance (current firmware)
+      0x05 = v5 variable length: 6 + 36n bytes, per-record sequence (never deployed)
       0x04 = v4 variable length: 6 + 32n + 4 bytes, base_seq header (never deployed)
       0x03 = v3 variable without identity (never deployed; superseded)
       0x02 = v2 legacy fixed 198 B
@@ -317,7 +356,15 @@ def decode_archive_packet(payload: bytes) -> dict:
         raise ValueError("payload too short")
 
     version = payload[0]
-    if version == 0x05:
+    if version == 0x06:
+        count = payload[1]
+        expected = 2 + V6_RECORD_WIRE * count + 4
+        if len(payload) != expected:
+            raise ValueError(f"v6: expected {expected} bytes for {count} records, got {len(payload)}")
+        base_seq = None  # identity is per-record in v6
+        header_len = 2
+        crc_off = len(payload) - 4
+    elif version == 0x05:
         count = payload[1]
         expected = 2 + V5_RECORD_WIRE * count + 4
         if len(payload) != expected:
@@ -361,10 +408,15 @@ def decode_archive_packet(payload: bytes) -> dict:
     result = {'packet_type': version, 'record_count': count,
               'base_seq': base_seq, 'records': []}
 
-    stride = V5_RECORD_WIRE if version == 0x05 else RECORD_SIZE
+    if version == 0x06:
+        stride = V6_RECORD_WIRE
+    elif version == 0x05:
+        stride = V5_RECORD_WIRE
+    else:
+        stride = RECORD_SIZE
     for i in range(count):
         wire = payload[header_len + i * stride: header_len + (i + 1) * stride]
-        if version == 0x05:
+        if version in (0x05, 0x06):
             seq = struct.unpack('<I', wire[0:4])[0]
             rec = wire[4:]
         else:
@@ -378,7 +430,14 @@ def decode_archive_packet(payload: bytes) -> dict:
         bat_mv, solar_mv = struct.unpack('<HH', rec[20:24])
         slope = struct.unpack('<h', rec[24:26])[0]
         sats, hdop, mode, flags = struct.unpack('BBBB', rec[26:30])
-        crc16 = struct.unpack('<H', rec[30:32])[0]
+        if version == 0x06:
+            sensor_quality, veto_reason = struct.unpack('BB', rec[30:32])
+            crc16 = struct.unpack('<H', rec[32:34])[0]
+            crc16_cover = rec[0:32]
+        else:
+            sensor_quality, veto_reason = None, None  # provenance lost on the wire (STAB-04)
+            crc16 = struct.unpack('<H', rec[30:32])[0]
+            crc16_cover = rec[0:30]
 
         result['records'].append({
             'sequence': seq,
@@ -396,7 +455,9 @@ def decode_archive_packet(payload: bytes) -> dict:
             'hdop': hdop / 10.0,
             'power_mode': mode,
             'gps_valid': bool(flags & 0x01),
-            'crc16_valid': calculate_crc16(rec[0:30]) == crc16,
+            'sensor_quality': sensor_quality,      # v6: b0-b4 stale bits, None on older formats
+            'veto_reason': veto_reason,            # v6: TransmitVeto_t, None on older formats
+            'crc16_valid': calculate_crc16(crc16_cover) == crc16,
         })
 
     result['crc32'] = struct.unpack('<I', payload[crc_off:crc_off + 4])[0]

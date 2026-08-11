@@ -149,7 +149,7 @@ Status v2 bits:
 | 3 | Pressure stale |
 | 4 | RTC GNSS-disciplined this cycle (N-03) |
 | 5 | `timestamp_min` has wrapped its 45.5-day range (D4) |
-| 6-7 | Mission state (0=COMMISSIONING, 1=PRE_FLIGHT, 2=FLIGHT, 3=RECOVERY) |
+| 6-7 | Mission state (0=COMMISSIONING, 1=ASCENT, 2=FLOAT, 3=reserved) — STAB-10 (#157): matches `MissionState_t` |
 
 v1 → v2 changes: bytes 7-8 were separate legacy pressure code (950 hPa base, collapsed below 950 hPa) and humidity code; status bits 3-4 were a condensed reset cause and bit 5 was pressure-stale. Reset cause is no longer on the wire (it remains in flash/bulk records). v1 and v2 share port and length; discrimination is by deployment epoch plus the golden vectors in §13 — v1 never flew.
 
@@ -161,23 +161,44 @@ In US915/AU915 the heartbeat is sent at SF9 (DR1): the SF10/DR0 11-byte budget i
 
 ## 7. FPort 11 — core science archive
 
-The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = current variable-length with base sequence.
+The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = variable-length with base sequence (never deployed — superseded), `0x05` = variable with per-record sequence (never deployed — superseded), `0x06` = current variable-length with per-record sequence and provenance.
 
-### 7.1 Archive v4 (current firmware, D3 + DDR-0005, issues #33/#34)
+### 7.1 Archive v6 (current firmware, STAB-04/STAB-05, issues #151/#152)
 
-Variable length: `6 + 32n + 4` bytes. Header:
+STAB-10 (#157) audit note: this section documented v4 as "current" while the
+firmware had already moved on — v4 and v5 never flew; v6 is the first archive
+format that will.
+
+Variable length: `6 + 38n` bytes. Header:
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 1 | Packet type, `0x04` |
-| 1 | 1 | Record count n, 1-6 |
-| 2 | 4 | Base sequence, `uint32_t` LE — flash sequence of the first record |
+| 0 | 1 | Packet type, `0x06` |
+| 1 | 1 | Record count n, 1-5 |
 
-Records are contiguous FIFO, so record i carries archive identity `base_seq + i` — the stable 32-bit archive record ID required by §7.3 and DDR-0005. The backend deduplicates on (device, sequence).
+n complete 38-byte wire records follow: `sequence uint32 LE` + the 34-byte v6
+record, explicitly little-endian serialized (§3). Identity is explicit per
+record (FR-07/#87): the ground-side `(DevEUI, sequence)` dedup key (DDR-0005)
+is correct for ANY subset of the archive, and the sender's watermark commit
+point is `sequence_of(last packed record) + 1` (FR-08/#91). The packet ends
+with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
 
-n complete 32-byte records follow (layout in §7.2), explicitly little-endian serialized (§3's explicit-serialization requirement landed with the variable-length version). The packet ends with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
+The v6 record layout equals the 32-byte layout in §7.2 plus two provenance
+bytes inserted before the CRC16: offset 30 = `sensor_quality` (b0 pressure
+stale, b1 temperature stale, b2 humidity stale, b3 GNSS stale, b4 battery
+stale), offset 31 = `veto_reason` (TransmitVeto_t at write time, 0 = none),
+CRC16/MODBUS at offset 32 over bytes 0-31. In v6 the flags byte's power-mode
+field (b5-b7) is the HISTORICAL mode from the flash record (STAB-05/#152).
 
 The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many oldest complete records as fit. Records cut by the budget remain pending with stable identity (§4, §7.3).
+
+### 7.1a Archive v4/v5 (SUPERSEDED — never deployed)
+
+v4 (`0x04`): `6 + 32n + 4` with a `base_seq` header — identity broke on any
+skipped record. v5 (`0x05`): `6 + 36n` with per-record sequence — identity
+correct, but the 32-byte record dropped the flash record's data-honesty
+provenance (STAB-04). Neither flew; retained here for capture interpretation
+only.
 
 ### 7.2 Archive v2 (legacy)
 
@@ -222,7 +243,7 @@ Legacy packet type `0x01` used 222 bytes and is retained only for backend compat
 
 ### 7.3 Core archive identity requirement
 
-**Realized (2026-08-06, #34):** the archive v4 header carries `base_seq` (flash sequence of the first record); records are contiguous FIFO, so each record's identity is `base_seq + i`. The backend deduplicates on (DevEUI, sequence). The firmware commits the delivery watermark only on confirmed-uplink ACK (§4), so a lost ACK produces a duplicate retransmission that the backend must dedup — never a gap.
+**Realized (2026-08-06, #34; current form FR-07/#87 + STAB-04/#151):** every archive record carries its own flash sequence explicitly (v6, §7.1) — identity holds for ANY subset of the archive. The backend deduplicates on (DevEUI, sequence). The firmware commits the delivery watermark only on confirmed-uplink ACK (§4), so a lost ACK produces a duplicate retransmission that the backend must dedup — never a gap.
 
 ## 8. FPort 12 — proposed extension science archive v1
 
@@ -361,6 +382,25 @@ Each payload version must include:
 - Actual captured bytes from firmware.
 - Tests in firmware and backend repositories using identical vectors.
 
+Checked-in vectors (regenerated and re-verified by `make -C tests/host test`
+on every run — the suite prints these exact lines from the real encoder):
+
+Heartbeat v2 (nominal sensors, ts=1234 min):
+
+```
+C8 32 FF 3F F0 AE 4C F5 4B 64 10
+```
+
+Archive v6 (2 records, seqs 256/257, STAB-04/#151; record 2 carries
+`sensor_quality=0x01` + `veto_reason=0x02`):
+
+```
+06 02 00 01 00 00 1B 8C 93 68 FF FF 3F 00 F0 EE AE FF BC 02 FA 00 C2 01 94
+27 88 13 7C 15 F4 FF 09 0B 00 13 00 00 DA 3B 01 01 00 00 57 8C 93 68 FF FF
+3F 00 F0 EE AE FF BC 02 FA 00 C2 01 94 27 88 13 7C 15 F4 FF 09 0B 00 13 01
+02 79 FA 81 9C 7D 8F
+```
+
 ## 14. Implementation deltas from current firmware
 
 The desired strategy differs from the current implementation in several important respects:
@@ -369,7 +409,7 @@ The desired strategy differs from the current implementation in several importan
 - ~~Current heartbeat send is unconfirmed~~ — the opportunity-probe heartbeat is confirmed (#34).
 - ~~Current bulk packets are unconfirmed~~ — archive packets are confirmed (#34).
 - ~~Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement~~ — commit requires `McpsConfirm.AckReceived` (#34).
-- ~~Current queue handling and count-based record marking require transactional repair~~ — archive v4 carries base_seq identity; count commit maps to contiguous monotonic sequences (#34).
+- ~~Current queue handling and count-based record marking require transactional repair~~ — archive records carry explicit per-record sequence identity (v5 FR-07/#87, now v6 STAB-04/#151); count commit maps to contiguous monotonic sequences (#34).
 
 Resolved by the heartbeat v2 / archive v3 rework (#33):
 
