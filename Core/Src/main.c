@@ -890,6 +890,18 @@ void Error_Handler(void)
  * architecture a chance; a hang or a zombie does not.
  * Codes: 0-4 = CPU fault handlers (stm32wlxx_it.c; 0 = NMI), 6 = deadman
  * (lora_app.c), 16+ = boot-time fatal errors below. */
+/* STAB-02 (#149): which boot-time fatals have a DESIGNED degraded
+ * continuation? FLASH_INIT does (archive unusable -> flight continues with
+ * science in RAM only, watchdog/deadman still supervising). CLOCK_CONFIG and
+ * PAYLOAD_FORMAT do not: continuing would run the mission on a broken clock
+ * tree or a malformed wire format — that is accidental continuation, not a
+ * degraded mode. Keep this list explicit; adding a code requires a designed
+ * degraded path at its call site. */
+static bool FatalIsDegradable(uint16_t code)
+{
+  return code == FAULT_CODE_FLASH_INIT;
+}
+
 void Error_Handler_Fatal(uint16_t code)
 {
   HAL_PWR_EnableBkUpAccess();
@@ -903,8 +915,13 @@ void Error_Handler_Fatal(uint16_t code)
    * resetting and fall through to the caller's degraded path instead
    * (DDR-0009: forward progress, degrade and keep flying). CPU-fault and
    * deadman codes (<16) always reset — there is no meaningful degraded
-   * continuation from a crashed context. */
-  if (code >= 16U && ResetCause_GetBootAttempts() >= 5U) {
+   * continuation from a crashed context.
+   *
+   * STAB-02 (#149): the escape is ONLY for faults with a designed degraded
+   * continuation. CLOCK_CONFIG (no RTC/clock tree) and PAYLOAD_FORMAT
+   * (unvalidated wire format) have none — their callers simply fall into
+   * mission code, so they always breadcrumb + reset, every boot. */
+  if (code >= 16U && ResetCause_GetBootAttempts() >= 5U && FatalIsDegradable(code)) {
     SONDE_LOG("FATAL_ERROR %u: 5+ consecutive boots - DEGRADING, no reset\r\n", code);
     return;
   }

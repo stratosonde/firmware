@@ -1759,9 +1759,15 @@ static void SendTxData(void)
     if (!MissionState_IsCommissioning() &&
         (now_timestamp - ref_s) > GPS_LOSS_SILENCE_S) {
       rf_silence = true;
-      gps_enabled_by_power_mgmt = true;   /* keep trying GPS (overrides the
-                                           * power-mode veto) until a fresh
-                                           * fix clears the silence */
+      /* STAB-03 (#150): keep trying GPS until a fresh fix clears the
+       * silence - urgency overrides the power-mode PREFERENCE, never the
+       * hard electrical floor. In MODE_SURVIVAL (raw V below the 4300 mV
+       * LTO floor) a forced GNSS acquisition risks the droop/brownout
+       * loop the stability review traces (brownout -> STAB-01 resets
+       * stale-position age -> repeat). Stay dark and retry next cycle. */
+      if (current_mode != MODE_SURVIVAL) {
+        gps_enabled_by_power_mgmt = true;
+      }
       SONDE_LOG_STR("GPS-LOSS SILENCE: no fresh fix - radio dark, still logging, GPS retry on\r\n");
     }
   }

@@ -9,12 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run host tests
-        run: make -C tests/host test
-      # FR-xx post-fix gate (WO-0808): all documented regressions are fixed,
-      # so the flight gate (not baseline) is the requirement from ef4e97a on.
-      - name: Flight-readiness regression suite
-        run: make -C tests/host flight
+      # STAB-09 (#156): the FULL host gate — test + flight + findings + burst.
+      # The findings/burst suites hold the autonomous-control regressions
+      # (BURST-01/02/03, R2-13, STAB-*) and must be merge gates, not opt-in.
+      - name: All host regression suites
+        run: make -C tests/host all
 
   firmware:
     runs-on: ubuntu-latest

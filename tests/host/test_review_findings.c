@@ -306,10 +306,93 @@ static void test_no_uart_it_receive_on_gps_uart(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* STAB-02 (#149) — fatal degrade escape scoped to degradable faults only      */
+/* ========================================================================== */
+/* Error_Handler_Fatal returns after 5 boot attempts for ANY code >= 16, but
+ * the only real call sites (CLOCK_CONFIG x2, PAYLOAD_FORMAT) have NO designed
+ * degraded continuation - execution falls into mission code with a broken
+ * clock tree or an unvalidated wire format. The escape must be conditioned on
+ * an explicit per-code degradable predicate. */
+static void test_fatal_escape_scoped(void)
+{
+    printf("-- STAB-02/#149: Error_Handler_Fatal degrade escape is per-code gated\n");
+
+    char *src = slurp("../../Core/Src/main.c");
+    CHECK(strstr(src, "Error_Handler_Fatal") != NULL);          /* anchor */
+    CHECK_REGRESSION(strstr(src, "FatalIsDegradable") != NULL, "STAB-02");
+    /* the escape return must be conditioned on the predicate */
+    const char *esc = strstr(src, "ResetCause_GetBootAttempts() >= 5U");
+    CHECK_REGRESSION(esc != NULL, "STAB-02-esc");
+    if (esc) {
+        /* the predicate must appear within the escape condition (~200 chars) */
+        char window[240];
+        memset(window, 0, sizeof(window));
+        strncpy(window, esc, 200);
+        CHECK_REGRESSION(strstr(window, "FatalIsDegradable") != NULL, "STAB-02-gate");
+    }
+    /* the predicate body must NOT list the non-degradable codes */
+    const char *pred = strstr(src, "FatalIsDegradable(uint16_t code)");
+    CHECK_REGRESSION(pred != NULL, "STAB-02-pred");
+    if (pred) {
+        char body[400];
+        memset(body, 0, sizeof(body));
+        strncpy(body, pred, 360);
+        CHECK(strstr(body, "FAULT_CODE_FLASH_INIT") != NULL);       /* the designed case */
+        CHECK_REGRESSION(strstr(body, "FAULT_CODE_CLOCK_CONFIG") == NULL, "STAB-02-clock");
+        CHECK_REGRESSION(strstr(body, "FAULT_CODE_PAYLOAD_FORMAT") == NULL, "STAB-02-payload");
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* STAB-03 (#150) — GPS-loss silence must not force GNSS over the hard floor   */
+/* ========================================================================== */
+/* lora_app.c forced gps_enabled_by_power_mgmt = true in the GPS-loss silence
+ * path UNCONDITIONALLY - including MODE_SURVIVAL (raw battery below the LTO
+ * floor). Urgency may reprioritize work; it may never bypass the electrical
+ * hard limit. The force must be gated on not being at the floor. */
+static void test_silence_force_respects_floor(void)
+{
+    printf("-- STAB-03/#150: GPS-loss silence force is hard-floor gated\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    const char *force = strstr(src, "gps_enabled_by_power_mgmt = true;");
+    CHECK(force != NULL);   /* anchor: the silence-path force */
+    if (force) {
+        /* the hard-floor guard must appear within ~300 chars before/after */
+        const char *start = force - 300;
+        if (start < src) start = src;
+        size_t n = (size_t)(force - start) + 400;
+        char *window = malloc(n + 1);
+        memset(window, 0, n + 1);
+        memcpy(window, start, n);
+        CHECK_REGRESSION(strstr(window, "MODE_SURVIVAL") != NULL, "STAB-03");
+        free(window);
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* STAB-09 (#156) — CI must run the full host regression gate                  */
+/* ========================================================================== */
+static void test_ci_runs_all_suites(void)
+{
+    printf("-- STAB-09/#156: ci.yml runs make -C tests/host all\n");
+
+    char *src = slurp("../../.github/workflows/ci.yml");
+    CHECK(strstr(src, "tests/host") != NULL);   /* anchor */
+    CHECK_REGRESSION(strstr(src, "make -C tests/host all") != NULL, "STAB-09");
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_fatal_escape_scoped();
+    test_silence_force_respects_floor();
+    test_ci_runs_all_suites();
     test_no_uart_it_receive_on_gps_uart();
     test_geofence_runs_when_gps_skipped();
     test_mission_entry_and_float_guard();
