@@ -11,6 +11,7 @@
 
 #include "main.h"
 #include "mission_state.h"
+#include "mission_logic.h"  /* STAB-06/07 (#153/#154): pure detectors */
 #include "multiregion_context.h"
 #include "backup_regs.h"
 #include "SEGGER_RTT.h"
@@ -24,14 +25,10 @@ extern RTC_HandleTypeDef hrtc;
 #define MISSION_STATE_MASK      0xFFFF0000UL
 
 static MissionState_t s_state = MISSION_COMMISSIONING;
-/* D8 (#59) / finding #7: windowed-range float detection state (no timer) */
-static float    s_win_min_hpa = 0.0f;
-static float    s_win_max_hpa = 0.0f;
-static uint32_t s_win_start_s = 0;
-static bool     s_win_active = false;
-/* MISSION-01b (#142): launch detection state (COMMISSIONING only) */
-static float    s_launch_ref_max_hpa = 0.0f;
-static bool     s_have_launch_ref = false;
+/* STAB-06/07 (#153/#154): the detection policy lives in the pure,
+ * host-testable mission_logic.c; the state structs stay here (caller-owned). */
+static LaunchDetector_t s_launch_det;
+static FloatDetector_t  s_float_det;
 
 static void MissionState_Persist(void)
 {
@@ -111,75 +108,39 @@ void MissionState_EnterFlight(void)
 
 void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s)
 {
-    /* BR-LIFE-007 / MISSION-01b (#142): autonomous launch detection in
-     * COMMISSIONING. Track the running MAX of valid pressure readings; a
-     * cumulative drop of MISSION_LAUNCH_DP_HPA below that maximum means we
-     * are climbing (~50 m). Tracking the max makes slow weather drift
-     * self-cancelling on the upside; a fast storm-front DROP of 6 hPa could
-     * still false-arm — acceptable: it only moves the unit to ASCENT cadence,
-     * and the windowed FLOAT detector will re-settle it if it isn't actually
-     * rising... no — FLOAT is terminal, so a false arm on the bench holds
-     * ASCENT cadence until powerdown. Tune MISSION_LAUNCH_DP_HPA per site if
-     * that matters; the button/arming hook is the deliberate path. */
+    /* BR-LIFE-007 / MISSION-01b (#142) + STAB-06 (#153): autonomous launch
+     * detection in COMMISSIONING, bounded reference window (mission_logic.c):
+     * a high-pressure weather system older than MISSION_LAUNCH_REF_WINDOW_S
+     * can no longer serve as the launch baseline. A fast storm-front DROP of
+     * 6 hPa inside the window can still false-arm - accepted: it only moves
+     * the unit to ASCENT cadence. */
     if (s_state == MISSION_COMMISSIONING) {
-        if (pressure_valid && pressure_hpa > 0.0f) {
-            if (!s_have_launch_ref) {
-                s_launch_ref_max_hpa = pressure_hpa;
-                s_have_launch_ref = true;
-            } else if (pressure_hpa > s_launch_ref_max_hpa) {
-                s_launch_ref_max_hpa = pressure_hpa;
-            } else if (s_launch_ref_max_hpa - pressure_hpa >= MISSION_LAUNCH_DP_HPA) {
-                SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
-                MissionState_EnterFlight();
-            }
+        if (LaunchDetector_Update(&s_launch_det, pressure_hpa, pressure_valid, now_s)) {
+            SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
+            MissionState_EnterFlight();
         }
         return;
     }
 
-    /* Finding #7 (2026-08-10): ASCENT -> FLOAT by WINDOWED RANGE.
-     * Float = pressure stays inside MISSION_FLOAT_RANGE_PCT of ambient for
-     * MISSION_FLOAT_WINDOW_S (no altitude guard, #142 — see mission_state.h).
-     * Works at any
-     * cadence, including the 10 s ascent interval where per-sample deltas
-     * are meaningless. Stale/invalid pressure resets the window: it cannot
-     * prove float — stay in ASCENT (the safe direction, DDR-0019). The
-     * transition itself is one-way (s_state != ASCENT returns early), so
-     * FLOAT never leaves once latched. */
+    /* Finding #7 (2026-08-10) + STAB-07 (#154): ASCENT -> FLOAT by WINDOWED
+     * RANGE plus two guards (mission_logic.c): accumulated ascent since
+     * launch >= MISSION_FLOAT_MIN_ASCENT_DP_HPA (a bench-armed unit at
+     * ground pressure can never reach the terminal latch) and small NET
+     * displacement over the window (a slow climb inside the wide range band
+     * keeps moving, a float wobbles around a mean). Stale/invalid pressure
+     * resets the window: it cannot prove float (DDR-0019). The latch is
+     * one-way: FLOAT never leaves once latched. */
     if (s_state != MISSION_ASCENT) {
         return;
     }
-    if (!pressure_valid || pressure_hpa <= 0.0f) {
-        s_win_active = false;
-        return;
-    }
-
-    if (!s_win_active) {
-        s_win_min_hpa = pressure_hpa;
-        s_win_max_hpa = pressure_hpa;
-        s_win_start_s = now_s;
-        s_win_active = true;
-        return;
-    }
-
-    if (pressure_hpa < s_win_min_hpa) s_win_min_hpa = pressure_hpa;
-    if (pressure_hpa > s_win_max_hpa) s_win_max_hpa = pressure_hpa;
-
-    float range = s_win_max_hpa - s_win_min_hpa;
-    if (range > MISSION_FLOAT_RANGE_PCT * pressure_hpa) {
-        /* Climbing: restart the window at the current sample. (MISSION-01:
-         * no altitude guard — float can be 5-25 km depending on payload and
-         * balloon; pad-side protection is that this code only runs in ASCENT,
-         * which is entered only by arming or launch detection.) */
-        s_win_min_hpa = pressure_hpa;
-        s_win_max_hpa = pressure_hpa;
-        s_win_start_s = now_s;
-        return;
-    }
-
-    if ((now_s - s_win_start_s) >= MISSION_FLOAT_WINDOW_S) {
+    bool min_ascent_met =
+        LaunchDetector_HasRef(&s_launch_det) &&
+        (LaunchDetector_RefHpa(&s_launch_det) - pressure_hpa) >= MISSION_FLOAT_MIN_ASCENT_DP_HPA;
+    if (FloatDetector_Update(&s_float_det, pressure_hpa, pressure_valid, now_s,
+                             min_ascent_met)) {
         s_state = MISSION_FLOAT;
         MissionState_Persist();
-        SONDE_LOG_STR("MissionState: ASCENT -> FLOAT (pressure level window)\r\n");
+        SONDE_LOG_STR("MissionState: ASCENT -> FLOAT (level + still + well above launch)\r\n");
     }
 }
 

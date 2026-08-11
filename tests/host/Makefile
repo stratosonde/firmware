@@ -9,7 +9,7 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
-SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
+SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/mission_logic.c
 
 # Flight-readiness regression suite (2026-08-08 review). Separate binary: it
 # compiles flash_log.c against the simulated NOR backend in fake_w25q.c, which

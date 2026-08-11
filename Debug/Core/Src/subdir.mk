@@ -13,6 +13,7 @@ C_SRCS += \
 ../Core/Src/flash_log.c \
 ../Core/Src/main.c \
 ../Core/Src/mission_state.c \
+../Core/Src/mission_logic.c \
 ../Core/Src/ms5607.c \
 ../Core/Src/reset_cause.c \
 ../Core/Src/multiregion_context.c \
@@ -43,6 +44,7 @@ OBJS += \
 ./Core/Src/flash_log.o \
 ./Core/Src/main.o \
 ./Core/Src/mission_state.o \
+./Core/Src/mission_logic.o \
 ./Core/Src/ms5607.o \
 ./Core/Src/reset_cause.o \
 ./Core/Src/multiregion_context.o \
@@ -73,6 +75,7 @@ C_DEPS += \
 ./Core/Src/flash_log.d \
 ./Core/Src/main.d \
 ./Core/Src/mission_state.d \
+./Core/Src/mission_logic.d \
 ./Core/Src/ms5607.d \
 ./Core/Src/reset_cause.d \
 ./Core/Src/multiregion_context.d \

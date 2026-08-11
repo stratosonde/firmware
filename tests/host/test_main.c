@@ -455,6 +455,9 @@ static void test_nmea_checksum_guard(void)
 #include "config.h"
 const SystemConfig_t *Config_Get(void) { return NULL; }
 
+/* STAB-06/07 (#153/#154): pure launch/float detectors (compiled via Makefile) */
+#include "mission_logic.h"
+
 static void test_decide_transmit_plan(void)
 {
     VoltageSlope_t vs;
@@ -666,6 +669,151 @@ static void test_r2_17_already_critical_never_reports_stable(void)
     }
 }
 
+/* STAB-06 (#153) + STAB-07 (#154): pure launch/float detectors (mission_logic.c) */
+static void test_mission_logic(void)
+{
+    /* --- STAB-06: launch reference is a BOUNDED window, not all-time max --- */
+    LaunchDetector_t ld;
+    LaunchDetector_Reset(&ld);
+    /* high-pressure system, then ordinary lower pressure 3 h later: the aged
+     * reference must NOT serve as a launch baseline (was: false launch) */
+    CHECK(!LaunchDetector_Update(&ld, 1000.0f, true, 0));
+    CHECK_REGRESSION(!LaunchDetector_Update(&ld, 994.0f, true, 3 * 3600), "STAB-06");
+    CHECK(LaunchDetector_HasRef(&ld));
+    CHECK(LaunchDetector_RefHpa(&ld) == 994.0f);   /* reseeded to current */
+
+    /* a REAL launch inside the window still trips */
+    LaunchDetector_Reset(&ld);
+    CHECK(!LaunchDetector_Update(&ld, 1000.0f, true, 100));
+    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 200));     /* -6.1 hPa */
+
+    /* boundary: exactly at the window edge the reference is still valid */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(LaunchDetector_Update(&ld, 993.0f, true, MISSION_LAUNCH_REF_WINDOW_S));
+    /* ...and one second past it, the same drop is weather, not launch */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK_REGRESSION(!LaunchDetector_Update(&ld, 993.0f, true,
+                     MISSION_LAUNCH_REF_WINDOW_S + 1), "STAB-06");
+
+    /* invalid/stale pressure neither reseeds nor triggers */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(!LaunchDetector_Update(&ld, 0.0f, false, 60));
+    CHECK(LaunchDetector_RefHpa(&ld) == 1000.0f);
+    CHECK(LaunchDetector_Update(&ld, 993.0f, true, 120));     /* ref intact */
+
+    /* 14-day stationary weather replay: a SLOW triangle, +-6 hPa over a 24 h
+     * period (1 hPa/h — realistic frontal drift, no fast cliff). Inside any
+     * 2 h window the swing is <= 2 hPa, far below the 6 hPa launch threshold;
+     * and no aged maximum may accumulate across days. Never launches. */
+    LaunchDetector_Reset(&ld);
+    {
+        bool launched = false;
+        for (uint32_t h = 0; h < 14 * 24; h++) {
+            int phase = (int)(h % 24);
+            int tri = (phase < 12) ? (phase - 6) : (18 - phase);  /* -6..+6, +-1/h */
+            float p = 1000.0f + (float)tri;
+            if (LaunchDetector_Update(&ld, p, true, h * 3600)) launched = true;
+        }
+        CHECK_REGRESSION(!launched, "STAB-06-14day");
+    }
+    /* documented accepted tradeoff (mission_state.c): a fast storm FRONT that
+     * drops 6 hPa inside the window still arms ASCENT cadence */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 3600));
+
+    /* --- STAB-07: FLOAT latch guards --- */
+    FloatDetector_t fd;
+
+    /* bench/armed-but-grounded: flat pressure, no ascent -> NEVER latch */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        for (uint32_t t = 0; t <= 7200; t += 10)
+            latched |= FloatDetector_Update(&fd, 1000.0f, true, t, false);
+        CHECK_REGRESSION(!latched, "STAB-07-bench");
+    }
+
+    /* genuine float at altitude (ascent guard met, gentle wobble): latches */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        uint32_t latch_t = 0;
+        for (uint32_t t = 0; t <= 2400 && !latched; t += 10) {
+            float p = 300.0f + ((t / 10) % 2 ? 0.3f : -0.3f);
+            if (FloatDetector_Update(&fd, p, true, t, true)) { latched = true; latch_t = t; }
+        }
+        CHECK(latched);
+        CHECK(latch_t >= MISSION_FLOAT_WINDOW_S);
+    }
+
+    /* slow climbs never latch (net-displacement guard): 0.5/1/1.5/3/5 m/s at ~9 km */
+    {
+        const float dp_per_10s[5] = { 0.215f, 0.43f, 0.645f, 1.29f, 2.15f };
+        for (int k = 0; k < 5; k++) {
+            FloatDetector_Reset(&fd);
+            bool latched = false;
+            float p = 300.0f;
+            for (uint32_t t = 0; t <= 3600 && !latched; t += 10) {
+                if (FloatDetector_Update(&fd, p, true, t, true)) latched = true;
+                p -= dp_per_10s[k];
+            }
+            CHECK_REGRESSION(!latched, "STAB-07-climb");
+        }
+    }
+
+    /* ascent stalls 1/3/5/10 min mid-climb (window is 15 min): never latch */
+    {
+        const uint32_t stall_s[4] = { 60, 180, 300, 600 };
+        for (int k = 0; k < 4; k++) {
+            FloatDetector_Reset(&fd);
+            bool latched = false;
+            float p = 500.0f;
+            for (uint32_t t = 0; t <= 2400 && !latched; t += 10) {
+                if (t < 600 || t >= 600 + stall_s[k]) p -= 1.29f;  /* 3 m/s, else flat */
+                if (FloatDetector_Update(&fd, p, true, t, true)) latched = true;
+            }
+            CHECK_REGRESSION(!latched, "STAB-07-stall");
+        }
+    }
+
+    /* descent (pressure rising steadily): window restarts, never latch */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        float p = 300.0f;
+        for (uint32_t t = 0; t <= 1800 && !latched; t += 10) {
+            if (FloatDetector_Update(&fd, p, true, t, true)) latched = true;
+            p += 1.0f;
+        }
+        CHECK(!latched);
+    }
+
+    /* stale pressure kills the window: a stale gap mid-flat restarts timing */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        for (uint32_t t = 0; t <= 2400 && !latched; t += 10) {
+            bool valid = !(t >= 800 && t < 900);   /* 100 s stale gap */
+            if (FloatDetector_Update(&fd, 300.0f, valid, t, true)) latched = true;
+        }
+        CHECK(latched);   /* still latches eventually... */
+    }
+    FloatDetector_Reset(&fd);
+    {
+        /* ...but NOT at 800+window: the stale gap must have reset the clock */
+        bool early = false;
+        for (uint32_t t = 0; t < 800 + MISSION_FLOAT_WINDOW_S; t += 10) {
+            bool valid = !(t >= 800 && t < 900);
+            if (FloatDetector_Update(&fd, 300.0f, valid, t, true)) early = true;
+        }
+        CHECK(!early);
+    }
+}
+
 static void test_r2_30_rmc_valid_clears_on_void(void)
 {
     /* R2-30 (#130): GNSS_ParseRMC sets data.valid on status 'A' but never
@@ -718,6 +866,7 @@ int main(void)
     test_r2_17_already_critical_never_reports_stable();
     test_r2_30_rmc_valid_clears_on_void();
     test_r2_19_dma_overrun_blind_spot();
+    test_mission_logic();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {

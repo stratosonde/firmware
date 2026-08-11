@@ -50,8 +50,13 @@ typedef enum {
 #define MISSION_FLOAT_RANGE_PCT 0.05f        /* (max-min)/P below this = level */
 #endif
 #ifndef MISSION_FLOAT_WINDOW_S
-#define MISSION_FLOAT_WINDOW_S 300U          /* sustained this long = FLOAT */
+#define MISSION_FLOAT_WINDOW_S 900U          /* sustained this long = FLOAT */
 #endif
+/* STAB-07 (#154): 900 s (was 300) so that ascent STALLS (1/3/5/10 min in the
+ * review's profile set) cannot reach the latch — combined with the
+ * net-displacement guard in mission_logic.c, no expected ascent trajectory
+ * permanently false-latches the terminal FLOAT state. Cadence cost: FLOAT
+ * relaxes up to 10 min later than before; trivial against a multi-week float. */
 /* MISSION-01 (#142), maintainer decision 2026-08-11: NO altitude guard on the
  * FLOAT latch. Design float altitude is payload/balloon-dependent (5-25 km),
  * so a fixed ceiling could block the latch for an entire multi-week float.
