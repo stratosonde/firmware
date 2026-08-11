@@ -105,10 +105,13 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Power on GNSS module (legacy - now calls WakeFromStandby)
+  * @brief  Power on GNSS module (commissioning path)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
-  * @note   With both pins always HIGH, this now just starts DMA and wakes GPS via UART
+  * @note   F2 (#168): CANONICAL power-up. GNSS_Init drives PB10/PB5 LOW
+  *         (module fully off), so this function MUST assert them — the old
+  *         "pins stay HIGH permanently" comment was stale and commissioning
+  *         could configure a powered-off receiver.
   */
 GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
 {
@@ -122,9 +125,11 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     return GNSS_OK; // Already powered on
   }
 
-  /* Both PB10 and PB5 stay HIGH permanently (set in GNSS_Init) */
-  /* Wake GPS from standby using UART command */
-  SONDE_LOG_STR("GNSS_PowerOn: Waking GPS via UART...\r\n");
+  /* F2 (#168): assert power + enable BEFORE any UART traffic */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   /* PB10 HIGH */
+  HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_SET);   /* PB5 HIGH */
+  HAL_Delay(100);  /* module power/enable stabilization */
+  SONDE_LOG_STR("GNSS_PowerOn: PWR/EN asserted, waking GPS via UART...\r\n");
   
   /* Disable STOP mode while GNSS is active */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
@@ -219,45 +224,54 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
 
   SONDE_LOG_STR("\r\n=== Configuring ATGM336H GNSS Module ===\r\n");
-  
+
+  /* F2 (#168): every command send is accounted — a failure must surface in
+   * the return value, not just a warning line. */
+  uint8_t cfg_failures = 0;
+
   /* R26: flight mask is GGA+RMC+VTG with GSV off (bandwidth); the old
    * "GGA+RMC only" log string was never true. */
   SONDE_LOG_STR("Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_NMEA_CONFIG) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to send NMEA config\r\n");
+    cfg_failures++;
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
-  
+
   /* Send constellation selection command (GPS+GLONASS) */
   SONDE_LOG_STR("Sending: Constellation select (GPS+GLONASS)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_CONSTELLATION) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to send constellation config\r\n");
+    cfg_failures++;
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
-  
+
   /* CRITICAL: Send airborne dynamic model command (defeats 18km CoCom limit) */
   SONDE_LOG_STR("Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_AIRBORNE_MODE) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
+    cfg_failures++;
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
-  
+
   /* Send update rate configuration (1 Hz) */
   SONDE_LOG_STR("Sending: Update rate (1 Hz)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_UPDATE_RATE) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to send update rate\r\n");
+    cfg_failures++;
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
-  
+
   /* Send satellite system configuration (GPS + BeiDou + GLONASS) */
   SONDE_LOG_STR("Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SATELLITE_SYS) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to send satellite config\r\n");
+    cfg_failures++;
   }
   HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
   
@@ -270,11 +284,20 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SAVE_CONFIG) != GNSS_OK)
   {
     SONDE_LOG_STR("WARNING: Failed to save configuration\r\n");
+    cfg_failures++;
   }
   HAL_Delay(100);  /* Give GPS time to save to flash */
-  
+
+  /* F2 (#168): never claim success the receiver did not confirm */
+  if (cfg_failures > 0)
+  {
+    SONDE_LOG("=== GNSS Configuration FAILED (%u command(s) not sent) ===\r\n\r\n",
+              cfg_failures);
+    return GNSS_ERROR;
+  }
+
   SONDE_LOG_STR("=== GNSS Configuration Complete (saved to flash) ===\r\n\r\n");
-  
+
   return GNSS_OK;
 }
 

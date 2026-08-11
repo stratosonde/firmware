@@ -49,6 +49,7 @@ extern "C" {
 #define BKP_REG_LASTPOS_EPOCH      RTC_BKP_DR12  /* lora_app.c last fresh-fix epoch seconds (STAB-01/#148) */
 #define BKP_REG_TS_WRAP            RTC_BKP_DR13  /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
 #define BKP_REG_GPS_LOSS_EPOCH     RTC_BKP_DR14  /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
+#define BKP_REG_LAUNCH_REF         RTC_BKP_DR15  /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
 
 #ifdef __cplusplus
 }

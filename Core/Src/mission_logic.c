@@ -15,6 +15,15 @@ void LaunchDetector_Reset(LaunchDetector_t *d)
     d->ref_max_hpa = 0.0f;
     d->ref_set_s = 0;
     d->have_ref = false;
+    d->pinned = false;
+}
+
+void LaunchDetector_SetRef(LaunchDetector_t *d, float ref_hpa, uint32_t now_s)
+{
+    d->ref_max_hpa = ref_hpa;
+    d->ref_set_s = now_s;
+    d->have_ref = true;
+    d->pinned = true;   /* restored launch pressure: permanent, never ages out */
 }
 
 bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
@@ -28,15 +37,20 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
      * counter near zero) — re-seed, never evaluate a wrapped delta (the
      * Deadman_Check pattern). */
     if (d->have_ref && now_s < d->ref_set_s) {
-        d->ref_max_hpa = pressure_hpa;
+        if (!d->pinned) {
+            d->ref_max_hpa = pressure_hpa;
+        }
         d->ref_set_s = now_s;
         return false;
     }
 
     /* STAB-06 (#153): the reference AGES OUT. An old maximum (high-pressure
      * weather system hours ago) can no longer serve as the launch reference;
-     * reseed from the current reading and keep watching. */
-    if (!d->have_ref || (now_s - d->ref_set_s) > MISSION_LAUNCH_REF_WINDOW_S) {
+     * reseed from the current reading and keep watching.
+     * F1 (#167): a PINNED reference (restored from the backup domain after a
+     * mid-ascent reset) is the actual launch pressure - it never ages out. */
+    if (!d->have_ref ||
+        (!d->pinned && (now_s - d->ref_set_s) > MISSION_LAUNCH_REF_WINDOW_S)) {
         d->ref_max_hpa = pressure_hpa;
         d->ref_set_s = now_s;
         d->have_ref = true;

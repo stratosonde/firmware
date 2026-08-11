@@ -59,6 +59,9 @@
 #define FAULT_CODE_CLOCK_CONFIG    16U
 #define FAULT_CODE_PAYLOAD_FORMAT  17U
 #define FAULT_CODE_FLASH_INIT      18U  /* R29 (#36): W25Q/archive unusable */
+#define FAULT_CODE_WATCHDOG_INIT   19U  /* F6 (#171): IWDG init failed - no supervision */
+#define FAULT_CODE_RTC_INIT        20U  /* F6 (#171): RTC init failed - no timebase */
+#define FAULT_CODE_RTC_STALLED     21U  /* F4 (#170): RTC stalled on LSI post-failover */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -339,6 +342,15 @@ int main(void)
  * dead oscillator. HAL_RTC_MspInit() honors this variable instead. */
 uint32_t g_rtc_clock_source = RCC_RTCCLKSOURCE_LSE;
 
+/* F12 (#173): build-configuration marker embedded in the binary — CI (and
+ * anyone with the .bin) can prove which configuration was actually compiled
+ * instead of trusting the build script. */
+#ifdef SONDE_FLIGHT_BUILD
+volatile const char g_sonde_build_marker[] = "SONDE_BUILD:flight";
+#else
+volatile const char g_sonde_build_marker[] = "SONDE_BUILD:debug";
+#endif
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -434,15 +446,25 @@ static void LSE_FailoverToLSI(void)
   RCC_PeriphCLKInitTypeDef rtcClk = {0};
   rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
   rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
-  g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
-  HAL_RCCEx_PeriphCLKConfig(&rtcClk);
+  /* F4 (#170): consume the HAL results — a failed source switch must be
+   * visible, and the (now source-agnostic) liveness check will catch a
+   * non-advancing RTC and escalate to a controlled reset. */
+  HAL_StatusTypeDef ck_status = HAL_RCCEx_PeriphCLKConfig(&rtcClk);
+  if (ck_status == HAL_OK) {
+    g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
+  } else {
+    SONDE_LOG_STR("ERROR: LSI switch FAILED - RTC source unchanged\r\n");
+    return;   /* stay on the (failing) LSE; liveness will retry/escalate */
+  }
   MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
   /* RV-09 (#165): bare MX_RTC_Init left the timer subsystem inconsistent —
    * Alarm A re-armed with AlarmMask=NONE, RtcTimerContext stale against a
    * restarted counter (alarms scheduled from it might never fire). Run the
    * full timer post-init (DeactivateAlarm, bypass shadow, timer context,
    * MSB-tick markers), same as the boot path. */
-  TIMER_IF_Init();
+  if (TIMER_IF_Init() != UTIL_TIMER_OK) {
+    SONDE_LOG_STR("ERROR: TIMER_IF_Init failed after LSI failover\r\n");
+  }
   SONDE_LOG_STR("WARNING: LSE died in flight - RTC on LSI (~1% drift)\r\n");
 }
 
@@ -478,7 +500,10 @@ static void RTC_LivenessCheck(void)
   static uint32_t last_ssr = 0;
   static uint8_t  stall_count = 0;
 
-  if (g_rtc_clock_source != RCC_RTCCLKSOURCE_LSE) return;  /* already on LSI */
+  /* F4 (#170): the SSR stall check is source-agnostic — it must keep running
+   * after a failover to LSI. Only the CSS arm is LSE-specific (that stays in
+   * the boot path). A failover that produced a dead RTC must not also remove
+   * the supervision that can see it. */
 
   uint32_t now_ms = uwTick;                    /* MSI-clocked, RTC-independent */
   if ((now_ms - last_check_ms) < 1000U) return;  /* check ~1/s */
@@ -493,9 +518,20 @@ static void RTC_LivenessCheck(void)
   }
   else if (++stall_count >= 3U)  /* no RTC advance across ~3 s of MSI time */
   {
-    SONDE_LOG_STR("ERROR: RTC stalled with LSE selected - forcing LSI failover\r\n");
-    LSE_FailoverToLSI();
     stall_count = 0;
+    if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE)
+    {
+      SONDE_LOG_STR("ERROR: RTC stalled with LSE selected - forcing LSI failover\r\n");
+      LSE_FailoverToLSI();
+    }
+    else
+    {
+      /* F4 (#170): RTC stalled on LSI - the failover option is already
+       * consumed; breadcrumb + reset so the boot path re-initializes
+       * cleanly instead of running timeless. */
+      SONDE_LOG_STR("ERROR: RTC stalled on LSI - controlled reset\r\n");
+      Error_Handler_Fatal(FAULT_CODE_RTC_STALLED);
+    }
   }
 }
 
@@ -615,7 +651,10 @@ static void MX_IWDG_Init(void)
   hiwdg.Init.Reload = 4095;  /* Maximum reload value */
   if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
   {
-    Error_Handler();
+    /* F6 (#171): the watchdog is mission-critical supervision — continuing
+     * without it means every other recovery mechanism assumes a backstop
+     * that does not exist. Fatal, not degrade-and-continue. */
+    Error_Handler_Fatal(FAULT_CODE_WATCHDOG_INIT);
   }
   /* USER CODE BEGIN IWDG_Init 2 */
 
@@ -653,7 +692,9 @@ void MX_RTC_Init(void)
   hrtc.Init.BinMode = RTC_BINARY_ONLY;
   if (HAL_RTC_Init(&hrtc) != HAL_OK)
   {
-    Error_Handler();
+    /* F6 (#171): the RTC is the mission timebase — continuing with a zombie
+     * one makes every timer/timeout/silence calculation meaningless. Fatal. */
+    Error_Handler_Fatal(FAULT_CODE_RTC_INIT);
   }
 
   /* USER CODE BEGIN Check_RTC_BKUP */
@@ -664,7 +705,7 @@ void MX_RTC_Init(void)
   */
   if (HAL_RTCEx_SetSSRU_IT(&hrtc) != HAL_OK)
   {
-    Error_Handler();
+    Error_Handler_Fatal(FAULT_CODE_RTC_INIT);
   }
 
   /** Enable the Alarm A

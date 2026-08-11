@@ -204,6 +204,33 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         SONDE_LOG_STR("PREDICT: battery reading stale -> cap at REDUCED\r\n");
         plan.power_mode = MODE_REDUCED;
     }
+    /* F8 (#172): asymmetric mode hysteresis. DOWNGRADES apply immediately
+     * (energy protection must never wait); UPGRADES (toward higher power)
+     * require F8_UPGRADE_CONFIRM consecutive cycles proposing the upgrade —
+     * one 10 mV ADC deviation is ~60 mV/h of slope noise, larger than every
+     * mode threshold, so unfiltered selection chatters at dawn/dusk/load. */
+    #define F8_UPGRADE_CONFIRM  3U
+    {
+        OperatingMode_t proposed = plan.power_mode;
+        if (!slope_state->mode_hyst_valid) {
+            slope_state->mode_hyst_valid = 1;
+            slope_state->committed_mode = (uint8_t)proposed;
+            slope_state->upgrade_streak = 0;
+        } else if (proposed < (OperatingMode_t)slope_state->committed_mode) {
+            /* upgrade requested */
+            if (++slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM) {
+                slope_state->committed_mode = (uint8_t)proposed;
+                slope_state->upgrade_streak = 0;
+                SONDE_LOG_STR("PREDICT: sustained upgrade confirmed -> mode change\r\n");
+            } else {
+                plan.power_mode = (OperatingMode_t)slope_state->committed_mode;
+            }
+        } else {
+            /* downgrade or unchanged: immediate */
+            slope_state->committed_mode = (uint8_t)proposed;
+            slope_state->upgrade_streak = 0;
+        }
+    }
     plan.tx_interval_ms = ApplyOperatingMode(plan.power_mode,
                                              &plan.gps_enabled,
                                              &plan.gps_timeout_ms);

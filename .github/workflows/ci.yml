@@ -14,6 +14,8 @@ jobs:
       # (BURST-01/02/03, R2-13, STAB-*) and must be merge gates, not opt-in.
       - name: All host regression suites
         run: make -C tests/host all
+      - name: Host tests with UBSan/ASan (F16, 2026-08-11 review)
+        run: make -C tests/host sanitize
 
   firmware:
     runs-on: ubuntu-latest
@@ -41,6 +43,15 @@ jobs:
           sudo apt-get install -y gcc-arm-none-eabi
       - name: Build flight configuration (SONDE_FLIGHT_BUILD)
         run: |
+          # F12 (#173): the sed injection must fail LOUDLY if CubeMX regen
+          # changes the fragment syntax and the substitution stops matching —
+          # otherwise CI ships a "flight" binary that is not a flight build.
           find Debug -name subdir.mk -exec sed -i 's/-DDEBUG -DCORE_CM4/-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4/' {} +
+          grep -rL "DSONDE_FLIGHT_BUILD" Debug --include=subdir.mk && { echo "FATAL: flight macro injection missed a fragment"; exit 1; }
           make -C Debug all -j"$(nproc)"
           arm-none-eabi-size Debug/Radio_Sonde_E5_HF_EU.elf
+      - name: Prove the flight marker is in the binary (F12/#173)
+        run: |
+          arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/flight.bin
+          grep -q "SONDE_BUILD:flight" /tmp/flight.bin || { echo "FATAL: flight build marker missing"; exit 1; }
+          grep -q "SONDE_BUILD:debug" /tmp/flight.bin && { echo "FATAL: debug build marker present"; exit 1; } || true

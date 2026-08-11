@@ -29,6 +29,16 @@ static MissionState_t s_state = MISSION_COMMISSIONING;
  * host-testable mission_logic.c; the state structs stay here (caller-owned). */
 static LaunchDetector_t s_launch_det;
 static FloatDetector_t  s_float_det;
+/* F1 (#167): ASCENT restored without a launch reference (backup-domain wipe
+ * mid-flight) — the min-ascent guard is unprovable, so FLOAT falls back to
+ * the window+net+sample guards alone. That path implies a commissioned,
+ * airborne unit (session bank intact); documented tradeoff. */
+static bool s_no_launch_ref = false;
+
+/* F1 (#167): DR15 layout: upper 16 bits = magic, lower 16 = launch ref
+ * pressure x10 (max ~1100 hPa -> 11000 < 65536). */
+#define LAUNCH_REF_MAGIC    0x5A5A0000UL
+#define LAUNCH_REF_MASK     0xFFFF0000UL
 
 static void MissionState_Persist(void)
 {
@@ -77,6 +87,23 @@ void MissionState_Init(void)
         s_state = MISSION_COMMISSIONING;
     }
 
+    /* F1 (#167): restore the launch reference for a persisted ASCENT, or the
+     * min-ascent guard can never be proven and FLOAT is unreachable for the
+     * rest of the mission (a recoverable reset mid-climb became a permanent
+     * 10 s / GNSS-on energy failure). DR15 dies with the backup domain that
+     * also carried DR3, so a reconstruct-from-bank ASCENT has no ref by
+     * construction -> s_no_launch_ref fallback. */
+    if (s_state == MISSION_ASCENT) {
+        uint32_t lr = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LAUNCH_REF);
+        if ((lr & LAUNCH_REF_MASK) == LAUNCH_REF_MAGIC && (lr & 0xFFFFUL) > 0) {
+            LaunchDetector_SetRef(&s_launch_det,
+                                  (float)(lr & 0xFFFFUL) / 10.0f, 0);
+        } else {
+            s_no_launch_ref = true;
+            SONDE_LOG_STR("MissionState: ASCENT without launch ref - FLOAT on window guards only\r\n");
+        }
+    }
+
     MissionState_Persist();
 
     SONDE_LOG("MissionState: %s (bank %s, DR3 %s)\r\n",
@@ -117,6 +144,12 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
     if (s_state == MISSION_COMMISSIONING) {
         if (LaunchDetector_Update(&s_launch_det, pressure_hpa, pressure_valid, now_s)) {
             SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
+            /* F1 (#167): persist the launch reference BEFORE entering flight —
+             * a reset during ascent must be able to restore it or FLOAT is
+             * unreachable for the rest of the mission. */
+            uint16_t ref_x10 = (uint16_t)(LaunchDetector_RefHpa(&s_launch_det) * 10.0f);
+            HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LAUNCH_REF,
+                                LAUNCH_REF_MAGIC | (uint32_t)ref_x10);
             MissionState_EnterFlight();
         }
         return;
@@ -134,8 +167,9 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
         return;
     }
     bool min_ascent_met =
-        LaunchDetector_HasRef(&s_launch_det) &&
-        (LaunchDetector_RefHpa(&s_launch_det) - pressure_hpa) >= MISSION_FLOAT_MIN_ASCENT_DP_HPA;
+        s_no_launch_ref ||
+        (LaunchDetector_HasRef(&s_launch_det) &&
+         (LaunchDetector_RefHpa(&s_launch_det) - pressure_hpa) >= MISSION_FLOAT_MIN_ASCENT_DP_HPA);
     if (FloatDetector_Update(&s_float_det, pressure_hpa, pressure_valid, now_s,
                              min_ascent_met)) {
         s_state = MISSION_FLOAT;

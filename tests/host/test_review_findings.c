@@ -527,9 +527,131 @@ static void test_silence_backward_step_guard(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* 2026-08-11 stability review (F1-F14)                                        */
+/* ========================================================================== */
+static void test_f1_launch_ref_persistence(void)
+{
+    printf("-- F1/#167: launch reference persists across reset\n");
+    char *h = slurp("../../Core/Inc/backup_regs.h");
+    CHECK_REGRESSION(strstr(h, "BKP_REG_LAUNCH_REF") != NULL, "F1-reg");
+    free(h);
+    char *ml = slurp("../../Core/Inc/mission_logic.h");
+    CHECK_REGRESSION(strstr(ml, "LaunchDetector_SetRef") != NULL, "F1-api");
+    free(ml);
+    char *ms = slurp("../../Core/Src/mission_state.c");
+    CHECK_REGRESSION(strstr(ms, "BKP_REG_LAUNCH_REF") != NULL, "F1-wiring");
+    CHECK_REGRESSION(strstr(ms, "LaunchDetector_SetRef") != NULL, "F1-restore");
+    free(ms);
+}
+
+static void test_f2_gnss_power_truthfulness(void)
+{
+    printf("-- F2/#168: commissioning power-up is canonical; Configure is honest\n");
+    char *src = slurp("../../Core/Src/atgm336h.c");
+    const char *po = strstr(src, "GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)");
+    CHECK(po != NULL);
+    if (po) {
+        char body[1600];
+        memset(body, 0, sizeof(body));
+        strncpy(body, po, 1500);
+        CHECK_REGRESSION(strstr(body, "GPIO_PIN_SET") != NULL, "F2-pins");
+    }
+    const char *cf = strstr(src, "GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)");
+    CHECK(cf != NULL);
+    if (cf) {
+        char body[3000];
+        memset(body, 0, sizeof(body));
+        strncpy(body, cf, 2900);
+        CHECK_REGRESSION(strstr(body, "cfg_failures") != NULL, "F2-aggregate");
+        CHECK_REGRESSION(strstr(body, "return GNSS_ERROR") != NULL, "F2-status");
+    }
+    free(src);
+}
+
+static void test_f3_flash_waitready_iteration_bound(void)
+{
+    printf("-- F3/#169: flash BUSY wait has a clock-independent bound\n");
+    char *src = slurp("../../Core/Src/w25q16jv.c");
+    CHECK_REGRESSION(strstr(src, "W25Q_MAX_BUSY_POLLS") != NULL, "F3");
+    free(src);
+}
+
+static void test_f4_liveness_and_failover_transactional(void)
+{
+    printf("-- F4/#170: liveness runs on LSI; failover checks HAL results\n");
+    char *src = slurp("../../Core/Src/main.c");
+    const char *lv = strstr(src, "static void RTC_LivenessCheck(void)\n{");
+    if (lv == NULL) lv = strstr(src, "static void RTC_LivenessCheck(void)\r\n{");
+    CHECK(lv != NULL);
+    if (lv) {
+        char body[3400];
+        memset(body, 0, sizeof(body));
+        strncpy(body, lv, 3300);
+        /* no source-based early return: the SSR check is source-agnostic */
+        CHECK_REGRESSION(strstr(body, "RCC_RTCCLKSOURCE_LSE) return") == NULL, "F4-lsi-liveness");
+        CHECK_REGRESSION(strstr(body, "stalled on LSI") != NULL, "F4-lsi-escalation");
+    }
+    const char *fo = strstr(src, "HAL_RCCEx_PeriphCLKConfig(&rtcClk)");
+    CHECK(fo != NULL);
+    if (fo) {
+        /* the failover must consume the return code */
+        CHECK_REGRESSION(strstr(fo - 60 > src ? fo - 60 : src, "ck_status") != NULL ||
+                         strstr(fo - 60 > src ? fo - 60 : src, "!= HAL_OK") != NULL, "F4-hal-check");
+    }
+    free(src);
+}
+
+static void test_f6_critical_init_is_fatal(void)
+{
+    printf("-- F6/#171: watchdog/RTC init failure is fatal, not degrade-continue\n");
+    char *src = slurp("../../Core/Src/main.c");
+    CHECK_REGRESSION(strstr(src, "FAULT_CODE_WATCHDOG_INIT") != NULL, "F6-iwdg");
+    CHECK_REGRESSION(strstr(src, "FAULT_CODE_RTC_INIT") != NULL, "F6-rtc");
+    free(src);
+}
+
+static void test_f10_region_policy_comments_aligned(void)
+{
+    printf("-- F10/#175: stale-position policy stated consistently\n");
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK_REGRESSION(strstr(src, "may INHIBIT but never SWITCH") != NULL, "F10");
+    free(src);
+}
+
+static void test_f12_flight_build_verified(void)
+{
+    printf("-- F12/#173: flight macro injection is verified + binary marker\n");
+    char *ci = slurp("../../.github/workflows/ci.yml");
+    CHECK_REGRESSION(strstr(ci, "SONDE_BUILD:flight") != NULL, "F12-ci");
+    free(ci);
+    char *src = slurp("../../Core/Src/main.c");
+    CHECK_REGRESSION(strstr(src, "SONDE_BUILD:") != NULL, "F12-marker");
+    free(src);
+}
+
+static void test_f13_f14_w25q_hardening(void)
+{
+    printf("-- F13/#174: exact JEDEC; F14: wrap-safe range checks\n");
+    char *src = slurp("../../Core/Src/w25q16jv.c");
+    CHECK_REGRESSION(strstr(src, "jedec_id != W25Q16JV_JEDEC_ID") != NULL, "F13");
+    CHECK_REGRESSION(strstr(src, "(addr + len)") == NULL, "F14");
+    CHECK_REGRESSION(strstr(src, "W25Q_FLASH_SIZE - addr") != NULL, "F14-form");
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
+
+    test_f1_launch_ref_persistence();
+    test_f2_gnss_power_truthfulness();
+    test_f3_flash_waitready_iteration_bound();
+    test_f4_liveness_and_failover_transactional();
+    test_f6_critical_init_is_fatal();
+    test_f10_region_policy_comments_aligned();
+    test_f12_flight_build_verified();
+    test_f13_f14_w25q_hardening();
 
     test_lse_failover_deferred_and_complete();
     test_mission_cadence_never_increases_duty();

@@ -510,6 +510,29 @@ static void test_decide_transmit_plan(void)
                          q.power_mode != MODE_NORMAL, "RV-03");
     }
 
+    /* F8 (#172): power-mode hysteresis - one noisy sample (10 mV over the
+     * ~600 s slope window = 60 mV/h, larger than every mode threshold) must
+     * not flap the mode toward higher power. Downgrades stay immediate. */
+    {
+        VoltageSlope_t vs5;
+        memset(&vs5, 0, sizeof(vs5));
+        TransmitPlan_t r;
+        r = DecideTransmitPlan(&vs5, 5200, 25.0f, false, 1000, true, false, false);
+        CHECK(r.power_mode == MODE_CONSERVATIVE);   /* baseline, slope 0 */
+        /* +20 mV over 700 s: slope ~+103 mV/h -> proposes NORMAL */
+        r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 1700, true, false, false);
+        CHECK_REGRESSION(r.power_mode == MODE_CONSERVATIVE, "F8-noise1");
+        /* still +51 mV/h at 1400 s: second proposal, still not committed */
+        r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 2400, true, false, false);
+        CHECK_REGRESSION(r.power_mode == MODE_CONSERVATIVE, "F8-noise2");
+        /* third consecutive upgrade proposal commits */
+        r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 3100, true, false, false);
+        CHECK(r.power_mode == MODE_NORMAL);
+        /* downgrade applies immediately (energy protection never waits) */
+        r = DecideTransmitPlan(&vs5, 4800, 25.0f, false, 3800, true, false, false);
+        CHECK_REGRESSION(r.power_mode != MODE_NORMAL, "F8-down-immediate");
+    }
+
     /* Brownout floor: normalized floor defeated at -66C is R10's problem;
      * here raw 4200 at 25C -> SURVIVAL, GPS off, 1h interval */
     memset(&vs, 0, sizeof(vs));
@@ -876,6 +899,21 @@ static void test_mission_logic(void)
     /* clock restarts below ref_set_s: re-seed from current, no false launch */
     CHECK_REGRESSION(!LaunchDetector_Update(&ld, 994.0f, true, 10), "RV-06-launch");
     CHECK(LaunchDetector_RefHpa(&ld) == 994.0f);
+
+    /* F1 (#167): a launch reference restored from the backup domain after a
+     * mid-ascent reset must NOT age out like a weather maximum - it is THE
+     * launch altitude, permanently valid. LaunchDetector_SetRef pins it. */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_SetRef(&ld, 1000.0f, 5000);
+    CHECK(LaunchDetector_HasRef(&ld));
+    CHECK(LaunchDetector_RefHpa(&ld) == 1000.0f);
+    /* hours later, a nearby sample must not reseed/age out the pinned ref
+     * (without pinning, the 2 h aging window would reseed to 995) */
+    CHECK(!LaunchDetector_Update(&ld, 995.0f, true, 5000 + 4 * 3600));
+    CHECK_REGRESSION(LaunchDetector_RefHpa(&ld) == 1000.0f, "F1-pinned");
+    /* and the restored ref still gates min-ascent correctly for FLOAT */
+    CHECK_REGRESSION((LaunchDetector_RefHpa(&ld) - 300.0f) >=
+                     MISSION_FLOAT_MIN_ASCENT_DP_HPA, "F1-minascent");
 
     /* RV-07 (#163): a degenerate two-sample window (SURVIVAL 1-h cadence) must
      * not satisfy the latch - minimum sample count in the window. */

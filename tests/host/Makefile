@@ -66,7 +66,18 @@ baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EX
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
 	EXPECT_UNFIXED=1 ./test_burst$(EXE)
 
+# F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
+# suite — catches signed overflow / UB at the numerical boundaries the
+# protocol fuzz loop drives.
+SAN_FLAGS := -fsanitize=undefined,address -fno-omit-frame-pointer
+test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
+	$(CC) $(CFLAGS) $(SAN_FLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
+
+.PHONY: sanitize
+sanitize: test_sanitize$(EXE)
+	./test_sanitize$(EXE)
+
 all: test flight findings burst
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_sanitize$(EXE)

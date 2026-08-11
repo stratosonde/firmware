@@ -486,7 +486,11 @@ void LoRaWAN_Init(void)
     SONDE_LOG_STR("*** COMMISSIONING: Reconfiguring GPS module (all constellations) ***\r\n");
     GNSS_PowerOn(&hgnss);
     HAL_Delay(1000);  // Let GPS boot
-    GNSS_Configure(&hgnss);  // Sends PCAS04,7 + PCAS11 airborne + PCAS00 (save)
+    /* F2 (#168): the return value is now meaningful — a failed configure must
+     * be loud, not a warning line above a "success" banner. */
+    if (GNSS_Configure(&hgnss) != GNSS_OK) {  // PCAS04,7 + PCAS11 airborne + PCAS00
+      SONDE_LOG_STR("*** COMMISSIONING: GNSS CONFIGURE FAILED - do not launch ***\r\n");
+    }
     HAL_Delay(500);   // Let GPS save to flash
     GNSS_PowerOff(&hgnss);
     SONDE_LOG_STR("*** GPS reconfigured and saved to flash ***\r\n\r\n");
@@ -1152,7 +1156,16 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
  * @brief F-R1 (#74): H3 region lookup + auto-switch for the current position.
  *        F-06/DDR-0015: deliberately runs on possibly-stale last-known
  *        position (see comment inline). REGION_RESTRICTED sets *rf_silence;
- *        REGION_UNKNOWN keeps the current region and transmits normally.
+ *        REGION_UNKNOWN keeps the current region and transmits normally
+ *        (agreed maritime convention, path-forward 1.3 / DDR-0001 open
+ *        product decision — blocking UNKNOWN darkened every ocean crossing).
+ *
+ * F10 (#175) — THE stale-position RF policy, stated once: a stale position
+ * may INHIBIT but never SWITCH. Full region selection (including
+ * auto-switch) runs only on a FRESH fix; the stale-position geofence can
+ * silence (REGION_RESTRICTED) but can never change region or newly authorize
+ * transmission. Anything else reads as a contradiction with the inhibit-only
+ * rule and must be fixed here first.
  */
 /* BURST-03 (#141): single geofence-policy point so the GPS-skip path runs the
  * SAME restricted-region test as the live-fix path. Pure computation (h3lite),

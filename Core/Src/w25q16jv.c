@@ -137,10 +137,10 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
         return status;
     }
     
-    /* Verify this is a W25Q16JV or compatible (check manufacturer and memory type) */
-    /* W25Q16JV: EF 40 15, W25Q16DV: EF 40 15, W25Q16BV: EF 40 15 */
-    /* We accept any W25Q16 variant (manufacturer 0xEF, memory type 0x40, capacity 0x15) */
-    if ((jedec_id & 0xFFFF00) != 0xEF4000) {
+    /* F13 (#174): require the EXACT JEDEC ID. The whole driver (geometry,
+     * addressing, erase sizes) assumes W25Q16; masking off the capacity byte
+     * let a W25Q32/64/08 pass identification with the wrong fixed geometry. */
+    if (jedec_id != W25Q16JV_JEDEC_ID) {
         /* Not a Winbond W25Q series device */
         SONDE_LOG("W25Q_Init: VERIFICATION FAILED - Wrong device ID: 0x%06lX\r\n", jedec_id);
         return W25Q_ERROR_NOT_FOUND;
@@ -287,29 +287,41 @@ W25Q_StatusTypeDef W25Q_WaitReady(W25Q_HandleTypeDef *hw25q, uint32_t timeout_ms
     uint8_t status;
     W25Q_StatusTypeDef ret;
     uint32_t start_tick = HAL_GetTick();
-    
+    /* F3 (#169): the tick-based timeout is RTC-backed — a stalled RTC plus a
+     * stuck BUSY would otherwise hang forever WHILE refreshing the IWDG
+     * (timeout, watchdog, and RTC-liveness all defeated by one fault). The
+     * absolute poll bound is clock-independent: each poll is a full SPI
+     * status transaction (~20 us at 8 MHz), so 32 polls/ms is conservative. */
+    uint32_t polls = 0;
+    const uint32_t max_polls = timeout_ms * W25Q_MAX_BUSY_POLLS_PER_MS;
+
     if (hw25q == NULL) {
         return W25Q_ERROR_PARAM;
     }
-    
+
     do {
         ret = W25Q_ReadStatus1(hw25q, &status);
         if (ret != W25Q_OK) {
             return ret;
         }
-        
+
         if ((status & W25Q_STATUS_BUSY) == 0) {
             return W25Q_OK;  /* Device ready */
         }
-        
+
+        if (++polls > max_polls) {
+            SONDE_LOG_STR("W25Q: BUSY poll bound hit (clock-independent) - aborting\r\n");
+            return W25Q_ERROR_BUSY;
+        }
+
         /* R39 (#31): __WFI() between polls instead of a 1 ms NOP-spin — the
          * core sleeps until ANY interrupt (SysTick at 1 kHz bounds the stall
          * to ~1 ms, same cadence as before at a fraction of the energy). */
         __WFI();
 
-        /* F-11 (#69): pet the watchdog inside the wait loop. Safe today only
-         * because no path issues CHIP_ERASE (~100 s); with F-10's widened
-         * cold-margin timeouts a long erase would otherwise IWDG-reset. */
+        /* F-11 (#69): pet the watchdog inside the wait loop. Bounded by the
+         * poll cap above, so this can no longer keep the IWDG alive forever
+         * inside a stuck operation. */
         {
             extern IWDG_HandleTypeDef hiwdg;
             if (hiwdg.Instance != NULL) {
@@ -318,7 +330,7 @@ W25Q_StatusTypeDef W25Q_WaitReady(W25Q_HandleTypeDef *hw25q, uint32_t timeout_ms
         }
 
     } while ((HAL_GetTick() - start_tick) < timeout_ms);
-    
+
     return W25Q_ERROR_BUSY;  /* Timeout */
 }
 
@@ -384,7 +396,8 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hw25q, uint32_t addr,
         return W25Q_ERROR_PARAM;
     }
     
-    if ((addr + len) > W25Q_FLASH_SIZE) {
+    /* F14 (#174): subtraction form - the sum can wrap */
+    if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
         return W25Q_ERROR_PARAM;
     }
     
@@ -436,7 +449,8 @@ W25Q_StatusTypeDef W25Q_FastRead(W25Q_HandleTypeDef *hw25q, uint32_t addr,
         return W25Q_ERROR_PARAM;
     }
     
-    if ((addr + len) > W25Q_FLASH_SIZE) {
+    /* F14 (#174): subtraction form - the sum can wrap */
+    if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
         return W25Q_ERROR_PARAM;
     }
     
@@ -488,7 +502,8 @@ W25Q_StatusTypeDef W25Q_PageProgram(W25Q_HandleTypeDef *hw25q, uint32_t addr,
         return W25Q_ERROR_PARAM;
     }
     
-    if ((addr + len) > W25Q_FLASH_SIZE) {
+    /* F14 (#174): subtraction form - the sum can wrap */
+    if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
         return W25Q_ERROR_PARAM;
     }
     
@@ -551,7 +566,8 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
         return W25Q_ERROR_PARAM;
     }
     
-    if ((addr + len) > W25Q_FLASH_SIZE) {
+    /* F14 (#174): subtraction form - the sum can wrap */
+    if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
         return W25Q_ERROR_PARAM;
     }
     
@@ -853,7 +869,8 @@ W25Q_StatusTypeDef W25Q_IsErased(W25Q_HandleTypeDef *hw25q, uint32_t addr,
         return W25Q_ERROR_PARAM;
     }
     
-    if ((addr + len) > W25Q_FLASH_SIZE) {
+    /* F14 (#174): subtraction form - the sum can wrap */
+    if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
         return W25Q_ERROR_PARAM;
     }
     

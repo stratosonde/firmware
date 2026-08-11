@@ -39,6 +39,14 @@ typedef struct {
     uint16_t current_voltage_mv;     // Most recent voltage reading
     uint32_t current_timestamp;      // Most recent timestamp
     int16_t  last_slope_mv_per_hour; // FW-6: last valid slope (returned when dt < MIN_SLOPE_DT)
+    /* F8 (#172): mode-change hysteresis (RAM-only, like the slope history).
+     * One ADC sample of noise (~10 mV) over the ~600 s slope window is
+     * ~60 mV/h — larger than every mode threshold — so raw mode selection
+     * chatters. Upgrades (toward higher power) need consecutive confirmation;
+     * downgrades apply immediately. */
+    uint8_t  mode_hyst_valid;    // committed_mode is meaningful
+    uint8_t  committed_mode;     // OperatingMode_t last handed out
+    uint8_t  upgrade_streak;     // consecutive cycles proposing a higher-power mode
 } VoltageSlope_t;
 
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);

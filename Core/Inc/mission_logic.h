@@ -44,6 +44,7 @@ typedef struct {
     float    ref_max_hpa;   /* highest pressure seen inside the window */
     uint32_t ref_set_s;     /* when ref_max was (re)seeded */
     bool     have_ref;
+    bool     pinned;        /* F1 (#167): restored launch ref never ages out */
 } LaunchDetector_t;
 
 void LaunchDetector_Reset(LaunchDetector_t *d);
@@ -57,6 +58,12 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
 /** Reference accessors for the FLOAT min-ascent guard (STAB-07). */
 bool LaunchDetector_HasRef(const LaunchDetector_t *d);
 float LaunchDetector_RefHpa(const LaunchDetector_t *d);
+
+/** F1 (#167): install a launch reference restored from the backup domain
+ * after a mid-ascent reset. PINNED: it is the actual launch pressure, not a
+ * weather maximum — it must never age out (else FLOAT becomes unreachable
+ * again ~2 h after the reset). */
+void LaunchDetector_SetRef(LaunchDetector_t *d, float ref_hpa, uint32_t now_s);
 
 /* --- Float detector (ASCENT): windowed range + min-ascent guard --- */
 typedef struct {

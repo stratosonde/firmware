@@ -85,6 +85,10 @@ extern "C" {
  * cost of a longer timeout is negligible next to a spurious flash failure
  * at altitude; W25Q_WaitReady now refreshes the IWDG (F-11) so long waits
  * are watchdog-safe. */
+/* F3 (#169): clock-independent BUSY-wait bound. Each WaitReady poll is one
+ * full SPI status read (~20 us at 8 MHz); 32 polls/ms is a conservative
+ * cap that fires even if the RTC-backed tick is frozen. */
+#define W25Q_MAX_BUSY_POLLS_PER_MS  32U
 #define W25Q_TIMEOUT_PAGE_PROG    10    /* Page program max 3ms -> 3x */
 #define W25Q_TIMEOUT_SECTOR_ERASE 1200  /* Sector erase max 400ms -> 3x */
 #define W25Q_TIMEOUT_BLOCK_ERASE  6000  /* 64KB block erase max 2000ms -> 3x */
