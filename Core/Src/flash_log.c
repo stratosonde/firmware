@@ -197,6 +197,18 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
                 (*skipped_count)++;
             }
             sequence_to_read++;
+            /* RV-01 (#160): a contiguous corrupt run AT the watermark edge is
+             * already declared unrecoverable — retire it NOW. The caller's
+             * retire path is unreachable when nothing reads clean
+             * (record_count == 0 -> "no unsent records" -> COMPLETE), so a
+             * >= 256-record corrupt run wedged bulk transfer permanently with
+             * the good archive behind it unreachable. Holes past a good record
+             * still cannot retire here (the watermark is a scalar) — those
+             * wait for the caller's ACK commit as before. CommitThrough clamps
+             * and honors the deferred-header batching (#8). */
+            if (*actual_count == 0) {
+                FlashLog_CommitThrough(hlog, sequence_to_read);
+            }
             continue;
         }
 

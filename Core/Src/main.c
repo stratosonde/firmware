@@ -40,6 +40,7 @@
 #include "payload_format.h"
 #include "config.h"
 #include "reset_cause.h"
+#include "timer_if.h"  /* RV-09 (#165): TIMER_IF_Init in the deferred failover */
 #include "mission_state.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
 /* USER CODE END Includes */
@@ -102,6 +103,10 @@ static void MX_I2C2_Init(void);
 static void MX_IWDG_Init(void);
 static void LSE_FailoverToLSI(void);   /* F-14 (#70) */
 static void RTC_LivenessCheck(void);   /* F-14 (#70) */
+/* RV-09 (#165): the CSS interrupt only flags; the failover runs in the main
+ * loop. RCC reconfiguration + RTC re-init inside an ISR races any main-loop
+ * RTC access. */
+static volatile bool s_lse_fail_pending = false;
 /* USER CODE BEGIN PFP */
 void leds_boot_seq(void);
 /* USER CODE END PFP */
@@ -313,6 +318,12 @@ int main(void)
     extern void Deadman_Check(void);
     Deadman_Check();
 
+    /* RV-09 (#165): deferred LSE failover — main-loop context, never ISR */
+    if (s_lse_fail_pending) {
+      s_lse_fail_pending = false;
+      LSE_FailoverToLSI();
+    }
+
     RTC_LivenessCheck();  /* F-14 (#70): frozen time must not look alive */
 
     /* Refresh watchdog to prevent reset (must be called within 32.76 seconds) */
@@ -426,13 +437,20 @@ static void LSE_FailoverToLSI(void)
   g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
   HAL_RCCEx_PeriphCLKConfig(&rtcClk);
   MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
+  /* RV-09 (#165): bare MX_RTC_Init left the timer subsystem inconsistent —
+   * Alarm A re-armed with AlarmMask=NONE, RtcTimerContext stale against a
+   * restarted counter (alarms scheduled from it might never fire). Run the
+   * full timer post-init (DeactivateAlarm, bypass shadow, timer context,
+   * MSB-tick markers), same as the boot path. */
+  TIMER_IF_Init();
   SONDE_LOG_STR("WARNING: LSE died in flight - RTC on LSI (~1% drift)\r\n");
 }
 
-/* F-14 (#70): LSE CSS interrupt callback (fires from TAMP_STAMP_LSECSS_SSRU_IRQn). */
+/* F-14 (#70): LSE CSS interrupt callback (fires from TAMP_STAMP_LSECSS_SSRU_IRQn).
+ * RV-09 (#165): ISR context — flag only, the main loop executes the failover. */
 void HAL_RCCEx_LSECSS_Callback(void)
 {
-  LSE_FailoverToLSI();
+  s_lse_fail_pending = true;
 }
 
 /* F-14 (#70) / FR-02 (#86): second layer — verify the RTC actually advances

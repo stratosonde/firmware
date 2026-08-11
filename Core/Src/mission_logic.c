@@ -24,6 +24,15 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
         return false;   /* stale/invalid proves nothing; window untouched */
     }
 
+    /* RV-06 (#162): backward time step (LSE->LSI failover restarts the RTC
+     * counter near zero) — re-seed, never evaluate a wrapped delta (the
+     * Deadman_Check pattern). */
+    if (d->have_ref && now_s < d->ref_set_s) {
+        d->ref_max_hpa = pressure_hpa;
+        d->ref_set_s = now_s;
+        return false;
+    }
+
     /* STAB-06 (#153): the reference AGES OUT. An old maximum (high-pressure
      * weather system hours ago) can no longer serve as the launch reference;
      * reseed from the current reading and keep watching. */
@@ -59,6 +68,7 @@ void FloatDetector_Reset(FloatDetector_t *d)
     d->win_max_hpa = 0.0f;
     d->win_first_hpa = 0.0f;
     d->win_start_s = 0;
+    d->samples = 0;
     d->active = false;
 }
 
@@ -71,15 +81,24 @@ bool FloatDetector_Update(FloatDetector_t *d, float pressure_hpa,
         return false;
     }
 
+    /* RV-06 (#162): backward time step (RTC restart) — re-seed the window at
+     * the current sample; (now - start) must never wrap into an instant latch
+     * of the terminal state. */
+    if (d->active && now_s < d->win_start_s) {
+        d->active = false;
+    }
+
     if (!d->active) {
         d->win_min_hpa = pressure_hpa;
         d->win_max_hpa = pressure_hpa;
         d->win_first_hpa = pressure_hpa;
         d->win_start_s = now_s;
+        d->samples = 1;
         d->active = true;
         return false;
     }
 
+    d->samples++;
     if (pressure_hpa < d->win_min_hpa) d->win_min_hpa = pressure_hpa;
     if (pressure_hpa > d->win_max_hpa) d->win_max_hpa = pressure_hpa;
 
@@ -90,6 +109,7 @@ bool FloatDetector_Update(FloatDetector_t *d, float pressure_hpa,
         d->win_max_hpa = pressure_hpa;
         d->win_first_hpa = pressure_hpa;
         d->win_start_s = now_s;
+        d->samples = 1;
         return false;
     }
 
@@ -102,16 +122,27 @@ bool FloatDetector_Update(FloatDetector_t *d, float pressure_hpa,
         float net = (pressure_hpa > d->win_first_hpa)
                     ? (pressure_hpa - d->win_first_hpa)
                     : (d->win_first_hpa - pressure_hpa);
+        /* RV-07 (#163): a degenerate window must not latch — require a minimum
+         * sample count, so two readings an hour apart (SURVIVAL cadence) can
+         * never satisfy "sustained window". Too few samples but otherwise
+         * flat+still: KEEP ACCUMULATING (do not restart — that would discard
+         * the samples and never latch at long cadence). At 10 s ascent
+         * cadence the count is always met long before the time window. */
         if (min_ascent_met &&
             net <= 0.25f * MISSION_FLOAT_RANGE_PCT * pressure_hpa) {
-            return true;    /* genuine float: flat, still, AND well above launch */
+            if (d->samples >= 4) {
+                return true;  /* genuine float: flat, still, measured, above launch */
+            }
+            return false;
         }
-        /* Guard not met (no accumulated ascent, or still moving): restart the
-         * window — stay in ASCENT (cadence cost beats a false terminal latch). */
+        /* Guard not met (no accumulated ascent, still moving, or too few
+         * samples): restart the window — stay in ASCENT (cadence cost beats
+         * a false terminal latch). */
         d->win_min_hpa = pressure_hpa;
         d->win_max_hpa = pressure_hpa;
         d->win_first_hpa = pressure_hpa;
         d->win_start_s = now_s;
+        d->samples = 1;
     }
 
     return false;

@@ -460,10 +460,80 @@ static void test_protocol_docs_match_code(void)
     free(proto);
 }
 
+/* ========================================================================== */
+/* RV-09 (#165) — LSE failover: full timer re-init, no ISR-context work        */
+/* ========================================================================== */
+static void test_lse_failover_deferred_and_complete(void)
+{
+    printf("-- RV-09/#165: LSE failover deferred to main loop + full timer init\n");
+
+    char *src = slurp("../../Core/Src/main.c");
+    CHECK(strstr(src, "LSE_FailoverToLSI") != NULL);   /* anchor */
+    /* the ISR sets the flag... */
+    CHECK_REGRESSION(strstr(src, "s_lse_fail_pending = true") != NULL, "RV-09-flag");
+    /* ...and the ISR body itself must not call the failover directly (the
+     * legitimate callers are the main loop and RTC_LivenessCheck) */
+    const char *cb = strstr(src, "HAL_RCCEx_LSECSS_Callback(void)");
+    CHECK(cb != NULL);
+    if (cb) {
+        char body[300];
+        memset(body, 0, sizeof(body));
+        strncpy(body, cb, 260);
+        CHECK_REGRESSION(strstr(body, "LSE_FailoverToLSI();") == NULL, "RV-09-isr");
+    }
+    /* the failover body runs the full timer post-init after MX_RTC_Init */
+    const char *fo = strstr(src, "MX_RTC_Init();  /* backup domain was reset");
+    CHECK(fo != NULL);
+    if (fo) {
+        char window[700];
+        memset(window, 0, sizeof(window));
+        strncpy(window, fo, 650);
+        CHECK_REGRESSION(strstr(window, "TIMER_IF_Init") != NULL, "RV-09-postinit");
+    }
+    /* a main-loop consumer of the flag must exist */
+    CHECK_REGRESSION(strstr(src, "if (s_lse_fail_pending)") != NULL, "RV-09-consumer");
+    free(src);
+}
+
+/* ========================================================================== */
+/* RV-10 (#166) — mission cadence override must never move toward higher power */
+/* ========================================================================== */
+static void test_mission_cadence_never_increases_duty(void)
+{
+    printf("-- RV-10/#166: cadence override state-gated, FLOAT only relaxes\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK(strstr(src, "MISSION_ASCENT_TX_INTERVAL_MS") != NULL);   /* anchor */
+    /* FLOAT arm must be state-gated and max()-style (only relax) */
+    CHECK_REGRESSION(strstr(src, "MISSION_FLOAT_TX_INTERVAL_MS > plan.tx_interval_ms") != NULL,
+                     "RV-10");
+    /* COMMISSIONING must not fall into a mission interval: explicit state test */
+    CHECK_REGRESSION(strstr(src, "ms == MISSION_FLOAT") != NULL, "RV-10-state");
+    free(src);
+}
+
+/* ========================================================================== */
+/* RV-06 (#162) — GPS-loss silence must re-seed on a backward time step        */
+/* ========================================================================== */
+static void test_silence_backward_step_guard(void)
+{
+    printf("-- RV-06/#162: GPS-loss silence backward-step guard\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    const char *sil = strstr(src, "GPS_LOSS_SILENCE_S");
+    CHECK(sil != NULL);   /* anchor */
+    /* the wrapped-delta guard must appear near the silence evaluation */
+    CHECK_REGRESSION(strstr(src, "now_timestamp < ref_s") != NULL, "RV-06-silence");
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_lse_failover_deferred_and_complete();
+    test_mission_cadence_never_increases_duty();
+    test_silence_backward_step_guard();
     test_protocol_docs_match_code();
     test_ts_wrap_persistence_wiring();
     test_position_age_persistence_wiring();

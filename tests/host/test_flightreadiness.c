@@ -795,6 +795,65 @@ static void test_r2_14_ts_wrap_false_latch(void)
     CHECK(pkt.status & STATUS_TS_WRAP_MASK);
 }
 
+/* RV-01 (#160): all-corrupt probe window (256+ records) wedges bulk transfer.
+ * T-6 emulates the caller commit, but the REAL caller's retire path sits
+ * inside record_count > 0 — an all-corrupt window (record_count == 0) never
+ * reaches it. The read path itself must retire a contiguous corrupt run at
+ * the watermark edge (already declared unrecoverable). */
+static void test_rv01_all_corrupt_window_wedge(void)
+{
+    printf("-- RV-01 (#160): all-corrupt probe window must not wedge bulk transfer\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* 400 good records, then corrupt the first 300 (a run longer than one
+     * 256-probe window). */
+    for (uint32_t i = 0; i < 400; i++) {
+        sensor_t s = make_sensors(0);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    for (uint32_t i = 0; i < 300; i++) {
+        fake_w25q_corrupt(FLASH_LOG_DATA_START + i * FLASH_LOG_RECORD_SIZE, 4);
+    }
+
+    uint32_t watermark_before = hlog.last_transmitted_sequence;
+    CHECK_EQ_I(watermark_before, 0);
+
+    FlashLog_Record_t batch[BULK_V6_MAX_RECORDS];
+    uint32_t got = 0, skipped = 0;
+
+    /* Ten consecutive bulk cycles, no TX (nothing reads clean). The log must
+     * make forward progress across the unrecoverable run WITHOUT needing a
+     * successful transmission. */
+    int cycles_with_no_progress = 0;
+    for (int cycle = 0; cycle < 10; cycle++) {
+        got = 0; skipped = 0;
+        uint32_t wm = hlog.last_transmitted_sequence;
+        FlashLog_GetUnsentRecordsFIFO(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
+        if (got == 0 && hlog.last_transmitted_sequence == wm) {
+            cycles_with_no_progress++;
+        }
+    }
+    printf("   after 10 no-TX cycles: watermark=%lu (was %lu)\n",
+           (unsigned long)hlog.last_transmitted_sequence, (unsigned long)watermark_before);
+    CHECK_REGRESSION(cycles_with_no_progress == 0, "RV-01");
+    CHECK_REGRESSION(hlog.last_transmitted_sequence > watermark_before, "RV-01-wm");
+
+    /* The 100 good records behind the corrupt run must become reachable. */
+    int reached_good = 0;
+    for (int cycle = 0; cycle < 400 && !reached_good; cycle++) {
+        got = 0; skipped = 0;
+        FlashLog_GetUnsentRecordsFIFO(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
+        if (got > 0) reached_good = 1;
+    }
+    CHECK_REGRESSION(reached_good == 1, "RV-01-reach");
+
+    fake_w25q_free();
+}
+
 int main(void)
 {
     printf("=== Stratosonde flight-readiness regression tests ===\n\n");
@@ -812,6 +871,7 @@ int main(void)
     test_r2_02_watermark_overadvance_on_wrap();
     test_r2_03_sequence_identity_crosscheck();
     test_r2_14_ts_wrap_false_latch();
+    test_rv01_all_corrupt_window_wedge();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {

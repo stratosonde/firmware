@@ -27,8 +27,8 @@ extern "C" {
 /** @brief Why a cycle was degraded/skipped — first veto wins */
 typedef enum {
     VETO_NONE = 0,          /**< go */
-    VETO_TEMP_STALE,        /**< stale temperature treated as COLD (fail-safe) */
-    VETO_TEMP_LOCKOUT,      /**< below GPS temperature lockout */
+    VETO_TEMP_STALE,        /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
+    VETO_TEMP_LOCKOUT,      /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
     VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0018) */
     VETO_RESTRICTED_REGION  /**< regulatory RF prohibition (set by executor) */
 } TransmitVeto_t;
@@ -61,7 +61,8 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                   bool temp_stale,
                                   uint32_t now_timestamp,
                                   bool joined,
-                                  bool commissioning);
+                                  bool commissioning,
+                                  bool batt_stale);   /**< RV-02/03 (#161): ADC read rejected/cached */
 
 #ifdef __cplusplus
 }

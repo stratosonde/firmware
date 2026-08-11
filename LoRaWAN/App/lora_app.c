@@ -1694,7 +1694,8 @@ static void SendTxData(void)
                                            temperature_c, sensor_data.temp_stale != 0,
                                            now_timestamp,
                                            LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
-                                           MissionState_IsCommissioning());
+                                           MissionState_IsCommissioning(),
+                                           sensor_data.batt_stale);
   /* DDR-0002 mission cadence (finding #7, 2026-08-10) — the consumer that was
    * missing: ASCENT = MISSION_ASCENT_TX_INTERVAL_MS (10 s), FLOAT =
    * MISSION_FLOAT_TX_INTERVAL_MS (5 min). Only when the battery is healthy
@@ -1706,11 +1707,18 @@ static void SendTxData(void)
    * start and GPS acquisition can outlast it, so there is little STOP2 sleep
    * during the ~2 h climb). Accepted: ascent is short; float is long. */
   if (plan.power_mode <= MODE_CONSERVATIVE) {
-    plan.tx_interval_ms = (MissionState_Get() == MISSION_ASCENT)
-                          ? MISSION_ASCENT_TX_INTERVAL_MS
-                          : MISSION_FLOAT_TX_INTERVAL_MS;
-    if (MissionState_Get() == MISSION_ASCENT) {
+    /* RV-10 (#166): explicit state gating. ASCENT takes the fast 10 s cadence
+     * (deliberate, DDR-0002). FLOAT only RELAXES the interval - replacing
+     * CONSERVATIVE's 10 min with the mission's 5 min moved toward HIGHER
+     * power, contradicting the invariant above. COMMISSIONING gets no
+     * override at all (the old ternary silently applied the FLOAT interval). */
+    MissionState_t ms = MissionState_Get();
+    if (ms == MISSION_ASCENT) {
+      plan.tx_interval_ms = MISSION_ASCENT_TX_INTERVAL_MS;
       plan.gps_enabled = true;  /* #142: GNSS always tracking in ASCENT */
+    } else if (ms == MISSION_FLOAT &&
+               MISSION_FLOAT_TX_INTERVAL_MS > plan.tx_interval_ms) {
+      plan.tx_interval_ms = MISSION_FLOAT_TX_INTERVAL_MS;
     }
   }
 
@@ -1804,6 +1812,18 @@ static void SendTxData(void)
     }
     uint32_t ref_s = (s_last_fresh_fix_s > s_gps_loss_epoch_s)
                      ? s_last_fresh_fix_s : s_gps_loss_epoch_s;
+    /* RV-06 (#162): backward time step (LSE->LSI failover restarts the RTC
+     * counter) - re-seed, never evaluate a wrapped delta (the deadman
+     * pattern). Without the guard the subtraction wraps huge and the unit
+     * goes instantly dark. */
+    if (now_timestamp < ref_s) {
+      s_gps_loss_epoch_s = now_timestamp;
+      ref_s = now_timestamp;
+      if (now_timestamp >= 1700000000UL) {
+        extern RTC_HandleTypeDef hrtc;
+        HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, now_timestamp);
+      }
+    }
     if (!MissionState_IsCommissioning() &&
         (now_timestamp - ref_s) > GPS_LOSS_SILENCE_S) {
       rf_silence = true;

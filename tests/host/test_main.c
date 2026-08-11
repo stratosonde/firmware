@@ -464,38 +464,66 @@ static void test_decide_transmit_plan(void)
 
     /* Healthy battery, warm, joined, flight -> full go, GPS on */
     memset(&vs, 0, sizeof(vs));
-    TransmitPlan_t p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, true, false);
+    TransmitPlan_t p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, true, false, false);
     CHECK_EQ_I(p.veto, VETO_NONE);
     CHECK(p.gps_enabled);
     CHECK_EQ_I(p.gps_timeout_ms, 60000);
     CHECK_EQ_I(p.battery_mv_normalized, 5224);  /* 22C: +24mV interpolation */
 
-    /* Cold below lockout -> GPS off, veto recorded */
+    /* RV-08 (#164, DDR-0021 conformance): temperature no longer gates GPS.
+     * -60C is normal float ambient for this airframe; the cold lockout x
+     * GPS-loss silence composed into a 6 h dark sawtooth for the whole float. */
     memset(&vs, 0, sizeof(vs));
-    p = DecideTransmitPlan(&vs, 5200, -60.0f, false, 1000, true, false);
-    CHECK_EQ_I(p.veto, VETO_TEMP_LOCKOUT);
-    CHECK(!p.gps_enabled);
+    p = DecideTransmitPlan(&vs, 5200, -60.0f, false, 1000, true, false, false);
+    CHECK_REGRESSION(p.veto == VETO_NONE, "RV-08");
+    CHECK_REGRESSION(p.gps_enabled, "RV-08");
 
-    /* Stale temperature -> treated as cold, GPS off (fail-safe, F9/T2) */
+    /* Stale temperature still skips normalization (R2-10) but does not veto */
     memset(&vs, 0, sizeof(vs));
-    p = DecideTransmitPlan(&vs, 5200, 20.0f, true, 1000, true, false);
-    CHECK_EQ_I(p.veto, VETO_TEMP_STALE);
-    CHECK(!p.gps_enabled);
+    p = DecideTransmitPlan(&vs, 5200, 20.0f, true, 1000, true, false, false);
+    CHECK_REGRESSION(p.veto == VETO_NONE, "RV-08-stale");
+    CHECK_EQ_I(p.battery_mv_normalized, 5200);   /* raw, uncompensated */
+
+    /* RV-02 (#161): a rejected (0 mV) battery read must not become the slope
+     * baseline - the next real reading must not report runaway charging. */
+    {
+        VoltageSlope_t vs3;
+        memset(&vs3, 0, sizeof(vs3));
+        TransmitPlan_t a = DecideTransmitPlan(&vs3, 0, 25.0f, false, 1000, true, false, true);
+        CHECK_EQ_I(a.power_mode, MODE_SURVIVAL);   /* raw floor still fires (R10) */
+        TransmitPlan_t b = DecideTransmitPlan(&vs3, 5200, 25.0f, false, 1700, true, false, false);
+        CHECK_REGRESSION(abs(b.voltage_slope_mv_per_hour) < 3000, "RV-02");
+        CHECK_REGRESSION(b.power_mode != MODE_NORMAL, "RV-02");
+    }
+
+    /* RV-03 (#161): 6 h of frozen (cached) battery reads must not read as a
+     * healthy stable battery - stale measurement caps the mode at REDUCED. */
+    {
+        VoltageSlope_t vs4;
+        memset(&vs4, 0, sizeof(vs4));
+        TransmitPlan_t q = DecideTransmitPlan(&vs4, 4800, 25.0f, false, 1000, true, false, false);
+        CHECK_EQ_I(q.voltage_slope_mv_per_hour, 0);
+        for (uint32_t t = 1700; t <= 1000 + 6 * 3600; t += 700) {
+            q = DecideTransmitPlan(&vs4, 4800, 25.0f, false, t, true, false, true);
+        }
+        CHECK_REGRESSION(q.power_mode != MODE_CONSERVATIVE &&
+                         q.power_mode != MODE_NORMAL, "RV-03");
+    }
 
     /* Brownout floor: normalized floor defeated at -66C is R10's problem;
      * here raw 4200 at 25C -> SURVIVAL, GPS off, 1h interval */
     memset(&vs, 0, sizeof(vs));
-    p = DecideTransmitPlan(&vs, 4200, 25.0f, false, 1000, true, false);
+    p = DecideTransmitPlan(&vs, 4200, 25.0f, false, 1000, true, false, false);
     CHECK_EQ_I(p.power_mode, MODE_SURVIVAL);
     CHECK(!p.gps_enabled);
     CHECK_EQ_I(p.tx_interval_ms, 3600000);
 
     /* FLIGHT + no session -> RF silence veto (DDR-0018); commissioning exempt */
     memset(&vs, 0, sizeof(vs));
-    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, false);
+    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, false, false);
     CHECK_EQ_I(p.veto, VETO_RF_SILENCE);
     memset(&vs, 0, sizeof(vs));
-    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, true);
+    p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, true, false);
     CHECK_EQ_I(p.veto, VETO_NONE);
 }
 
@@ -587,7 +615,7 @@ static void test_power_model(void)
     {
         VoltageSlope_t vs2;
         memset(&vs2, 0, sizeof(vs2));
-        TransmitPlan_t p2 = DecideTransmitPlan(&vs2, 4200, -66.0f, true, 1000, true, false);
+        TransmitPlan_t p2 = DecideTransmitPlan(&vs2, 4200, -66.0f, true, 1000, true, false, false);
         CHECK_EQ_I(p2.battery_mv_normalized, 4200);   /* raw, uncompensated */
         CHECK_EQ_I(p2.power_mode, MODE_SURVIVAL);
     }
@@ -611,8 +639,8 @@ static void test_r2_10_slope_temperature_contamination(void)
      * the slope must stay flat. */
     VoltageSlope_t vs;
     memset(&vs, 0, sizeof(vs));
-    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4500, -55.0f, false, 3600, true, false);
-    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4500, -65.0f, false, 7200, true, false);
+    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4500, -55.0f, false, 3600, true, false, false);
+    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4500, -65.0f, false, 7200, true, false, false);
     (void)p1;
     /* Normalized voltage jumped ~4930 -> ~6670 mV purely from temperature. */
     CHECK_REGRESSION(abs(p2.voltage_slope_mv_per_hour) <= 20, "R2-10");
@@ -630,7 +658,7 @@ static void test_r2_11_no_history_default_uses_raw_voltage(void)
      * never implemented; finding #9 corrected the overstated comment.) */
     VoltageSlope_t vs;
     memset(&vs, 0, sizeof(vs));
-    TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false);
+    TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false, false);
     CHECK_EQ_I(p.voltage_slope_mv_per_hour, 0);   /* guard: truly no history */
     CHECK_REGRESSION(p.power_mode != MODE_CONSERVATIVE, "R2-11");
     CHECK_REGRESSION(!p.gps_enabled, "R2-11");
@@ -646,9 +674,9 @@ static void test_r2_17_already_critical_never_reports_stable(void)
      * (any non-zero encoding is acceptable). */
     VoltageSlope_t vs;
     memset(&vs, 0, sizeof(vs));
-    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4600, 25.0f, false, 3600, true, false);
+    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4600, 25.0f, false, 3600, true, false, false);
     (void)p1;
-    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4400, 25.0f, false, 7200, true, false);
+    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4400, 25.0f, false, 7200, true, false, false);
     CHECK_EQ_I(p2.voltage_slope_mv_per_hour, -200);  /* guard: discharging */
     CHECK(p2.power_mode != MODE_NORMAL);             /* guard: not charging */
     CHECK_REGRESSION(p2.time_to_target_h != 0, "R2-17");
@@ -660,9 +688,9 @@ static void test_r2_17_already_critical_never_reports_stable(void)
     {
         VoltageSlope_t vs2;
         memset(&vs2, 0, sizeof(vs2));
-        TransmitPlan_t q1 = DecideTransmitPlan(&vs2, 4300, 25.0f, false, 3600, true, false);
+        TransmitPlan_t q1 = DecideTransmitPlan(&vs2, 4300, 25.0f, false, 3600, true, false, false);
         (void)q1;
-        TransmitPlan_t q2 = DecideTransmitPlan(&vs2, 4450, 25.0f, false, 7200, true, false);
+        TransmitPlan_t q2 = DecideTransmitPlan(&vs2, 4450, 25.0f, false, 7200, true, false, false);
         CHECK(q2.voltage_slope_mv_per_hour > 0);       /* guard: charging */
         CHECK(q2.battery_mv_normalized < 4500);        /* guard: below critical */
         CHECK_REGRESSION(q2.time_to_target_h == -1, "STAB-08");
@@ -811,6 +839,56 @@ static void test_mission_logic(void)
             if (FloatDetector_Update(&fd, 300.0f, valid, t, true)) early = true;
         }
         CHECK(!early);
+    }
+
+    /* RV-06 (#162): a BACKWARD time step (LSE->LSI failover restarts the RTC
+     * counter near zero) must not wrap (now - start) into an instant latch.
+     * Deadman_Check pattern: re-seed, never evaluate a wrapped delta. */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        float p = 900.0f;
+        for (int i = 0; i < 5; i++) {           /* 50 s of 10 s-cadence ascent */
+            latched |= FloatDetector_Update(&fd, p, true, 4000 + (uint32_t)i * 10, true);
+            p -= 0.6f;
+        }
+        CHECK(!latched);
+        /* clock restarts: now jumps 4050 -> 3 */
+        latched |= FloatDetector_Update(&fd, p, true, 3, true);
+        CHECK_REGRESSION(!latched, "RV-06");
+        /* keep climbing after the step: window re-seeded, still no latch */
+        for (int i = 0; i < 10; i++) {
+            p -= 5.0f;
+            latched |= FloatDetector_Update(&fd, p, true, 13 + (uint32_t)i * 10, true);
+        }
+        CHECK_REGRESSION(!latched, "RV-06-post");
+        /* and a genuine float AFTER the step still latches (guard not wedged) */
+        FloatDetector_Reset(&fd);
+        bool late = false;
+        for (uint32_t t = 100; t <= 100 + 2 * MISSION_FLOAT_WINDOW_S && !late; t += 10)
+            late |= FloatDetector_Update(&fd, 300.0f, true, t, true);
+        CHECK(late);
+    }
+    /* launch detector: same wrapped-delta guard on the reference window */
+    LaunchDetector_Reset(&ld);
+    CHECK(!LaunchDetector_Update(&ld, 1000.0f, true, 50000));
+    CHECK(!LaunchDetector_Update(&ld, 999.0f, true, 50060));
+    /* clock restarts below ref_set_s: re-seed from current, no false launch */
+    CHECK_REGRESSION(!LaunchDetector_Update(&ld, 994.0f, true, 10), "RV-06-launch");
+    CHECK(LaunchDetector_RefHpa(&ld) == 994.0f);
+
+    /* RV-07 (#163): a degenerate two-sample window (SURVIVAL 1-h cadence) must
+     * not satisfy the latch - minimum sample count in the window. */
+    FloatDetector_Reset(&fd);
+    {
+        bool latched = false;
+        latched |= FloatDetector_Update(&fd, 60.0f, true, 10000, true);
+        latched |= FloatDetector_Update(&fd, 60.0f, true, 13600, true);  /* flat, +1 h */
+        CHECK_REGRESSION(!latched, "RV-07");
+        /* 4+ measured samples over hours at 1-h cadence: legitimate latch */
+        latched |= FloatDetector_Update(&fd, 60.0f, true, 17200, true);
+        latched |= FloatDetector_Update(&fd, 60.0f, true, 20800, true);
+        CHECK(latched);
     }
 }
 

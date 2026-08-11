@@ -64,6 +64,7 @@ typedef struct {
     float    win_max_hpa;
     float    win_first_hpa;  /* window-start pressure: net-displacement guard */
     uint32_t win_start_s;
+    uint16_t samples;        /* RV-07 (#163): min-sample-count guard */
     bool     active;
 } FloatDetector_t;
 

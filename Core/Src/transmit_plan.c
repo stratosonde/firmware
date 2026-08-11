@@ -116,7 +116,8 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                   bool temp_stale,
                                   uint32_t now_timestamp,
                                   bool joined,
-                                  bool commissioning)
+                                  bool commissioning,
+                                  bool batt_stale)
 {
     TransmitPlan_t plan;
 
@@ -137,10 +138,17 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     /* R2-11 (#115): the slope state is RAM-only, so after every reset there
      * is no history. Remember that BEFORE sampling so the no-history default
      * below can derive from raw voltage instead of falling through. */
-    const bool have_history = (slope_state->baseline_timestamp != 0);
+    /* RV-02/03 (#161): a stale battery sample must not touch the slope
+     * estimator — a rejected 0 mV read would become the baseline (the next
+     * real reading then reports tens of thousands of mV/h of "charging"),
+     * and a frozen cached read would hold the slope at exactly 0
+     * (fabricated stability). Skip the update and keep the last slope;
+     * treat staleness as no-history for the conservative defaults below. */
+    const bool have_history = (slope_state->baseline_timestamp != 0) && !batt_stale;
 
-    plan.voltage_slope_mv_per_hour =
-        CalculateVoltageSlope(slope_state, battery_mv_raw, now_timestamp);
+    plan.voltage_slope_mv_per_hour = batt_stale
+        ? slope_state->last_slope_mv_per_hour
+        : CalculateVoltageSlope(slope_state, battery_mv_raw, now_timestamp);
 
     /* STAB-08 (#155): direction-aware prediction states. Wire semantics
      * unchanged: negative = hours to critical, -1 = critical now (R2-17),
@@ -190,38 +198,28 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         SONDE_LOG_STR("PREDICT: no slope history + marginal raw V -> REDUCED\r\n");
         plan.power_mode = MODE_REDUCED;
     }
+    /* RV-03 (#161): a battery nobody has measured this cycle is not entitled
+     * to the GPS-on modes — cap at REDUCED until a real reading returns. */
+    if (batt_stale && plan.power_mode < MODE_REDUCED) {
+        SONDE_LOG_STR("PREDICT: battery reading stale -> cap at REDUCED\r\n");
+        plan.power_mode = MODE_REDUCED;
+    }
     plan.tx_interval_ms = ApplyOperatingMode(plan.power_mode,
                                              &plan.gps_enabled,
                                              &plan.gps_timeout_ms);
 
-    /* Veto evaluation — first veto wins, record WHY (DDR-0003).
-     * BUG 1.4: lockout check runs AFTER ApplyOperatingMode so it has final say. */
+    /* Veto evaluation — first veto wins, record WHY (DDR-0003). */
     plan.veto = VETO_NONE;
 
-    const SystemConfig_t *config = Config_Get();
-    int8_t gps_lockout_temp = (config != NULL) ? config->gps_temperature_lockout : -55;
-
-    /* F9/T2 (DDR-0003): stale/unknown temperature is treated as COLD — the GPS
-     * stays locked out. Fail safe, not fail sunny.
-     * NOTE: this rule was REVISED 2026-08-09 — DDR-0016 INV-PWR-007 requires
-     * last-known-good temperature, and DDR-0021 removes the cold-lockout
-     * entirely. This veto is retained pending the conformance work queued in
-     * docs/decisions/README.md. */
-    if (temp_stale) {
-        plan.gps_enabled = false;
-        plan.veto = VETO_TEMP_STALE;
-        int temp_deci = (int)(temperature_c * 10.0f);
-        (void)temp_deci;  /* FR-19: log-only in flight */
-        SONDE_LOG("GPS LOCKOUT: Temperature STALE (treated as COLD, last=%d.%d C)\r\n",
-                 temp_deci / 10, abs(temp_deci % 10));
-    } else if (temperature_c < gps_lockout_temp) {
-        plan.gps_enabled = false;
-        plan.veto = VETO_TEMP_LOCKOUT;
-        int temp_deci = (int)(temperature_c * 10.0f);
-        (void)temp_deci;  /* FR-19: log-only in flight */
-        SONDE_LOG("GPS LOCKOUT: Temperature %d.%d C < %d C (supercap inoperative)\r\n",
-                 temp_deci / 10, abs(temp_deci % 10), gps_lockout_temp);
-    }
+    /* RV-08 (#164, DDR-0021 conformance): the temperature-based GPS lockout
+     * is REMOVED. Float-altitude ambient is genuinely -50 to -70 C, so the
+     * veto made GPS impossible exactly when the airframe is at float; composed
+     * with #141's GPS-loss silence it produced a 6 h dark sawtooth for the
+     * entire multi-week float (veto -> dark -> forced fix -> one TX -> veto).
+     * The field evidence (#128) is that the ATGM336H operates at cold/altitude
+     * without special handling. temp_stale still skips normalization above
+     * (R2-10) — data honesty, not a veto. The config field
+     * gps_temperature_lockout remains for backcompat but is no longer read. */
 
     /* T1 ladder (DDR-0018): FLIGHT with no session = RF silence. The cycle
      * still runs (GPS + flash logging); only the radio stays dark. */
