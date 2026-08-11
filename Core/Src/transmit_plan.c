@@ -174,9 +174,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
      * even on a marginal battery right after a brownout reset. Fail the
      * other way: below 5000 mV raw (marginal supercap), start REDUCED
      * (GPS off) until a real slope exists. Never loosen a stricter mode
-     * (the R10 raw floor may already have picked SURVIVAL). Persisting the
-     * baseline across resets (backup registers, DR12-15) is the companion
-     * half and is bench-verified. */
+     * (the R10 raw floor may already have picked SURVIVAL). NOTE (finding #9,
+     * 2026-08-10): the slope baseline is RAM-ONLY — the backup-register
+     * persistence (DR12-15) once described here was never implemented. This
+     * no-history REDUCED fallback is the live mitigation; if reset-stable
+     * history is ever wanted, implement DR persistence for real. */
     if (!have_history && battery_mv_raw < 5000 && plan.power_mode < MODE_REDUCED) {
         SONDE_LOG_STR("PREDICT: no slope history + marginal raw V -> REDUCED\r\n");
         plan.power_mode = MODE_REDUCED;

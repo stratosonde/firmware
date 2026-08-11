@@ -999,6 +999,9 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
       
       /* CRITICAL: Refresh watchdog during GPS acquisition to prevent timeout reset */
       /* GPS can take up to 60s, approaching the 32.76s watchdog timeout */
+      /* Finding #9: HAL_GetTick() is 1024 Hz (RTC subseconds), not 1000 Hz —
+       * every ms timeout here runs ~2.4% short (the "60 s" budget is really
+       * 58.6 s). Always in the conservative direction; not worth rescaling. */
       HAL_IWDG_Refresh(&hiwdg);
       
       /* Check if we have a good quality fix */
@@ -1396,9 +1399,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       // Check if we have unsent data and haven't exceeded packet limit
       if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
         
-        // Read up to 6 unsent records from flash (FIFO order - oldest unsent
-        // first, so MarkRecordsTransmitted advances the watermark correctly)
-        FlashLog_Record_t flash_records[6];
+        // Read up to BULK_V5_MAX_RECORDS unsent records from flash (FIFO order —
+        // oldest unsent first, so the absolute commit advances the watermark
+        // correctly). Was 6: the 6th record was read and discarded every packet
+        // (finding #9) — the wire format packs at most 5.
+        FlashLog_Record_t flash_records[BULK_V5_MAX_RECORDS];
         uint32_t record_count;
         uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
         /* R2-02 (#106): no entry-watermark pin - the read path may clamp the
@@ -1407,7 +1412,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
 
         FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
                                                                             flash_records,
-                                                                            6,
+                                                                            BULK_V5_MAX_RECORDS,
                                                                             &record_count,
                                                                             &skipped_count);
         if (skipped_count > 0) {
@@ -1585,17 +1590,19 @@ static void SendTxData(void)
   // Read current sensor data for temperature
   sensor_t sensor_data = {0};  /* #35: zero-init — uninitialized members were archived as authentic */
   EnvSensors_Read(&sensor_data);
-  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale);  /* D8 (#59): pressure-trend float detection, each work cycle */
   float temperature_c = sensor_data.temperature;
+
+  // Use RTC-based time that continues during STOP2 sleep
+  uint16_t ms_unused;
+  uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
+
+  /* D8 (#59) / finding #7: windowed-range float detection, each work cycle */
+  MissionState_Update(sensor_data.pressure, !sensor_data.press_stale, now_timestamp);
 
   // Read raw voltages
   uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
   uint16_t solar_mv = SYS_GetSolarVoltage();
   (void)solar_mv;  /* FR-19: log-only in flight */
-
-  // Use RTC-based time that continues during STOP2 sleep
-  uint16_t ms_unused;
-  uint32_t now_timestamp = TIMER_IF_GetTime(&ms_unused);  // RTC seconds
 
   /* R47: mode selection, slope/prediction, GPS temperature lockout and the
    * RF-silence veto all live in the pure decide half (transmit_plan.c) —
@@ -1605,6 +1612,17 @@ static void SendTxData(void)
                                            now_timestamp,
                                            LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
                                            MissionState_IsCommissioning());
+  /* DDR-0002 mission cadence (finding #7, 2026-08-10) — the consumer that was
+   * missing: ASCENT = MISSION_ASCENT_TX_INTERVAL_MS (10 s), FLOAT =
+   * MISSION_FLOAT_TX_INTERVAL_MS (5 min). Only when the battery is healthy
+   * (NORMAL/CONSERVATIVE); REDUCED/RECOVERY/SURVIVAL keep their longer,
+   * power-protective intervals (never toward higher power). */
+  if (plan.power_mode <= MODE_CONSERVATIVE) {
+    plan.tx_interval_ms = (MissionState_Get() == MISSION_ASCENT)
+                          ? MISSION_ASCENT_TX_INTERVAL_MS
+                          : MISSION_FLOAT_TX_INTERVAL_MS;
+  }
+
   bool gps_enabled_by_power_mgmt = plan.gps_enabled;
   uint32_t gps_timeout_ms = plan.gps_timeout_ms;
   OperatingMode_t current_mode = plan.power_mode;

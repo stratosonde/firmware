@@ -538,8 +538,8 @@ static void test_r2_11_no_history_default_uses_raw_voltage(void)
      * history and SelectModeFromPredictions falls through every branch to
      * MODE_CONSERVATIVE (10-min cadence, GPS ON) even with a marginal
      * battery. The no-history default must derive from RAW voltage, not
-     * fall through. (Baseline persistence across resets is the backup-reg
-     * half of the fix — bench-verified, DR12-15.) */
+     * fall through. (The slope baseline is RAM-only — DR12-15 persistence was
+     * never implemented; finding #9 corrected the overstated comment.) */
     VoltageSlope_t vs;
     memset(&vs, 0, sizeof(vs));
     TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false);

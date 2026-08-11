@@ -82,18 +82,22 @@ extern "C" {
 #define GET_GPS_SATELLITE_COUNT(flags) (((flags) & GPS_SATS_MASK) >> 1)
 #define GET_POWER_MODE(flags)       (((flags) & POWER_MODE_MASK) >> 5)
 
-/* Helper macros for status flag packing */
+/* Helper macros for status flag packing.
+ * Finding #9: explicit (uint8_t) casts on the results — ~MASK promotes to a
+ * negative int and the narrowing assignment tripped 6 x -Wsign-conversion
+ * warnings (benign but they mask real ones). Behavior is unchanged: the cast
+ * truncates exactly the way the implicit conversion did. */
 #define SET_GPS_FIX_VALID(flags, valid)     do { \
-    if (valid) (flags) |= GPS_FIX_VALID_MASK; \
-    else (flags) &= ~GPS_FIX_VALID_MASK; \
+    if (valid) (flags) = (uint8_t)((flags) | GPS_FIX_VALID_MASK); \
+    else (flags) = (uint8_t)((flags) & (uint8_t)~GPS_FIX_VALID_MASK); \
 } while(0)
 
 #define SET_GPS_SATELLITE_COUNT(flags, count) do { \
-    (flags) = ((flags) & ~GPS_SATS_MASK) | (((count) & 0x0F) << 1); \
+    (flags) = (uint8_t)(((flags) & (uint8_t)~GPS_SATS_MASK) | (((count) & 0x0F) << 1)); \
 } while(0)
 
 #define SET_POWER_MODE(flags, mode) do { \
-    (flags) = ((flags) & ~POWER_MODE_MASK) | (((mode) & 0x07) << 5); \
+    (flags) = (uint8_t)(((flags) & (uint8_t)~POWER_MODE_MASK) | (((mode) & 0x07) << 5)); \
 } while(0)
 
 /* Exported types ------------------------------------------------------------*/

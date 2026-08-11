@@ -217,10 +217,35 @@ static void test_battery_reading_is_gated(void)
     free(sns);
 }
 
+/* ========================================================================== */
+/* Finding #7 — MISSION_FLOAT must latch, and must have a cadence consumer     */
+/* ========================================================================== */
+/* The old detector (|dP|/P < 2% for 3 consecutive samples) demanded < 0.14 hPa
+ * stability at float altitude — below MS5607 noise, so FLOAT could never
+ * latch; and MissionState_GetStatusBits() had exactly one consumer (telemetry
+ * bits), so DDR-0002's adaptive cadence was documented but not implemented.
+ * Fix: windowed-range detection (wide band + sustained window + altitude
+ * guard, works at any cadence including the 10 s ascent interval) plus the
+ * mission cadence override in SendTxData. Scans: the window constants exist
+ * and the cadence consumer is wired. */
+static void test_float_detection_and_cadence(void)
+{
+    printf("-- finding #7: FLOAT detection must be windowed and consumed\n");
+
+    char *msh = slurp("../../Core/Inc/mission_state.h");
+    CHECK_REGRESSION(strstr(msh, "MISSION_FLOAT_WINDOW_S") != NULL, "FINDING-7");
+    free(msh);
+
+    char *app = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK_REGRESSION(strstr(app, "MISSION_ASCENT_TX_INTERVAL_MS") != NULL, "FINDING-7");
+    free(app);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10 review findings — source-scan regressions ===\n\n");
 
+    test_float_detection_and_cadence();
     test_chunk_bound_covers_survival_interval();
     test_linkcheck_consumed_after_read();
     test_vcom_resume_gated();

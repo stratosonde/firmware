@@ -51,8 +51,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* F-001 fatal fault codes (breadcrumb low 16 bits). 1-5 = CPU fault handlers
- * (stm32wlxx_it.c), 6 = deadman (lora_app.c); 16+ = boot-time fatal errors. */
+/* F-001 fatal fault codes (breadcrumb low 16 bits). 0-4 = CPU fault handlers
+ * (stm32wlxx_it.c; 0 = NMI — MAGIC|0 reads back as the bare magic, harmless
+ * given the mask check), 6 = deadman (lora_app.c); 16+ = boot-time fatal
+ * errors. */
 #define FAULT_CODE_CLOCK_CONFIG    16U
 #define FAULT_CODE_PAYLOAD_FORMAT  17U
 #define FAULT_CODE_FLASH_INIT      18U  /* R29 (#36): W25Q/archive unusable */
@@ -101,7 +103,6 @@ static void MX_IWDG_Init(void);
 static void LSE_FailoverToLSI(void);   /* F-14 (#70) */
 static void RTC_LivenessCheck(void);   /* F-14 (#70) */
 /* USER CODE BEGIN PFP */
-void system_sleep(void);
 void leds_boot_seq(void);
 /* USER CODE END PFP */
 
@@ -112,13 +113,10 @@ void leds_boot_seq(void);
  * source ("will BRICK") and was one uncomment away from the boot path.
  * A function that bricks the device must not exist in a flight binary. */
 
-void system_sleep(void)
-{
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, 0); /* Turn off the actual LED on PA0 */
-	HAL_I2C_DeInit(&hi2c2);
-	HAL_ADC_DeInit(&hadc);
-	HAL_UART_DeInit(&huart1);
-}
+/* system_sleep() deleted (finding #9, 2026-08-10): dead code — never called,
+ * and it deinited I2C/ADC/UART. A function with side effects like that must
+ * not sit one uncomment away from the boot path (same rule as F23). */
+
 void leds_boot_seq(void)
 {
   /* R09/DDR-0002: dark in flight — the boot blink is a bench/commissioning
@@ -293,8 +291,8 @@ int main(void)
 
   SONDE_LOG_STR("Starting LoRaWAN...\r\n");
 
-  /* Removed system_sleep() call to keep I2C and UART active for debug */
-  /* system_sleep() call commented out to ensure I2C remains active for SHT31 sensor */
+  /* system_sleep() was deleted outright (finding #9) — it was never called
+   * and deinited I2C/ADC/UART. I2C stays active for SHT31/MS5607. */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -890,8 +888,8 @@ void Error_Handler(void)
  * uplink format). It leaves a fault breadcrumb (surfaced as RESET_CAUSE_FAULT
  * in the next boot's status byte) and resets — a reset gives the IWDG/deadman
  * architecture a chance; a hang or a zombie does not.
- * Codes: 1-5 = CPU fault handlers (stm32wlxx_it.c), 6 = deadman (lora_app.c),
- * 16+ = boot-time fatal errors below. */
+ * Codes: 0-4 = CPU fault handlers (stm32wlxx_it.c; 0 = NMI), 6 = deadman
+ * (lora_app.c), 16+ = boot-time fatal errors below. */
 void Error_Handler_Fatal(uint16_t code)
 {
   HAL_PWR_EnableBkUpAccess();

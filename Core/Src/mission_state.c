@@ -24,10 +24,11 @@ extern RTC_HandleTypeDef hrtc;
 #define MISSION_STATE_MASK      0xFFFF0000UL
 
 static MissionState_t s_state = MISSION_COMMISSIONING;
-/* D8 (#59): pressure-trend float detection state (no timer) */
-static float    s_last_pressure_hpa = 0.0f;
-static uint8_t  s_level_count = 0;
-static bool     s_have_pressure_ref = false;
+/* D8 (#59) / finding #7: windowed-range float detection state (no timer) */
+static float    s_win_min_hpa = 0.0f;
+static float    s_win_max_hpa = 0.0f;
+static uint32_t s_win_start_s = 0;
+static bool     s_win_active = false;
 
 static void MissionState_Persist(void)
 {
@@ -100,39 +101,51 @@ void MissionState_EnterFlight(void)
     }
 }
 
-void MissionState_Update(float pressure_hpa, bool pressure_valid)
+void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s)
 {
-    /* D8 (#59): ASCENT -> FLOAT by pressure trend, not elapsed time.
-     * Float = |ΔP| below threshold for N consecutive work cycles. Stale or
-     * invalid pressure cannot prove float — stay in ASCENT (more uplinks,
-     * the safe direction, DDR-0019). No timer to restart on cold-snap reset. */
+    /* Finding #7 (2026-08-10): ASCENT -> FLOAT by WINDOWED RANGE.
+     * Float = pressure stays inside MISSION_FLOAT_RANGE_PCT of ambient for
+     * MISSION_FLOAT_WINDOW_S, and only below MISSION_FLOAT_MAX_PRESSURE_HPA
+     * (altitude guard — a pad-side unit can never latch). Works at any
+     * cadence, including the 10 s ascent interval where per-sample deltas
+     * are meaningless. Stale/invalid pressure resets the window: it cannot
+     * prove float — stay in ASCENT (the safe direction, DDR-0019). The
+     * transition itself is one-way (s_state != ASCENT returns early), so
+     * FLOAT never leaves once latched. */
     if (s_state != MISSION_ASCENT) {
         return;
     }
-    if (!pressure_valid) {
-        s_level_count = 0;
-        s_have_pressure_ref = false;
+    if (!pressure_valid || pressure_hpa <= 0.0f) {
+        s_win_active = false;
         return;
     }
 
-    if (s_have_pressure_ref) {
-        float dp = pressure_hpa - s_last_pressure_hpa;
-        if (dp < 0.0f) dp = -dp;
-        /* FR-17 (#98): level = |ΔP| below 2% of ambient, not a fixed 2 hPa */
-        if (s_last_pressure_hpa > 0.0f &&
-            dp < MISSION_FLOAT_REL_THRESHOLD * s_last_pressure_hpa) {
-            if (s_level_count < 255) s_level_count++;
-        } else {
-            s_level_count = 0;
-        }
-        if (s_level_count >= MISSION_FLOAT_LEVEL_SAMPLES) {
-            s_state = MISSION_FLOAT;
-            MissionState_Persist();
-            SONDE_LOG_STR("MissionState: ASCENT -> FLOAT (pressure level)\r\n");
-        }
+    if (!s_win_active) {
+        s_win_min_hpa = pressure_hpa;
+        s_win_max_hpa = pressure_hpa;
+        s_win_start_s = now_s;
+        s_win_active = true;
+        return;
     }
-    s_last_pressure_hpa = pressure_hpa;
-    s_have_pressure_ref = true;
+
+    if (pressure_hpa < s_win_min_hpa) s_win_min_hpa = pressure_hpa;
+    if (pressure_hpa > s_win_max_hpa) s_win_max_hpa = pressure_hpa;
+
+    float range = s_win_max_hpa - s_win_min_hpa;
+    if (pressure_hpa > MISSION_FLOAT_MAX_PRESSURE_HPA ||
+        range > MISSION_FLOAT_RANGE_PCT * pressure_hpa) {
+        /* Climbing (or too low): restart the window at the current sample. */
+        s_win_min_hpa = pressure_hpa;
+        s_win_max_hpa = pressure_hpa;
+        s_win_start_s = now_s;
+        return;
+    }
+
+    if ((now_s - s_win_start_s) >= MISSION_FLOAT_WINDOW_S) {
+        s_state = MISSION_FLOAT;
+        MissionState_Persist();
+        SONDE_LOG_STR("MissionState: ASCENT -> FLOAT (pressure level window)\r\n");
+    }
 }
 
 uint8_t MissionState_GetStatusBits(void)
