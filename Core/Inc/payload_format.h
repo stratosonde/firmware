@@ -194,6 +194,14 @@ typedef struct __attribute__((packed)) {
 /* Exported functions --------------------------------------------------------*/
 
 /**
+ * @brief STAB-12 (#159): timestamp-wrap latch persistence hooks. The HAL side
+ *        restores the latch from BKP_REG_TS_WRAP at boot and persists it when
+ *        the encode path first reports wrapped.
+ */
+void Payload_SetTimestampWrapped(bool wrapped);
+bool Payload_IsTimestampWrapped(void);
+
+/**
  * @brief Encode compact 11-byte heartbeat (v2) telemetry packet
  * @param packet: Destination packet structure
  * @param sensor_data: Source sensor data

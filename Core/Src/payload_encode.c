@@ -51,6 +51,14 @@ static uint8_t PackStatusFlags(bool gps_valid, uint8_t satellites, OperatingMode
 static uint16_t CalculateCRC16(const uint8_t *data, uint32_t length);
 static uint32_t CalculateCRC32(const uint8_t *data, uint32_t length);
 
+/* STAB-12 (#159): the 45.5-day timestamp wrap latch, hoisted to file scope so
+ * the HAL side can persist it (BKP_REG_TS_WRAP) and restore it after reset —
+ * a post-wrap reset must not make time look like an earlier epoch. */
+static bool s_ts_wrapped = false;      /* sticky for the mission */
+
+void Payload_SetTimestampWrapped(bool wrapped) { s_ts_wrapped = wrapped; }
+bool Payload_IsTimestampWrapped(void)          { return s_ts_wrapped; }
+
 /* Exported functions --------------------------------------------------------*/
 
 /**
@@ -103,7 +111,6 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
      * b4 RTC GNSS-disciplined (N-03), b5 timestamp_min wrapped (D4),
      * b6-b7 mission state. (v1's condensed reset cause b3-b4 is gone from the
      * wire; it remains available in flash/bulk records.) */
-    static bool s_ts_wrapped = false;      /* sticky for the mission */
     static uint16_t s_last_ts_min = 0;
     static bool s_baseline_valid = false;  /* disciplined baseline established */
 

@@ -386,10 +386,61 @@ static void test_ci_runs_all_suites(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* STAB-12 (#159) — timestamp-wrap latch persisted + restored (wiring)         */
+/* ========================================================================== */
+/* s_ts_wrapped was RAM-only: a reset after the 45.5-day wrap made the next
+ * packet's timestamp look like an EARLIER epoch with no indication. The HAL
+ * side must restore the latch at boot and persist it on first detection. */
+static void test_ts_wrap_persistence_wiring(void)
+{
+    printf("-- STAB-12/#159: ts-wrap latch persisted via BKP_REG_TS_WRAP\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK(strstr(src, "EncodeCompactBinaryPacket") != NULL);   /* anchor */
+    /* restore path (read + setter) and persist path (getter + write) */
+    CHECK_REGRESSION(strstr(src, "BKP_REG_TS_WRAP") != NULL, "STAB-12");
+    CHECK_REGRESSION(strstr(src, "Payload_SetTimestampWrapped") != NULL, "STAB-12-restore");
+    CHECK_REGRESSION(strstr(src, "Payload_IsTimestampWrapped") != NULL, "STAB-12-persist");
+    free(src);
+
+    char *regs = slurp("../../Core/Inc/backup_regs.h");
+    CHECK_REGRESSION(strstr(regs, "BKP_REG_TS_WRAP") != NULL, "STAB-12-reg");
+    free(regs);
+}
+
+/* ========================================================================== */
+/* STAB-01 (#148) — stale-position RF authority must survive reset with age    */
+/* ========================================================================== */
+/* The position persisted in DR8-DR11 had no acquisition time: every reset
+ * restarted the 6 h GPS-loss grace with a stale position RF-authoritative.
+ * The fresh-fix epoch and the GPS-loss epoch must persist (plausibility-gated:
+ * no invented freshness) and seed the RAM state at boot. */
+static void test_position_age_persistence_wiring(void)
+{
+    printf("-- STAB-01/#148: fix/loss epochs persisted with the position\n");
+
+    char *regs = slurp("../../Core/Inc/backup_regs.h");
+    CHECK_REGRESSION(strstr(regs, "BKP_REG_LASTPOS_EPOCH") != NULL, "STAB-01-regA");
+    CHECK_REGRESSION(strstr(regs, "BKP_REG_GPS_LOSS_EPOCH") != NULL, "STAB-01-regB");
+    free(regs);
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK(strstr(src, "LastPos_Store") != NULL);   /* anchor */
+    /* store writes the epoch; restore seeds s_last_fresh_fix_s from it;
+     * the loss epoch is persisted and restored; plausibility gate present */
+    CHECK_REGRESSION(strstr(src, "BKP_REG_LASTPOS_EPOCH") != NULL, "STAB-01-store");
+    CHECK_REGRESSION(strstr(src, "BKP_REG_GPS_LOSS_EPOCH") != NULL, "STAB-01-loss");
+    CHECK_REGRESSION(strstr(src, "1700000000UL") != NULL, "STAB-01-plausibility");
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_ts_wrap_persistence_wiring();
+    test_position_age_persistence_wiring();
     test_fatal_escape_scoped();
     test_silence_force_respects_floor();
     test_ci_runs_all_suites();

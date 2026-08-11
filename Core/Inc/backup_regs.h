@@ -46,6 +46,9 @@ extern "C" {
 #define BKP_REG_LASTPOS_LAT        RTC_BKP_DR9   /* lora_app.c last valid latitude (float bits) */
 #define BKP_REG_LASTPOS_LON        RTC_BKP_DR10  /* lora_app.c last valid longitude (float bits) */
 #define BKP_REG_LASTPOS_ALT        RTC_BKP_DR11  /* lora_app.c last valid altitude (float bits) */
+#define BKP_REG_LASTPOS_EPOCH      RTC_BKP_DR12  /* lora_app.c last fresh-fix epoch seconds (STAB-01/#148) */
+#define BKP_REG_TS_WRAP            RTC_BKP_DR13  /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
+#define BKP_REG_GPS_LOSS_EPOCH     RTC_BKP_DR14  /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
 
 #ifdef __cplusplus
 }

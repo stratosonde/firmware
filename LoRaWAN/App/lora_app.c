@@ -736,6 +736,9 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
  * (0 = none). Set in AcquireGnssFix where live NMEA data confirmed a fix -
  * the last-known-position fallback does NOT count. */
 static uint32_t s_last_fresh_fix_s = 0;
+/* STAB-01 (#148): the GPS-loss grace epoch also persists (BKP_REG_GPS_LOSS_EPOCH)
+ * so a reset cannot restart the 6 h silence window. */
+static uint32_t s_gps_loss_epoch_s = 0;
 
 static uint8_t  CfgLinkMargin(void)  { const SystemConfig_t *c = Config_Get(); return c ? c->link_margin_threshold   : LINK_MARGIN_THRESHOLD; }
 static uint8_t  CfgGatewayCount(void){ const SystemConfig_t *c = Config_Get(); return c ? c->gateway_count_threshold : GATEWAY_COUNT_THRESHOLD; }
@@ -840,7 +843,8 @@ static void Deadman_MarkProgress(void)
  * into region selection via the deliberate F-06 stale-position hold. VALID is
  * written LAST so a mid-write reset never validates a partial triple. */
 #define LASTPOS_VALID_MAGIC  0x4C415454UL  /* 'LATT' */
-static void LastPos_Store(float lat, float lon, float alt)
+#define TS_WRAP_MAGIC        0x57524150UL  /* 'WRAP' (STAB-12/#159) */
+static void LastPos_Store(float lat, float lon, float alt, uint32_t fix_epoch_s)
 {
   extern RTC_HandleTypeDef hrtc;
   union { float f; uint32_t u; } la, lo, al;
@@ -848,6 +852,9 @@ static void LastPos_Store(float lat, float lon, float alt)
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_LAT, la.u);
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_LON, lo.u);
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_ALT, al.u);
+  /* STAB-01 (#148): acquisition time persists WITH the position -
+   * a reset must never make stale geography younger (DDR-0015). */
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_EPOCH, fix_epoch_s);
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_LASTPOS_VALID, LASTPOS_VALID_MAGIC);
 }
 
@@ -974,6 +981,17 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     if (LastPos_Load(&last_valid_lat, &last_valid_lon, &last_valid_alt)) {
       have_previous_fix = true;
       SONDE_LOG_STR("GPS: last known position restored from backup regs\r\n");
+      /* STAB-01 (#148): the restored position participates with its TRUE age
+       * (DDR-0015). Plausibility-gated: a boot-relative or corrupt timestamp
+       * is ignored - never invent freshness. */
+      {
+        extern RTC_HandleTypeDef hrtc;
+        uint32_t fix_epoch = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_EPOCH);
+        uint16_t ms_d; uint32_t now_s = TIMER_IF_GetTime(&ms_d);
+        if (fix_epoch >= 1700000000UL && fix_epoch <= now_s) {
+          s_last_fresh_fix_s = fix_epoch;
+        }
+      }
     } else {
       last_valid_lat = 39.8283f;   /* Default: Central US (Kansas) */
       last_valid_lon = -98.5795f;
@@ -1075,9 +1093,10 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
-        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
-        have_previous_fix = true;
         { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
+        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
+                      s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
+        have_previous_fix = true;
         EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
       }
       else
@@ -1113,10 +1132,11 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
-        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
+        { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
+        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
+                      s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
         have_previous_fix = true;
       }
-      { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
       SysTimeSyncFromGnss();            /* F12 (DDR-0013): epoch seconds */
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
@@ -1391,11 +1411,28 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
     case TX_STATE_PROBE_SF10:
     {
       // Encode 10-byte compact telemetry packet
+      /* STAB-12 (#159): restore the timestamp-wrap latch once per boot -
+       * a post-wrap reset must not make time look like an earlier epoch. */
+      static bool s_ts_wrap_restored = false;
+      if (!s_ts_wrap_restored) {
+        s_ts_wrap_restored = true;
+        extern RTC_HandleTypeDef hrtc;
+        if (HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_TS_WRAP) == TS_WRAP_MAGIC) {
+          Payload_SetTimestampWrapped(true);
+        }
+      }
       CompactTelemetryPacket_t compact_packet;
       uint16_t timestamp_min = (uint16_t)(now_timestamp / 60);  // Convert to minutes
       
       if (EncodeCompactBinaryPacket(&compact_packet, sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {
+        /* STAB-12 (#159): persist the wrap latch on first detection. */
+        static bool s_ts_wrap_persisted = false;
+        if (!s_ts_wrap_persisted && Payload_IsTimestampWrapped()) {
+          s_ts_wrap_persisted = true;
+          extern RTC_HandleTypeDef hrtc;
+          HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_TS_WRAP, TS_WRAP_MAGIC);
+        }
         
       /* D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
        * exact fit there with zero headroom; SF9 buys 42 B for ~2.5 dB link
@@ -1750,9 +1787,20 @@ static void SendTxData(void)
    * (DDR-0018). The grace epoch arms at this boot's first cycle, so a
    * never-fixed unit gets the full window before going dark. */
   {
-    static uint32_t s_gps_loss_epoch_s = 0;
     if (s_gps_loss_epoch_s == 0) {
-      s_gps_loss_epoch_s = now_timestamp;
+      /* STAB-01 (#148): restore the persisted loss epoch - a reset must not
+       * restart the grace window. Plausibility-gated like the fix epoch:
+       * unknown age means CONSERVATIVE (count from this boot, persist it). */
+      extern RTC_HandleTypeDef hrtc;
+      uint32_t persisted = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_GPS_LOSS_EPOCH);
+      if (persisted >= 1700000000UL && persisted <= now_timestamp) {
+        s_gps_loss_epoch_s = persisted;
+      } else {
+        s_gps_loss_epoch_s = now_timestamp;
+        if (now_timestamp >= 1700000000UL) {
+          HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, now_timestamp);
+        }
+      }
     }
     uint32_t ref_s = (s_last_fresh_fix_s > s_gps_loss_epoch_s)
                      ? s_last_fresh_fix_s : s_gps_loss_epoch_s;

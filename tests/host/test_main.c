@@ -814,6 +814,24 @@ static void test_mission_logic(void)
     }
 }
 
+/* STAB-12 (#159): the timestamp-wrap latch must be restorable across reset */
+static void test_ts_wrap_restore(void)
+{
+    /* statics are shared with earlier compact-encode tests in this binary —
+     * start from a known-clear latch (the restore path itself is under test) */
+    Payload_SetTimestampWrapped(false);
+    CHECK(!Payload_IsTimestampWrapped());
+    Payload_SetTimestampWrapped(true);
+    CHECK_REGRESSION(Payload_IsTimestampWrapped(), "STAB-12");
+    /* and the restored latch must reach the wire (status b5) */
+    sensor_t s = make_nominal_sensors();
+    CompactTelemetryPacket_t pkt;
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    CHECK_REGRESSION((pkt.status & STATUS_TS_WRAP_MASK) != 0, "STAB-12-wire");
+    Payload_SetTimestampWrapped(false);     /* leave no trace */
+    CHECK(!Payload_IsTimestampWrapped());
+}
+
 static void test_r2_30_rmc_valid_clears_on_void(void)
 {
     /* R2-30 (#130): GNSS_ParseRMC sets data.valid on status 'A' but never
@@ -867,6 +885,7 @@ int main(void)
     test_r2_30_rmc_valid_clears_on_void();
     test_r2_19_dma_overrun_blind_spot();
     test_mission_logic();
+    test_ts_wrap_restore();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {
