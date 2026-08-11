@@ -47,6 +47,11 @@ typedef struct {
     uint8_t  mode_hyst_valid;    // committed_mode is meaningful
     uint8_t  committed_mode;     // OperatingMode_t last handed out
     uint8_t  upgrade_streak;     // consecutive cycles proposing a higher-power mode
+    /* F-4 (#179): timestamp of the last hysteresis evaluation. The streak
+     * counts observations SEPARATED IN TIME, not calls - a bulk-burst re-arm
+     * re-runs DecideTransmitPlan up to 20x with the same now_timestamp and
+     * must not be able to confirm an upgrade within seconds. */
+    uint32_t hyst_last_ts;
 } VoltageSlope_t;
 
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);

@@ -216,19 +216,35 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
             slope_state->mode_hyst_valid = 1;
             slope_state->committed_mode = (uint8_t)proposed;
             slope_state->upgrade_streak = 0;
-        } else if (proposed < (OperatingMode_t)slope_state->committed_mode) {
-            /* upgrade requested */
-            if (++slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM) {
+            slope_state->hyst_last_ts = now_timestamp;
+        } else {
+            /* F-4 (#179): a streak advance requires REAL elapsed time since
+             * the last evaluation. OnTxData re-arms SendTxData once per bulk
+             * burst packet (up to 20) with the same now_timestamp; without
+             * this gate "three consecutive work cycles" became "three
+             * seconds" mid-burst - hysteresis and the RV-07 float guard both
+             * bypassed exactly when the radio is most expensive. A zero-dt
+             * (or backward-step) call is the same observation: the proposal
+             * is held, not counted. */
+            bool new_observation = (now_timestamp > slope_state->hyst_last_ts);
+            if (new_observation) {
+                slope_state->hyst_last_ts = now_timestamp;
+            }
+            if (proposed < (OperatingMode_t)slope_state->committed_mode) {
+                /* upgrade requested */
+                if (new_observation &&
+                    ++slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM) {
+                    slope_state->committed_mode = (uint8_t)proposed;
+                    slope_state->upgrade_streak = 0;
+                    SONDE_LOG_STR("PREDICT: sustained upgrade confirmed -> mode change\r\n");
+                } else {
+                    plan.power_mode = (OperatingMode_t)slope_state->committed_mode;
+                }
+            } else {
+                /* downgrade or unchanged: immediate */
                 slope_state->committed_mode = (uint8_t)proposed;
                 slope_state->upgrade_streak = 0;
-                SONDE_LOG_STR("PREDICT: sustained upgrade confirmed -> mode change\r\n");
-            } else {
-                plan.power_mode = (OperatingMode_t)slope_state->committed_mode;
             }
-        } else {
-            /* downgrade or unchanged: immediate */
-            slope_state->committed_mode = (uint8_t)proposed;
-            slope_state->upgrade_streak = 0;
         }
     }
     plan.tx_interval_ms = ApplyOperatingMode(plan.power_mode,
