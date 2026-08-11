@@ -522,8 +522,9 @@ static void test_silence_backward_step_guard(void)
     char *src = slurp("../../LoRaWAN/App/lora_app.c");
     const char *sil = strstr(src, "GPS_LOSS_SILENCE_S");
     CHECK(sil != NULL);   /* anchor */
-    /* the wrapped-delta guard must appear near the silence evaluation */
-    CHECK_REGRESSION(strstr(src, "now_timestamp < ref_s") != NULL, "RV-06-silence");
+    /* the wrapped-delta guard must appear near the silence evaluation
+     * (F-1/#176 moved the silence policy to the UTC clock: utc_now_s) */
+    CHECK_REGRESSION(strstr(src, "utc_now_s < ref_s") != NULL, "RV-06-silence");
     free(src);
 }
 

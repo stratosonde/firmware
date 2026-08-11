@@ -736,13 +736,39 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
  * the lora_app.h macros are the defaults when config is unavailable
  * (Config_Get() returns NULL before Config_Init). Single accessor point so a
  * future rename/repack touches one place. */
-/* #141: RTC-second timestamp of the last FRESH GNSS fix this boot
- * (0 = none). Set in AcquireGnssFix where live NMEA data confirmed a fix -
- * the last-known-position fallback does NOT count. */
+/* #141 / F-1 (#176): UTC epoch of the last FRESH GNSS fix (0 = none), from
+ * SysTimeGet().Seconds - the GPS-disciplined clock, NOT boot-relative
+ * TIMER_IF_GetTime. Set in AcquireGnssFix AFTER SysTimeSyncFromGnss, where
+ * live NMEA data confirmed a fix - the last-known-position fallback does NOT
+ * count. The UTC base is what lets the value persist (BKP_REG_LASTPOS_EPOCH)
+ * and restore across resets: a boot-relative stamp can never pass the UTC
+ * plausibility gate, which is exactly the F-1 defect this comment used to
+ * document as if it were a contract. */
 static uint32_t s_last_fresh_fix_s = 0;
 /* STAB-01 (#148): the GPS-loss grace epoch also persists (BKP_REG_GPS_LOSS_EPOCH)
  * so a reset cannot restart the 6 h silence window. */
 static uint32_t s_gps_loss_epoch_s = 0;
+
+/* F-1 (#176): plausibility floor for a real UTC epoch (2023-11-14). Anything
+ * smaller is boot-relative or corrupt. NOT lowered to admit boot-relative
+ * values - the fix is to stamp in the correct time base, not to widen the
+ * gate until it hides the type confusion. */
+#define UTC_EPOCH_PLAUSIBLE_MIN  1700000000UL
+
+/* F-1 (#176): explicit "has the UTC clock ever been disciplined" guard.
+ * Set this boot by SysTimeSyncFromGnss; seeded from the persisted SysTime at
+ * first query - SysTime lives in RTC backup regs DR0-2, so a pre-reset GPS
+ * discipline survives the reset and a plausible epoch at boot means the clock
+ * is still trustworthy. Never infer sync from the magnitude of an arbitrary
+ * timestamp; this is the single deliberate bridge between the two clocks. */
+static bool s_utc_synced = false;
+static bool UtcTimeIsValid(void)
+{
+  if (!s_utc_synced && SysTimeGet().Seconds >= UTC_EPOCH_PLAUSIBLE_MIN) {
+    s_utc_synced = true;  /* discipline happened before the reset */
+  }
+  return s_utc_synced;
+}
 
 static uint8_t  CfgLinkMargin(void)  { const SystemConfig_t *c = Config_Get(); return c ? c->link_margin_threshold   : LINK_MARGIN_THRESHOLD; }
 static uint8_t  CfgGatewayCount(void){ const SystemConfig_t *c = Config_Get(); return c ? c->gateway_count_threshold : GATEWAY_COUNT_THRESHOLD; }
@@ -949,6 +975,7 @@ static void SysTimeSyncFromGnss(void)
   st.Seconds = epoch;
   st.SubSeconds = 0;
   SysTimeSet(st);
+  s_utc_synced = true;  /* F-1 (#176): explicit sync event for UtcTimeIsValid */
   SONDE_LOG("SysTime disciplined from GPS: %lu epoch seconds\r\n",
                     (unsigned long)epoch);
 }
@@ -991,8 +1018,13 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
       {
         extern RTC_HandleTypeDef hrtc;
         uint32_t fix_epoch = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_LASTPOS_EPOCH);
-        uint16_t ms_d; uint32_t now_s = TIMER_IF_GetTime(&ms_d);
-        if (fix_epoch >= 1700000000UL && fix_epoch <= now_s) {
+        /* F-1 (#176): compare UTC against UTC. SysTime persists in RTC backup
+         * regs, so a pre-reset discipline makes this restore work even before
+         * the first fix of this boot. Never synced -> now_s stays small ->
+         * the gate rejects, which is the honest "age unknown" answer. */
+        uint32_t now_s = SysTimeGet().Seconds;
+        if (UtcTimeIsValid() &&
+            fix_epoch >= UTC_EPOCH_PLAUSIBLE_MIN && fix_epoch <= now_s) {
           s_last_fresh_fix_s = fix_epoch;
         }
       }
@@ -1097,7 +1129,9 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
-        { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
+        /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
+        SysTimeSyncFromGnss();
+        s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
         LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
                       s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
         have_previous_fix = true;
@@ -1136,7 +1170,9 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lat = hgnss.data.latitude;
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
-        { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
+        /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
+        SysTimeSyncFromGnss();
+        s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
         LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
                       s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
         have_previous_fix = true;
@@ -1808,18 +1844,27 @@ static void SendTxData(void)
    * (DDR-0018). The grace epoch arms at this boot's first cycle, so a
    * never-fixed unit gets the full window before going dark. */
   {
+    /* F-1 (#176): the whole grace policy runs on the UTC clock
+     * (SysTimeGet().Seconds). Before the first sync this is the SysTime
+     * boot-relative fallback - honest, monotonic, and too small to persist,
+     * which is exactly right: an unsynced unit has no trustworthy absolute
+     * age to carry across a reset. Post-sync the epoch is real UTC, so the
+     * persist and restore gates below are reachable and a reset can no
+     * longer restart the 6 h window. */
+    uint32_t utc_now_s = SysTimeGet().Seconds;
     if (s_gps_loss_epoch_s == 0) {
       /* STAB-01 (#148): restore the persisted loss epoch - a reset must not
        * restart the grace window. Plausibility-gated like the fix epoch:
        * unknown age means CONSERVATIVE (count from this boot, persist it). */
       extern RTC_HandleTypeDef hrtc;
       uint32_t persisted = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_GPS_LOSS_EPOCH);
-      if (persisted >= 1700000000UL && persisted <= now_timestamp) {
+      if (UtcTimeIsValid() &&
+          persisted >= UTC_EPOCH_PLAUSIBLE_MIN && persisted <= utc_now_s) {
         s_gps_loss_epoch_s = persisted;
       } else {
-        s_gps_loss_epoch_s = now_timestamp;
-        if (now_timestamp >= 1700000000UL) {
-          HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, now_timestamp);
+        s_gps_loss_epoch_s = utc_now_s;
+        if (UtcTimeIsValid()) {
+          HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, utc_now_s);
         }
       }
     }
@@ -1829,16 +1874,16 @@ static void SendTxData(void)
      * counter) - re-seed, never evaluate a wrapped delta (the deadman
      * pattern). Without the guard the subtraction wraps huge and the unit
      * goes instantly dark. */
-    if (now_timestamp < ref_s) {
-      s_gps_loss_epoch_s = now_timestamp;
-      ref_s = now_timestamp;
-      if (now_timestamp >= 1700000000UL) {
+    if (utc_now_s < ref_s) {
+      s_gps_loss_epoch_s = utc_now_s;
+      ref_s = utc_now_s;
+      if (UtcTimeIsValid()) {
         extern RTC_HandleTypeDef hrtc;
-        HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, now_timestamp);
+        HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_GPS_LOSS_EPOCH, utc_now_s);
       }
     }
     if (!MissionState_IsCommissioning() &&
-        (now_timestamp - ref_s) > GPS_LOSS_SILENCE_S) {
+        (utc_now_s - ref_s) > GPS_LOSS_SILENCE_S) {
       rf_silence = true;
       /* STAB-03 (#150): keep trying GPS until a fresh fix clears the
        * silence - urgency overrides the power-mode PREFERENCE, never the
