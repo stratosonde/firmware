@@ -26,6 +26,12 @@ FINDINGS_SRCS := test_review_findings.c
 # a scan of lora_app.c, so it cannot go green without a firmware change.
 BURST_SRCS := test_burst_fsm.c
 
+# 2026-08-11 (second pass) stability review: F-1..F-11. Source scans for the
+# HAL-bound findings plus behavioural F-4 (burst defeats mode hysteresis,
+# needs the real transmit_plan.c/power_model.c) and F-10/F-11 (GNSS parser,
+# atgm336h.c #included by the test TU).
+STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
+
 # Sources #included by the test TUs (not linked separately) must still be
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
@@ -42,7 +48,10 @@ test_findings$(EXE): $(FINDINGS_SRCS)
 test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../LoRaWAN/App/lora_app.h
 	$(CC) $(CFLAGS) -o $@ $(BURST_SRCS)
 
-.PHONY: test flight findings burst baseline all clean
+test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(STAB_SRCS) -lm
+
+.PHONY: test flight findings burst stability baseline all clean
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -57,14 +66,18 @@ findings: test_findings$(EXE)
 burst: test_burst$(EXE)
 	./test_burst$(EXE)
 
+stability: test_stability$(EXE)
+	./test_stability$(EXE)
+
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
 	EXPECT_UNFIXED=1 ./test_burst$(EXE)
+	EXPECT_UNFIXED=1 ./test_stability$(EXE)
 
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
@@ -77,7 +90,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst
+all: test flight findings burst stability
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_sanitize$(EXE)
