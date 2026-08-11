@@ -188,7 +188,7 @@ static void test_highres_record(void)
     HighResTelemetryRecord_t rec;
     sensor_t s = make_nominal_sensors();
 
-    CHECK_EQ_I(sizeof(HighResTelemetryRecord_t), 32);
+    CHECK_EQ_I(sizeof(HighResTelemetryRecord_t), 34);  /* STAB-04 (#151): v6 */
     CHECK(EncodeHighResTelemetryRecord(&rec, &s, 1754500123U, -12, MODE_CONSERVATIVE));
     CHECK_EQ_I(rec.timestamp, 1754500123u);
     CHECK_EQ_I(rec.temperature, 250);
@@ -270,32 +270,38 @@ static void test_gnss_parser(void)
 
 static void test_bulk_v3(void)
 {
-    /* D3 (#33) + DDR-0005 (#34) + FR-07 (#87): variable-length bulk v5,
-     * packet_type 0x05, per-record explicit sequence identity, explicit LE (D9) */
+    /* D3 (#33) + DDR-0005 (#34) + FR-07 (#87) + STAB-04 (#151): variable-length
+     * bulk v6, packet_type 0x06, per-record explicit sequence identity,
+     * explicit LE (D9), 34-byte records with sensor_quality + veto_reason. */
     sensor_t s = make_nominal_sensors();
     HighResTelemetryRecord_t recs[3];
     for (int i = 0; i < 3; i++) {
         CHECK(EncodeHighResTelemetryRecord(&recs[i], &s, 1754500123U + (uint32_t)i * 60,
                                            -12, MODE_NORMAL));
     }
+    /* STAB-04 (#151): give record 1 historical provenance (stale pressure,
+     * veto reason 2) — it must appear ON THE WIRE at the new record offsets. */
+    recs[1].sensor_quality = 0x01;
+    recs[1].veto_reason = 2;
+    recs[1].crc16 = CalculateCRC16((const uint8_t *)&recs[1], sizeof(recs[1]) - 2);
 
     uint8_t buf[198];
     uint8_t packed = 0;
     uint16_t len = 0;
     const uint32_t seqs[3] = { 256, 257, 258 };
 
-    /* Full budget: 3 records -> 2 + 108 + 4 = 114 bytes */
-    CHECK(EncodeBulkPacketV5(buf, sizeof(buf), 198, recs, seqs, 3, &packed, &len));
+    /* Full budget: 3 records -> 2 + 3*38 + 4 = 120 bytes */
+    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 198, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 3);
-    CHECK_EQ_I(len, 114);
-    CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_V5_EXPLICIT);   /* 0x05 */
+    CHECK_EQ_I(len, 120);
+    CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_V6_PROVENANCE);  /* 0x06 */
     CHECK_EQ_I(buf[1], 3);
     /* record 0 sequence u32 LE at bytes 2-5 (DDR-0005 explicit identity) */
     CHECK_EQ_I((uint32_t)buf[2] | ((uint32_t)buf[3] << 8) |
                ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24), 256u);
-    /* record 1 sequence at bytes 38-41 */
-    CHECK_EQ_I((uint32_t)buf[38] | ((uint32_t)buf[39] << 8) |
-               ((uint32_t)buf[40] << 16) | ((uint32_t)buf[41] << 24), 257u);
+    /* record 1 sequence at bytes 40-43 (2 + 38) */
+    CHECK_EQ_I((uint32_t)buf[40] | ((uint32_t)buf[41] << 8) |
+               ((uint32_t)buf[42] << 16) | ((uint32_t)buf[43] << 24), 257u);
     /* Record 0 payload at buf[6]: timestamp LE */
     CHECK_EQ_I((uint32_t)buf[6] | ((uint32_t)buf[7] << 8) |
                ((uint32_t)buf[8] << 16) | ((uint32_t)buf[9] << 24), 1754500123u);
@@ -306,8 +312,11 @@ static void test_bulk_v3(void)
         int p = buf[24] | (buf[25] << 8);
         CHECK(p == 10132 || p == 10133);
     }
-    /* per-record crc16 at record offset 30 -> buf[36] over the 30 bytes from buf[6] */
-    CHECK_EQ_I(buf[36] | (buf[37] << 8), CalculateCRC16(buf + 6, 30));
+    /* STAB-04: record 1 quality/veto at record offsets 30/31 -> buf[40+4+30..] */
+    CHECK_REGRESSION(buf[74] == 0x01, "STAB-04");   /* sensor_quality */
+    CHECK_REGRESSION(buf[75] == 0x02, "STAB-04");   /* veto_reason */
+    /* per-record crc16 at record offset 32 -> buf[6+32] over 32 bytes from buf[6] */
+    CHECK_EQ_I(buf[38] | (buf[39] << 8), CalculateCRC16(buf + 6, 32));
     /* packet crc32 LE over [0, len-4) */
     {
         uint32_t wire_crc = (uint32_t)buf[len-4] | ((uint32_t)buf[len-3] << 8) |
@@ -315,28 +324,28 @@ static void test_bulk_v3(void)
         CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, len - 4));
     }
 
-    /* Budget for exactly 2 records (78 B): packs 2, third stays pending */
-    CHECK(EncodeBulkPacketV5(buf, sizeof(buf), 78, recs, seqs, 3, &packed, &len));
+    /* Budget for exactly 2 records (82 B): packs 2, third stays pending */
+    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 82, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 2);
-    CHECK_EQ_I(len, 78);
+    CHECK_EQ_I(len, 82);
 
-    /* Budget for 1 record (42 B) */
-    CHECK(EncodeBulkPacketV5(buf, sizeof(buf), 42, recs, seqs, 3, &packed, &len));
+    /* Budget for 1 record (44 B) */
+    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 44, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 1);
-    CHECK_EQ_I(len, 42);
+    CHECK_EQ_I(len, 44);
 
-    /* Budget too small for even one record (41 B): fails, packs nothing */
-    CHECK(!EncodeBulkPacketV5(buf, sizeof(buf), 41, recs, seqs, 3, &packed, &len));
+    /* Budget too small for even one record (43 B): fails, packs nothing */
+    CHECK(!EncodeBulkPacketV6(buf, sizeof(buf), 43, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 0);
 
     /* Buffer cap smaller than budget: buf_cap wins */
-    CHECK(EncodeBulkPacketV5(buf, 78, 198, recs, seqs, 3, &packed, &len));
+    CHECK(EncodeBulkPacketV6(buf, 82, 198, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 2);
-    CHECK_EQ_I(len, 78);
+    CHECK_EQ_I(len, 82);
 
     /* Golden vector (D9/§13): exact LE bytes, 2-record packet */
-    CHECK(EncodeBulkPacketV5(buf, sizeof(buf), 78, recs, seqs, 3, &packed, &len));
-    printf("GOLDEN bulk-v5 (2 records, seqs=256,257):");
+    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 82, recs, seqs, 3, &packed, &len));
+    printf("GOLDEN bulk-v6 (2 records, seqs=256,257):");
     for (uint16_t i = 0; i < len; i++) printf(" %02X", buf[i]);
     printf("\n");
 }
@@ -362,7 +371,9 @@ static void test_flashlog_conversion(void)
     fr.gnss_valid = 1;
 
     HighResTelemetryRecord_t hr;
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr, -5, MODE_NORMAL));  /* params superseded by record values */
+    /* STAB-05 (#152): the voltage_slope/power_mode params are gone — every
+     * historical field must come from the record itself. */
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
     CHECK_EQ_I(hr.timestamp, 1754500999u);
     CHECK_EQ_I(hr.latitude, 111111);
     CHECK_EQ_I(hr.longitude, -222222);
@@ -370,16 +381,37 @@ static void test_flashlog_conversion(void)
     CHECK_EQ_I(hr.temperature, -455);
     CHECK_EQ_I(hr.battery_voltage, 4800);
     CHECK_EQ_I(hr.solar_voltage, 5100);       /* from the record, not 0 (F-025) */
-    CHECK_EQ_I(hr.voltage_slope, -7);         /* from the record, not the param */
+    CHECK_EQ_I(hr.voltage_slope, -7);         /* from the record */
     CHECK_EQ_I(hr.hdop, 15);
-    CHECK_EQ_I(hr.power_mode, MODE_REDUCED);  /* from the record, not the param */
+    CHECK_EQ_I(hr.power_mode, MODE_REDUCED);  /* from the record */
+    /* STAB-05 (#152): the flags byte's mode field is the HISTORICAL mode too
+     * (was: live retransmission-time mode packed into a historical record) */
+    CHECK_REGRESSION(((hr.flags >> 5) & 0x07) == MODE_REDUCED, "STAB-05");
+
+    /* STAB-04 (#151): the flash record's data-honesty provenance survives
+     * conversion. b0 press_stale + veto reason 3 (b5-b7) in flash flags. */
+    fr.flags = 0x01 | (3u << 5);
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+    CHECK_REGRESSION(hr.sensor_quality == 0x01, "STAB-04");   /* press_stale */
+    CHECK_REGRESSION(hr.veto_reason == 3, "STAB-04");
+    /* ...and the stale bits do NOT leak into the legacy flags byte */
+    CHECK((hr.flags & 0x1F) == (1u | (7u << 1)));  /* gps_valid + 7 sats only */
+    /* all five stale bits round-trip */
+    fr.flags = 0x1F | (7u << 5);
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+    CHECK_REGRESSION(hr.sensor_quality == 0x1F, "STAB-04");
+    CHECK_REGRESSION(hr.veto_reason == 7, "STAB-04");
+    /* fresh record -> zero provenance */
+    fr.flags = 0;
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+    CHECK(hr.sensor_quality == 0 && hr.veto_reason == 0);
 
     /* D5: int32 flash altitude clamps to the u16 wire field */
     fr.altitude_gps = 40000;   /* float altitude beyond int16 */
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr, 0, MODE_NORMAL));
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
     CHECK_EQ_I(hr.altitude, 40000);
     fr.altitude_gps = -50;
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr, 0, MODE_NORMAL));
+    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
     CHECK_EQ_I(hr.altitude, 0);
 }
 

@@ -134,7 +134,7 @@ static HighResTelemetryRecord_t make_highres(uint16_t marker)
 /* v5 wire contract: record i's sequence is the u32 LE at 2 + i*36. */
 static uint32_t decoded_identity_of(const uint8_t *pkt, uint8_t index)
 {
-    const uint8_t *p = pkt + 2 + (uint32_t)index * BULK_V5_RECORD_WIRE;
+    const uint8_t *p = pkt + 2 + (uint32_t)index * BULK_V6_RECORD_WIRE;
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
          | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
@@ -149,9 +149,9 @@ static void test_bulk_identity_with_skips(void)
         uint32_t true_seq[3] = { 100, 101, 102 };
         for (int i = 0; i < 3; i++) { recs[i] = make_highres((uint16_t)(5000 + i)); }
 
-        uint8_t buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
+        uint8_t buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
         uint8_t packed = 0; uint16_t len = 0;
-        CHECK(EncodeBulkPacketV5(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+        CHECK(EncodeBulkPacketV6(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
                                  &packed, &len));
         CHECK_EQ_I(packed, 3);
         for (uint8_t i = 0; i < packed; i++) {
@@ -167,9 +167,9 @@ static void test_bulk_identity_with_skips(void)
         uint32_t true_seq[3] = { 100, 102, 103 };   /* 101 skipped */
         for (int i = 0; i < 3; i++) { recs[i] = make_highres((uint16_t)(5000 + i)); }
 
-        uint8_t buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
+        uint8_t buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
         uint8_t packed = 0; uint16_t len = 0;
-        CHECK(EncodeBulkPacketV5(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+        CHECK(EncodeBulkPacketV6(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
                                  &packed, &len));
         CHECK_EQ_I(packed, 3);
 

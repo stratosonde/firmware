@@ -7,8 +7,8 @@
   *
   * This module defines efficient binary packet formats for LoRaWAN transmission:
   * - CompactTelemetryPacket_t: 11-byte heartbeat packet for SF10 (maximum range w/ LinkCheck)
-  * - HighResTelemetryRecord_t: 32-byte record for flash storage  
-  * - BulkTelemetryPacket_t: 198-byte packet for SF7 bulk transfer (FW-20)
+  * - HighResTelemetryRecord_t: 34-byte record (v6, STAB-04/#151) for archive transfer
+  * - Bulk wire format: variable-length v6 packets for SF7 archive bursts (0x06)
   *
   ******************************************************************************
   */
@@ -138,34 +138,18 @@ typedef struct __attribute__((packed)) {
     uint8_t  satellites;        // GPS satellite count (1 byte)
     uint8_t  hdop;             // GPS HDOP * 10 (1 byte) - 0-25.5 HDOP
     uint8_t  power_mode;       // Operating mode enum (1 byte)
-    uint8_t  flags;            // Status flags (1 byte)
+    uint8_t  flags;            // Status flags (1 byte): b0 gps_fix_valid, b1-b4 sats, b5-b7 power mode
+    uint8_t  sensor_quality;   // STAB-04 (#151): b0 press_stale, b1 temp_stale, b2 hum_stale,
+                               // b3 gnss_stale, b4 batt_stale, b5-b7 reserved
+    uint8_t  veto_reason;      // STAB-04 (#151): TransmitVeto_t at write time (0 = none)
     uint16_t crc16;            // Data integrity (2 bytes)
-} HighResTelemetryRecord_t;   // Total: 32 bytes
+} HighResTelemetryRecord_t;   // Total: 34 bytes (v6, was 32)
 
-/**
- * @brief 198-byte bulk telemetry packet for SF7 transmission
- * @note Packs multiple high-resolution records for efficient bulk transfer
- * @note Records are FIFO order (oldest unsent first) since the C4 fix
- *
- * FW-20: packet_type bumped 0x01 -> 0x02 and the packet shrunk 222 -> 198 B.
- * The old v1 layout carried three permanently-zero placeholders
- * (flash_page_addr 4B, voltage_trend 10B, mode_changes 10B = 24 B of
- * SF7 airtime per packet with zero consumers) and pretended to be LIFO.
- * Record identity comes from each HighResTelemetryRecord_t's own
- * timestamp + sequence; if voltage-trend or mode-history telemetry is
- * ever wanted, implement it as a v3 packet with real producers.
- */
-typedef struct __attribute__((packed)) {
-    uint8_t  packet_type;           // 1 byte - 0x02 = FIFO bulk, no placeholders
-    uint8_t  record_count;          // 1 byte - Number of records in this packet
-
-    // High-resolution records (32 bytes each)
-    // 198 - 6 header/crc = 192 bytes = 6 complete records per packet
-    HighResTelemetryRecord_t records[6];  // 6 × 32 = 192 bytes
-
-    uint32_t crc32;                   // 4 bytes - Packet integrity
-
-} BulkTelemetryPacket_t;  // Total: 198 bytes (FW-20, was 222) — LEGACY, superseded by v3
+/* ---- Historical bulk v2 (packet_type 0x02): 198 B fixed, 6 x 32B records ----
+ * The v2 struct/encoder (BulkTelemetryPacket_t, EncodeBulkPacketFromRecords)
+ * were deleted at the v6 record change: the layout documented here is FROZEN
+ * history — [0x02][count][6 x 32B records][crc32] = 198 B. Nothing decodes or
+ * encodes it anymore; it exists so old captures remain interpretable. */
 
 /* ---- Bulk wire format v4 (D3 + DDR-0005, #33/#34): variable-length, packet_type 0x04 ----
  * Layout: [packet_type=0x04][record_count=n][base_seq u32 LE][n × 32B records][crc32]
@@ -192,11 +176,18 @@ typedef struct __attribute__((packed)) {
  * ConvertFlashLogToHighRes). v5 serializes each record's own flash sequence,
  * so identity holds by construction for ANY subset of the archive, and the
  * sender's watermark commit point is simply seq_of(last packed record) + 1.
- * No deployed fleet at adoption time, so no decoder compatibility burden. */
-#define BULK_PACKET_TYPE_V5_EXPLICIT    0x05  // v5: variable + per-record sequence
-#define BULK_V5_OVERHEAD                6     // type + count + crc32
-#define BULK_V5_RECORD_WIRE             36    // seq u32 LE + 32B record
-#define BULK_V5_MAX_RECORDS             5     // 6 + 36*5 = 186 <= 198 (v2 parity)
+ * v5 NEVER FLEW — superseded by v6 before the first real burst (#146).
+ *
+ * ---- Bulk wire format v6 (STAB-04/#151 + STAB-05/#152): provenance ----
+ * Same envelope as v5 but the record is the 34-byte v6 layout (adds
+ * sensor_quality + veto_reason): [0x06][n][n × (seq u32 LE + 34B)][crc32].
+ * Length = 6 + 38n. A historical record's data-honesty bits (stale sensors,
+ * transmit veto) survive the archive hop; unknown/stale can no longer arrive
+ * looking fresh (DDR-0007). Type bumped so no decoder can misparse size. */
+#define BULK_PACKET_TYPE_V6_PROVENANCE  0x06  // v6: variable + per-record seq + provenance
+#define BULK_V6_OVERHEAD                6     // type + count + crc32
+#define BULK_V6_RECORD_WIRE             38    // seq u32 LE + 34B record
+#define BULK_V6_MAX_RECORDS             5     // 6 + 38*5 = 196 <= 198 (v2 parity)
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
@@ -233,20 +224,7 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
                                   OperatingMode_t power_mode);
 
 /**
- * @brief Encode bulk telemetry packet from flash records (FIFO order)
- * @param packet: Destination bulk packet
- * @param records: Array of high-resolution records (up to 6)
- * @param record_count: Number of records to include
- * @retval bool: true if encoding successful
- * @note  FW-20: flash_page_addr/voltage_trend/mode_changes parameters
- *        removed — they were always-zero placeholders (v1 222 B layout).
- */
-bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
-                                 const HighResTelemetryRecord_t *records,
-                                 uint8_t record_count);
-
-/**
- * @brief Encode a variable-length bulk packet (wire v5, packet_type 0x05) — FR-07 (#87)
+ * @brief Encode a variable-length bulk packet (wire v6, packet_type 0x06) — STAB-04 (#151)
  * @param buf: output buffer
  * @param buf_cap: output buffer capacity in bytes
  * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
@@ -254,13 +232,13 @@ bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
  * @param record_seqs: parallel array — each record's own flash sequence (DDR-0005)
  * @param record_count: number of candidate records
  * @param packed_count: out — records actually encoded (<= record_count)
- * @param out_len: out — encoded packet length (6 + 36n)
+ * @param out_len: out — encoded packet length (6 + 38n)
  * @retval bool: true if at least one record was encoded
  * @note Identity is explicit per record, so skips (corrupt or unconvertible
  *       records) can never corrupt the ground-side (device, seq) dedup key.
  *       The watermark commit point is record_seqs[packed_count-1] + 1.
  */
-bool EncodeBulkPacketV5(uint8_t *buf,
+bool EncodeBulkPacketV6(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
@@ -281,16 +259,16 @@ bool DecodeCompactBinaryPacket(const CompactTelemetryPacket_t *packet,
 /**
  * @brief Convert FlashLog_Record_t to HighResTelemetryRecord_t format
  * @param flash_record: Source flash log record
- * @param highres_record: Destination high-res record  
- * @param voltage_slope: Voltage slope in mV/hour
- * @param power_mode: Current operating mode
+ * @param highres_record: Destination high-res record
  * @retval bool: true if conversion successful
- * @note Converts floating point flash data to scaled integer format
+ * @note Converts floating point flash data to scaled integer format.
+ *       STAB-05 (#152): no live-context parameters — every field of a
+ *       historical record describes acquisition time (slope/mode come from
+ *       the record; STAB-04 (#151): sensor_quality + veto_reason copied from
+ *       the flash record's data-honesty flags).
  */
 bool ConvertFlashLogToHighRes(const void *flash_record,
-                              HighResTelemetryRecord_t *highres_record,
-                              int16_t voltage_slope,
-                              OperatingMode_t power_mode);
+                              HighResTelemetryRecord_t *highres_record);
 
 /**
  * @brief Validate packet structure sizes at compile time

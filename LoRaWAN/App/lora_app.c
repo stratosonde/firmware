@@ -1446,11 +1446,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       // Check if we have unsent data and haven't exceeded packet limit
       if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
 
-        // Read up to BULK_V5_MAX_RECORDS unsent records from flash (FIFO order —
+        // Read up to BULK_V6_MAX_RECORDS unsent records from flash (FIFO order —
         // oldest unsent first, so the absolute commit advances the watermark
         // correctly). Was 6: the 6th record was read and discarded every packet
         // (finding #9) — the wire format packs at most 5.
-        FlashLog_Record_t flash_records[BULK_V5_MAX_RECORDS];
+        FlashLog_Record_t flash_records[BULK_V6_MAX_RECORDS];
         uint32_t record_count;
         uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
         /* R2-02 (#106): no entry-watermark pin - the read path may clamp the
@@ -1459,7 +1459,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
 
         FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
                                                                             flash_records,
-                                                                            BULK_V5_MAX_RECORDS,
+                                                                            BULK_V6_MAX_RECORDS,
                                                                             &record_count,
                                                                             &skipped_count);
         if (skipped_count > 0) {
@@ -1480,8 +1480,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           uint32_t highres_seqs[6];   /* FR-07 (#87): per-record explicit identity */
           uint8_t packed_count = 0;
           for (uint32_t i = 0; i < record_count && i < 6; i++) {
-            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count],
-                                         slope_mv_per_hour, current_mode)) {
+            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count])) {
               SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
               continue;  /* Skip bad record, keep packing the rest */
             }
@@ -1514,7 +1513,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
           LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
 
-          /* D3 (#33) + FR-07 (#87): wire v5 variable-length bulk (packet_type
+          /* D3 (#33) + FR-07 (#87): wire v6 variable-length bulk (packet_type
            * 0x05, per-record explicit sequence). Query the runtime payload
            * budget (current DR + pending FOpts, protocol §11) and pack only
            * complete records that fit. Records that don't fit stay pending
@@ -1522,9 +1521,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
           LoRaMacTxInfo_t txInfo;
           uint16_t max_payload = 0;
           for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
-            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE),
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE),
                                        &txInfo) == LORAMAC_STATUS_OK) {
-              max_payload = (uint16_t)(BULK_V5_OVERHEAD + try_n * BULK_V5_RECORD_WIRE);
+              max_payload = (uint16_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE);
               break;
             }
           }
@@ -1534,11 +1533,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             break;
           }
 
-          uint8_t v5_buf[BULK_V5_OVERHEAD + BULK_V5_MAX_RECORDS * BULK_V5_RECORD_WIRE];
+          uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
           uint8_t v5_packed = 0;
           uint16_t v5_len = 0;
 
-          if (EncodeBulkPacketV5(v5_buf, sizeof(v5_buf), max_payload,
+          if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
                                  highres_records, highres_seqs, packed_count,
                                  &v5_packed, &v5_len)) {
 
@@ -1554,9 +1553,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             LmHandlerAppData_t bulkData;
             bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
             bulkData.BufferSize = v5_len;
-            bulkData.Buffer = v5_buf;
+            bulkData.Buffer = v6_buf;
 
-            SONDE_LOG("Sending %u-byte bulk v5 packet at SF7 on port %d with %u records\r\n",
+            SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
                               v5_len, LORAWAN_BULK_PORT, v5_packed);
 
             LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);

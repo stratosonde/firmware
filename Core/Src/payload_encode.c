@@ -214,10 +214,21 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     record->power_mode = (uint8_t)power_mode;
     
     // Pack status flags
-    record->flags = PackStatusFlags(sensors->gnss_valid, 
-                                    sensors->satellites, 
+    record->flags = PackStatusFlags(sensors->gnss_valid,
+                                    sensors->satellites,
                                     power_mode);
-    
+
+    /* STAB-04 (#151): live-path provenance mirrors the flash-record layout
+     * (b0 press, b1 temp, b2 hum, b3 gnss, b4 batt); veto is 0 here — the
+     * veto is decided at the flash-write site, not in the encoder. */
+    record->sensor_quality =
+        (uint8_t)((sensors->press_stale ? 0x01 : 0) |
+                  (sensors->temp_stale  ? 0x02 : 0) |
+                  (sensors->hum_stale   ? 0x04 : 0) |
+                  (sensors->gnss_stale  ? 0x08 : 0) |
+                  (sensors->batt_stale  ? 0x10 : 0));
+    record->veto_reason = 0;
+
     // Calculate CRC16 for data integrity
     record->crc16 = CalculateCRC16((const uint8_t*)record, sizeof(HighResTelemetryRecord_t) - 2);
     
@@ -239,43 +250,6 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
     return true;
 }
 
-/**
- * @brief Encode bulk telemetry packet from flash records (FIFO order)
- * @note  FW-20: v2 layout (198 B) — the v1 222 B layout's flash_page_addr /
- *        voltage_trend / mode_changes placeholders are gone; records carry
- *        their own timestamp + sequence identity.
- */
-bool EncodeBulkPacketFromRecords(BulkTelemetryPacket_t *packet,
-                                 const HighResTelemetryRecord_t *records,
-                                 uint8_t record_count)
-{
-    if (!packet || !records || record_count == 0) {
-        return false;
-    }
-    
-    SONDE_LOG("Encoding 198-byte bulk packet with %d records...\r\n", record_count);
-    
-    // Clear packet structure
-    memset(packet, 0, sizeof(BulkTelemetryPacket_t));
-    
-    // Set packet header
-    packet->packet_type = 0x02;  // FW-20: v2 FIFO bulk, no placeholder fields
-    packet->record_count = (record_count > 6) ? 6 : record_count;  // Max 6 records
-    
-    // Copy high-resolution records (up to 6)
-    for (uint8_t i = 0; i < packet->record_count && i < 6; i++) {
-        memcpy(&packet->records[i], &records[i], sizeof(HighResTelemetryRecord_t));
-    }
-    
-    // Calculate CRC32 for packet integrity (exclude CRC32 field itself)
-    packet->crc32 = CalculateCRC32((const uint8_t*)packet, sizeof(BulkTelemetryPacket_t) - 4);
-    
-    SONDE_LOG("Bulk packet: Type=%d Records=%d CRC32=0x%08lX\r\n",
-                      packet->packet_type, packet->record_count, 
-                      packet->crc32);
-    
-    return true;
-}
 
 /* ---- Explicit little-endian serialization helpers (D9, #33) ----
  * Wire v3 is explicitly LE-serialized per LoRaWANApplicationProtocol.md §3 —
@@ -285,9 +259,9 @@ static void PutU32LE(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_
                                                p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
 
 /**
- * @brief Serialize one high-res record as 32 LE bytes (wire v3).
- *        Field order matches HighResTelemetryRecord_t; crc16 covers bytes 0-29.
- * @retval number of bytes written (always 32)
+ * @brief Serialize one high-res record as 34 LE bytes (wire v6, STAB-04/#151).
+ *        Field order matches HighResTelemetryRecord_t; crc16 covers bytes 0-31.
+ * @retval number of bytes written (always 34)
  */
 static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t *r)
 {
@@ -305,19 +279,22 @@ static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t
     out[27] = r->hdop;
     out[28] = r->power_mode;
     out[29] = r->flags;
-    PutU16LE(out + 30, CalculateCRC16(out, 30));
-    return 32;
+    out[30] = r->sensor_quality;   /* STAB-04 (#151): v6 provenance */
+    out[31] = r->veto_reason;
+    PutU16LE(out + 32, CalculateCRC16(out, 32));
+    return 34;
 }
 
 /**
- * @brief Encode a variable-length bulk packet (wire v5, packet_type 0x05) — FR-07 (#87)
+ * @brief Encode a variable-length bulk packet (wire v6, packet_type 0x06) — STAB-04 (#151)
  *
- * Supersedes EncodeBulkPacketV3/v4 (0x04): identity is explicit per record
- * (seq u32 LE preceding each 32-byte record), so a non-contiguous candidate
+ * v5 (FR-07/#87) with the 34-byte provenance record: identity is explicit per
+ * record (seq u32 LE preceding each record), so a non-contiguous candidate
  * array — corrupt-skip in the FIFO read, or a failed conversion — can no
- * longer misattribute every record after the gap.
+ * longer misattribute every record after the gap, and the record's
+ * sensor_quality/veto_reason provenance survives the archive hop.
  */
-bool EncodeBulkPacketV5(uint8_t *buf,
+bool EncodeBulkPacketV6(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
@@ -332,15 +309,15 @@ bool EncodeBulkPacketV5(uint8_t *buf,
 
     /* Whole records only; budget = min(buf_cap, max_payload) */
     uint16_t budget = (max_payload < buf_cap) ? max_payload : buf_cap;
-    uint8_t n = (uint8_t)((budget - BULK_V5_OVERHEAD) / BULK_V5_RECORD_WIRE);
+    uint8_t n = (uint8_t)((budget - BULK_V6_OVERHEAD) / BULK_V6_RECORD_WIRE);
     if (n > record_count) n = record_count;
-    if (n > BULK_V5_MAX_RECORDS) n = BULK_V5_MAX_RECORDS;
+    if (n > BULK_V6_MAX_RECORDS) n = BULK_V6_MAX_RECORDS;
     if (n == 0) {
         *packed_count = 0;
         return false;
     }
 
-    buf[0] = BULK_PACKET_TYPE_V5_EXPLICIT;
+    buf[0] = BULK_PACKET_TYPE_V6_PROVENANCE;
     buf[1] = n;
     uint16_t off = 2;
     for (uint8_t i = 0; i < n; i++) {
@@ -354,7 +331,7 @@ bool EncodeBulkPacketV5(uint8_t *buf,
     *packed_count = n;
     *out_len = off;
 
-    SONDE_LOG("Bulk v5: Records=%d FirstSeq=%lu Len=%u\r\n",
+    SONDE_LOG("Bulk v6: Records=%d FirstSeq=%lu Len=%u\r\n",
               n, (unsigned long)record_seqs[0], off);
     return true;
 }
@@ -363,9 +340,7 @@ bool EncodeBulkPacketV5(uint8_t *buf,
  * @brief Convert FlashLog_Record_t to HighResTelemetryRecord_t
  */
 bool ConvertFlashLogToHighRes(const void *flash_record,
-                              HighResTelemetryRecord_t *highres_record,
-                              int16_t voltage_slope,
-                              OperatingMode_t power_mode)
+                              HighResTelemetryRecord_t *highres_record)
 {
     if (!flash_record || !highres_record) {
         return false;
@@ -396,8 +371,6 @@ bool ConvertFlashLogToHighRes(const void *flash_record,
      * live values passed as parameters. */
     highres_record->solar_voltage = flash_rec->solar_mv;
     highres_record->voltage_slope = flash_rec->voltage_slope;
-    (void)voltage_slope;  /* superseded by flash-record value (kept for API compat) */
-    (void)power_mode;
     
     // GPS metadata
     highres_record->satellites = flash_rec->satellites;
@@ -405,9 +378,17 @@ bool ConvertFlashLogToHighRes(const void *flash_record,
     
     // Power mode and flags (D5/#35: mode from the flash record — honest history)
     highres_record->power_mode = flash_rec->power_mode;
-    highres_record->flags = PackStatusFlags((bool)flash_rec->gnss_valid, 
-                                            flash_rec->satellites, 
-                                            power_mode);
+    /* STAB-05 (#152): the flags byte's mode field is the HISTORICAL mode too —
+     * packing the live retransmission-time mode here made one record carry two
+     * contradictory power states. */
+    highres_record->flags = PackStatusFlags((bool)flash_rec->gnss_valid,
+                                            flash_rec->satellites,
+                                            (OperatingMode_t)flash_rec->power_mode);
+    /* STAB-04 (#151): the flash record's data-honesty provenance survives the
+     * archive hop — stale bits (b0-b4) and the transmit veto (b5-b7) are
+     * decoded on the backend, not silently dropped. */
+    highres_record->sensor_quality = flash_rec->flags & 0x1F;
+    highres_record->veto_reason    = (flash_rec->flags >> 5) & 0x07;
     
     // Calculate CRC16 for integrity
     highres_record->crc16 = CalculateCRC16((const uint8_t*)highres_record, 
@@ -451,20 +432,14 @@ bool PayloadFormat_ValidateSizes(void)
         valid = false;
     }
     
-    if (sizeof(HighResTelemetryRecord_t) != 32) {
-        SONDE_LOG("ERROR: HighResTelemetryRecord_t size = %d bytes (expected 32)\r\n",
+    if (sizeof(HighResTelemetryRecord_t) != 34) {  /* v6, STAB-04 (#151) */
+        SONDE_LOG("ERROR: HighResTelemetryRecord_t size = %d bytes (expected 34)\r\n",
                           sizeof(HighResTelemetryRecord_t));
         valid = false;
     }
-    
-    if (sizeof(BulkTelemetryPacket_t) != 198) {
-        SONDE_LOG("ERROR: BulkTelemetryPacket_t size = %d bytes (expected 198)\r\n",
-                          sizeof(BulkTelemetryPacket_t));
-        valid = false;
-    }
-    
+
     if (valid) {
-        SONDE_LOG_STR("Payload format sizes validated: 11/32/198 bytes\r\n");
+        SONDE_LOG_STR("Payload format sizes validated: 11/34 bytes\r\n");
     }
     
     return valid;
