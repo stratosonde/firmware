@@ -122,6 +122,13 @@ void EnvSensors_MarkGnssStale(bool stale)
   s_gnss_stale = stale;
 }
 
+/* F-3 (#178): the region auto-switch site must consult freshness - a stale
+ * (forged last-known) fix may INHIBIT but never SWITCH (DDR-0015). */
+bool EnvSensors_GnssIsStale(void)
+{
+  return s_gnss_stale;
+}
+
 /* UART handle - declared in main.c but we need to access it here for GNSS */
 extern UART_HandleTypeDef huart1;
 

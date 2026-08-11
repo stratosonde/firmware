@@ -1302,13 +1302,25 @@ static void SelectRegionAndSession(bool *rf_silence)
                (long)(lon_int / 1000000), (long)labs(lon_int % 1000000),
                region_name, (unsigned long)h3_elapsed);
       
+      /* F-3 (#178): a stale position may INHIBIT (the REGION_RESTRICTED
+       * silence above) but never SWITCH. On a GPS timeout AcquireGnssFix
+       * forges hgnss.data from the last-known statics and both gates above
+       * pass - so without this check a days-old position could initiate a
+       * full LmHandlerDeInit/Init teardown (incl. a 400 ms blocking
+       * HAL_Delay). This enforces in code what the F-06/DDR-0015 comment
+       * above already argues: HOLD the last region across a GPS gap; never
+       * snap region on stale data. */
+      if (EnvSensors_GnssIsStale()) {
+        SONDE_LOG_STR("MultiRegion: position STALE - auto-switch inhibited (never switch on stale)\r\n");
+      } else {
       /* Production: Auto-switch region based on H3lite lookup */
       LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchToRegion(detected_region);
-      
+
       if (switch_status == LORAMAC_HANDLER_SUCCESS) {
         SONDE_LOG_STR("MultiRegion: Auto-switch completed successfully\r\n");
       } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
         SONDE_LOG_STR("MultiRegion: Switch deferred (MAC busy)\r\n");
+      }
       }
     }
     else

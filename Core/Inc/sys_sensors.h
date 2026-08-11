@@ -118,6 +118,13 @@ void EnvSensors_MergeGnss(sensor_t *sensor_data);
   */
 void EnvSensors_MarkGnssStale(bool stale);
 
+/**
+  * @brief  F-3 (#178): is the current GNSS position stale (last-known-good,
+  *         not a fresh fix this cycle)? The region auto-switch consults this:
+  *         stale may INHIBIT but never SWITCH (DDR-0015).
+  */
+bool EnvSensors_GnssIsStale(void);
+
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */
