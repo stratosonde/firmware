@@ -1058,10 +1058,27 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     gps_start = HAL_GetTick();
     bool got_fix = false;
     uint32_t last_status_print = 0;
-    
+
+    /* F-2 (#177): clock-independent iteration bound - the W25Q_WaitReady
+     * max_polls pattern (F3/#169). HAL_GetTick() is RTC-derived: if the RTC
+     * stalls, the tick difference never grows and this loop - which refreshes
+     * the IWDG from INSIDE - would wedge forever with the watchdog fed, and
+     * RTC_LivenessCheck cannot rescue it (this is a sequencer task; the main
+     * loop never regains control). The tick bound stays the normal exit;
+     * this cap is the backstop that does not depend on the clock under
+     * suspicion. 32/ms mirrors W25Q_MAX_BUSY_POLLS_PER_MS: far above any real
+     * iteration rate (each pass sleeps in WFI until an interrupt). */
+    uint32_t acq_iters = 0;
+    const uint32_t max_iters = gps_timeout_ms * 32u;
+
     /* Process GPS data for up to gps_timeout_ms (dynamic based on power mode) */
     while ((HAL_GetTick() - gps_start) < gps_timeout_ms)
     {
+      if (++acq_iters > max_iters) {
+        SONDE_LOG_STR("GPS: acquisition iteration bound hit (clock-independent) - aborting\r\n");
+        break;
+      }
+
       /* Process DMA buffer - parses NMEA and updates hgnss.data */
       GNSS_ProcessDMABuffer(&hgnss);
       
