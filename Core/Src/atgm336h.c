@@ -971,7 +971,9 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
   int field;
   double lat_raw = 0, lon_raw = 0;   /* R34 (#57): double until the store */
   bool have_lat = false, have_lon = false;  /* R32 (#57): token PRESENCE, not magnitude */
-  char lat_dir = 'N', lon_dir = 'E';
+  /* F-11 (#186): no N/E default - the hemisphere letter gives the coordinate
+   * its meaning; a missing/garbled direction REJECTS the fix below. */
+  char lat_dir = '\0', lon_dir = '\0';
 
   for (field = 1; field < 15; field++)
   {
@@ -980,7 +982,16 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
     switch (field)
     {
       case 1: /* UTC time */
-        if (strlen(token) >= 6) hgnss->data.timestamp = atoi(token);
+        if (strlen(token) >= 6)
+        {
+          /* F-10 (#185): range-check HHMMSS before storing - a garbled but
+           * checksum-valid time (e.g. 995910 -> hours=99) must never reach
+           * SysTimeSyncFromGnss; it would discipline SysTime by ~4 days.
+           * 60 s permits a leap second. */
+          uint32_t hhmmss = strtoul(token, NULL, 10);
+          uint32_t hh = hhmmss / 10000u, mm = (hhmmss / 100u) % 100u, ss = hhmmss % 100u;
+          if (hh <= 23u && mm <= 59u && ss <= 60u) hgnss->data.timestamp = hhmmss;
+        }
         break;
 
       case 2: /* Latitude */
@@ -1037,6 +1048,16 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
 
   /* Validate coordinates */
   if (!have_lat || !have_lon) return -1; /* No fix info yet (empty fields) */
+
+  /* F-11 (#186): the hemisphere letter is the qualifier that gives the
+   * coordinate its sign. A missing or non-{N,S}/{E,W} direction (truncated
+   * sentence whose '*' landed after the numeric field still passes checksum)
+   * REJECTS the fix - it must never default to N/E. A dropped 'W' otherwise
+   * moved a Calgary launch (51N 114W) to +114E with no downstream flag. */
+  if ((lat_dir != 'N' && lat_dir != 'S') || (lon_dir != 'E' && lon_dir != 'W'))
+  {
+    return -1;
+  }
   
   if (!GNSS_ValidateCoordinates(hgnss->data.latitude, hgnss->data.longitude))
   {
@@ -1064,6 +1085,12 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
   char token[32];
   int field;
   char status = 'V';
+  /* F-10 (#185): time/date are HELD until the status field is known - a 'V'
+   * (void) sentence must never rewrite the SysTime discipline inputs, and the
+   * time is range-checked before it is stored (same HHMMSS rule as GGA). */
+  uint32_t rmc_time = 0;
+  uint32_t rmc_date = 0;
+  bool have_time = false, have_date = false;
 
   for (field = 1; field < 13; field++)
   {
@@ -1072,7 +1099,7 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
     switch (field)
     {
       case 1: /* UTC time */
-        if (strlen(token) >= 6) hgnss->data.timestamp = atoi(token);
+        if (strlen(token) >= 6) { rmc_time = strtoul(token, NULL, 10); have_time = true; }
         break;
 
       case 2: /* Status */
@@ -1088,9 +1115,22 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
         break;
 
       case 9: /* Date */
-        if (strlen(token) >= 6) hgnss->data.date = atoi(token);
+        if (strlen(token) >= 6) { rmc_date = strtoul(token, NULL, 10); have_date = true; }
         break;
     }
+  }
+
+  /* F-10 (#185): only an ACTIVE sentence stores clock inputs, and only if the
+   * time is in range (hh <= 23, mm <= 59, ss <= 60 - 60 permits a leap
+   * second). A garbled or void sentence leaves the held time/date untouched. */
+  if (status == 'A')
+  {
+    if (have_time)
+    {
+      uint32_t hh = rmc_time / 10000u, mm = (rmc_time / 100u) % 100u, ss = rmc_time % 100u;
+      if (hh <= 23u && mm <= 59u && ss <= 60u) hgnss->data.timestamp = rmc_time;
+    }
+    if (have_date) hgnss->data.date = rmc_date;
   }
 
   /* R2-30 (#130): the RMC status field is authoritative for fix validity -

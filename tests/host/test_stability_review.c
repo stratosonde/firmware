@@ -495,6 +495,8 @@ static void test_f10_hhmmss_range_checked(void)
     CHECK_REGRESSION(g.data.timestamp == 120000u, "F-10a");
 
     /* Void sentence must not store time/date at all. */
+    g.data.timestamp = 120000u;
+    g.data.date      = 110826u;
     GNSS_ParseRMC(&g, "$GNRMC,135900,V,,,,,,,070825,,,N*00");
     printf("   after void RMC: timestamp=%lu date=%lu (want both untouched)\n",
            (unsigned long)g.data.timestamp, (unsigned long)g.data.date);
