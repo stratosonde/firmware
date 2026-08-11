@@ -47,7 +47,13 @@ jobs:
           # changes the fragment syntax and the substitution stops matching —
           # otherwise CI ships a "flight" binary that is not a flight build.
           find Debug -name subdir.mk -exec sed -i 's/-DDEBUG -DCORE_CM4/-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4/' {} +
-          grep -rL "DSONDE_FLIGHT_BUILD" Debug --include=subdir.mk && { echo "FATAL: flight macro injection missed a fragment"; exit 1; }
+          # Only C-compile fragments carry -DCORE_CM4 (Startup assembler rules
+          # use -DDEBUG alone and are legitimately untouched by the sed), so
+          # scope the loud-failure check to fragments that have CORE_CM4:
+          # any of those still lacking the flight macro means the injection
+          # missed. An all-assembler match set passes vacuously here, but the
+          # SONDE_BUILD:flight marker check below still gates that case.
+          grep -rl "DCORE_CM4" Debug --include=subdir.mk | xargs -r grep -L "DSONDE_FLIGHT_BUILD" && { echo "FATAL: flight macro injection missed a fragment"; exit 1; }
           make -C Debug all -j"$(nproc)"
           arm-none-eabi-size Debug/Radio_Sonde_E5_HF_EU.elf
       - name: Prove the flight marker is in the binary (F12/#173)
