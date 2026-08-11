@@ -377,6 +377,19 @@ bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss)
   return (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID);
 }
 
+/* R2-16 (#120): position trust gate for LastPos_Store. data.valid alone is
+ * not enough: RMC 'A' sets it without any lat/lon tokens, and a partial GGA
+ * leaves (0,0) standing. */
+bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss)
+{
+  if (hgnss == NULL)
+  {
+    return false;
+  }
+
+  return (hgnss->data.valid && hgnss->data.position_present);
+}
+
 /**
   * @brief  Check if fix meets quality thresholds for production use
   * @param  hgnss: Pointer to GNSS handle structure
@@ -980,6 +993,10 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
         break;
     }
   }
+
+  /* R2-16 (#120): export field presence so storage sites can refuse a
+   * partial sentence's (0,0) — see GNSS_HasPosition. */
+  hgnss->data.position_present = (have_lat && have_lon);
 
   /* Convert coordinates to decimal degrees (R32/#57: presence-tracked — a real
    * 0.0 coordinate on the equator / prime meridian is valid data, not absence) */

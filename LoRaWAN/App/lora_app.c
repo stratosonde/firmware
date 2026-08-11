@@ -1065,7 +1065,10 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     if (!got_fix)
     {
       /* Check if we have at least basic fix */
-      if (GNSS_IsFixValid(&hgnss))
+      /* R2-16 (#120): GNSS_HasPosition, not IsFixValid - a partial
+       * sentence can latch valid (RMC A) with (0,0) Null-Island fields.
+       * Only a fix with real lat/lon tokens may become last-known-good. */
+      if (GNSS_HasPosition(&hgnss))
       {
         SONDE_LOG_STR("GPS: Basic fix (not high quality)\r\n");
         /* Update last known position even for basic fix */
@@ -1090,6 +1093,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
           hgnss.data.altitude = last_valid_alt;
           hgnss.data.valid = true;  /* Mark as valid to proceed with transmission */
           hgnss.data.fix_quality = GNSS_FIX_GPS;  /* Indicate GPS fix type */
+          hgnss.data.position_present = true;  /* R2-16 (#120): restored last-known IS a real (stale) position */
           EnvSensors_MarkGnssStale(true);
         }
         else
@@ -1101,12 +1105,17 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     }
     else
     {
-      /* Successful fix - update last known position */
-      last_valid_lat = hgnss.data.latitude;
-      last_valid_lon = hgnss.data.longitude;
-      last_valid_alt = hgnss.data.altitude;
-      LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
-      have_previous_fix = true;
+      /* Successful fix - update last known position.
+       * R2-16 (#120): IsFixGoodQuality range-checks but (0,0) passes by
+       * design (R32) - require token presence before persisting. */
+      if (GNSS_HasPosition(&hgnss))
+      {
+        last_valid_lat = hgnss.data.latitude;
+        last_valid_lon = hgnss.data.longitude;
+        last_valid_alt = hgnss.data.altitude;
+        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
+        have_previous_fix = true;
+      }
       { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
       SysTimeSyncFromGnss();            /* F12 (DDR-0013): epoch seconds */

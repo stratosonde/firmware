@@ -286,10 +286,31 @@ static void test_mission_entry_and_float_guard(void)
     free(mr);
 }
 
+/* ========================================================================== */
+/* R2-13 (#117) — no UART IT-receive path on huart1 may remain                 */
+/* ========================================================================== */
+/* vcom_ReceiveInit called HAL_UART_Receive_IT(&huart1) on the GPS UART:
+ * dormant only because UTIL_ADV_TRACE_StartRxProcess has no callers. If ever
+ * invoked, RxState goes BUSY_RX permanently and every GNSS HAL_UART_Receive_DMA
+ * returns HAL_BUSY — the GPS never receives another byte. Same trap: the
+ * trailing HAL_UART_Receive_IT rearm in HAL_UART_RxCpltCallback fired on every
+ * DMA full-complete. Fix: stub vcom_ReceiveInit (FW-13 pattern), drop the
+ * rearm. GNSS uses Receive_DMA (atgm336h.c), so NO Receive_IT may remain here. */
+static void test_no_uart_it_receive_on_gps_uart(void)
+{
+    printf("-- R2-13/#117: no HAL_UART_Receive_IT anywhere in usart_if.c\n");
+
+    char *src = slurp("../../Core/Src/usart_if.c");
+    CHECK(strstr(src, "vcom_ReceiveInit") != NULL);   /* anchor */
+    CHECK_REGRESSION(strstr(src, "HAL_UART_Receive_IT") == NULL, "R2-13");
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_no_uart_it_receive_on_gps_uart();
     test_geofence_runs_when_gps_skipped();
     test_mission_entry_and_float_guard();
     test_float_detection_and_cadence();

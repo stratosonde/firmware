@@ -124,6 +124,10 @@ typedef struct
   uint32_t timestamp;       // UTC timestamp (HHMMSS format)
   uint32_t date;            // UTC date (DDMMYY format)
   bool valid;               // Flag indicating if data is valid
+  bool position_present;    // R2-16 (#120): GGA parser lat/lon TOKEN PRESENCE.
+                            // A partial sentence can set valid (RMC 'A') with
+                            // empty lat/lon -> (0,0) Null Island. Only trust
+                            // latitude/longitude when this is set.
 } GNSS_Data_t;
 
 /**
@@ -263,6 +267,15 @@ bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss);
   * @retval true if fix is good quality, false otherwise
   */
 bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss);
+
+/**
+  * @brief  R2-16 (#120): true only when a valid fix AND the position fields
+  *         were actually present in the NMEA stream. This is the gate for
+  *         persisting last-known position (LastPos_Store) — IsFixValid alone
+  *         passes on a partial sentence with (0,0) coordinates.
+  * @retval true if latitude/longitude are real data
+  */
+bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss);
 
 /**
   * @brief  Validate GPS coordinates are within valid ranges

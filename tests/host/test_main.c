@@ -243,6 +243,29 @@ static void test_gnss_parser(void)
     rc = GNSS_ParseGGA(&g, "$GNGGA,120000,4807.0380,S,01131.0000,W,1,08,0.9,545.4,M,46.9,M,,*4C");
     CHECK(g.data.latitude < -48.11729 && g.data.latitude > -48.11731);
     CHECK(g.data.longitude < -11.5166 && g.data.longitude > -11.5167);
+
+    /* R2-16 (#120): Null-Island poison. A PARTIAL GGA sets fix_quality/sats/
+     * hdop but leaves lat/lon empty; a following RMC 'A' then sets data.valid.
+     * The combination passed GNSS_IsFixValid with (0,0) coordinates — and
+     * AcquireGnssFix stored (0,0) into the backup regs as last-known-good,
+     * persisting across resets. GNSS_HasPosition() requires the parser's
+     * field-presence flag, which only a GGA with lat/lon tokens sets. */
+    memset(&g, 0, sizeof(g));
+    rc = GNSS_ParseGGA(&g, "$GNGGA,120000,,,,,1,06,1.0,,M,,M,,*51");
+    CHECK_EQ_I(rc, -1);                        /* no lat/lon -> parse fails */
+    CHECK_EQ_I(g.data.fix_quality, 1);         /* ...but fix fields WERE set */
+    CHECK_EQ_I(g.data.satellites, 6);
+    GNSS_ParseRMC(&g, "$GNRMC,120000,A,,,,,,,060825,,,N*00");
+    CHECK(g.data.valid);                       /* RMC 'A' latches valid */
+    CHECK_REGRESSION(!GNSS_HasPosition(&g), "R2-16");  /* but no position fields */
+
+    /* Guard the fix direction: a REAL (0,0) Gulf of Guinea fix (fields
+     * present) must still count as a position (R32 semantics preserved). */
+    memset(&g, 0, sizeof(g));
+    rc = GNSS_ParseGGA(&g, "$GNGGA,120000,0000.0000,N,0000.0000,E,1,05,1.0,15.0,M,0.0,M,,*6E");
+    CHECK_EQ_I(rc, 0);
+    GNSS_ParseRMC(&g, "$GNRMC,120000,A,,,,,,,060825,,,N*00");
+    CHECK(GNSS_HasPosition(&g));
 }
 
 static void test_bulk_v3(void)

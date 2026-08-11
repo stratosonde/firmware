@@ -179,47 +179,16 @@ UTIL_ADV_TRACE_Status_t vcom_ReceiveInit(void (*RxCb)(uint8_t *rxChar, uint16_t 
   /* USER CODE BEGIN vcom_ReceiveInit_1 */
 
   /* USER CODE END vcom_ReceiveInit_1 */
-  UART_WakeUpTypeDef WakeUpSelection;
-
-  /*record call back*/
-  RxCpltCallback = RxCb;
-
-  /*Set wakeUp event on start bit*/
-  WakeUpSelection.WakeUpEvent = UART_WAKEUP_ON_STARTBIT;
-
-  HAL_UARTEx_StopModeWakeUpSourceConfig(&huart1, WakeUpSelection);
-
-  /* Make sure that no UART transfer is on-going.
-   * FR-13 (#93): bounded — an unclocked/wedged USART1 spun these flag loops
-   * forever (IWDG reset at ~33 s with a misattributed cause). HAL_GetTick()
-   * is safe here: this runs long after SYS_TimerInitialisedFlag is set.
-   * No IWDG refresh inside the loops — a real wedge SHOULD reset. */
-  {
-    uint32_t flag_wait_start = HAL_GetTick();
-    while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_BUSY) == SET) {
-      if ((HAL_GetTick() - flag_wait_start) > 100U) {
-        return UTIL_ADV_TRACE_UNKNOWN_ERROR;
-      }
-    }
-    flag_wait_start = HAL_GetTick();
-    while (__HAL_UART_GET_FLAG(&huart1, USART_ISR_REACK) == RESET) {
-      if ((HAL_GetTick() - flag_wait_start) > 100U) {
-        return UTIL_ADV_TRACE_UNKNOWN_ERROR;
-      }
-    }
-  }
-
-  /* Enable USART interrupt */
-  __HAL_UART_ENABLE_IT(&huart1, UART_IT_WUF);
-
-  /*Enable wakeup from stop mode*/
-  HAL_UARTEx_EnableStopMode(&huart1);
-
-  /*Start LPUART receive on IT*/
-  HAL_UART_Receive_IT(&huart1, &charRx, 1);
-
+  /* R2-13 (#117): stub, like vcom_Trace/vcom_Trace_DMA/vcom_Resume (FW-13:
+   * UART1 is the GPS UART; there is no console RX path -
+   * UTIL_ADV_TRACE_StartRxProcess has no callers). The old body armed an
+   * IT-receive on huart1: RxState would go BUSY_RX permanently and
+   * every GNSS HAL_UART_Receive_DMA would return HAL_BUSY - the GPS would
+   * never receive another byte for the rest of the mission. Dormant-today
+   * is not safe-enough; the trap must not exist. */
+  (void)RxCb;
   return UTIL_ADV_TRACE_OK;
-  /* USER CODE BEGIN vcom_ReceiveInit_2 */
+/* USER CODE BEGIN vcom_ReceiveInit_2 */
 
   /* USER CODE END vcom_ReceiveInit_2 */
 }
@@ -272,7 +241,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     {
       RxCpltCallback(&charRx, 1, 0);
     }
-    HAL_UART_Receive_IT(huart, &charRx, 1);
+    /* R2-13 (#117): trailing IT-receive rearm removed - it fired on every
+     * DMA full-complete (~30/min during acquisition) and was the same BUSY_RX
+     * trap as vcom_ReceiveInit. GNSS reception is DMA-only. */
   }
   /* USER CODE BEGIN HAL_UART_RxCpltCallback_2 */
 
