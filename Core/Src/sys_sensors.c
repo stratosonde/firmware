@@ -282,9 +282,15 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   /* Read solar panel voltage from ADC (PB3, no voltage divider) */
   sensor_data->solar_voltage = SYS_GetSolarVoltage() / 1000.0f;  /* Convert mV to V */
   
-  int batt_mv = SYS_GetBatteryVoltage();
-  int vdda_mv = SYS_GetBatteryLevel();  /* VDDA rail (internal 3.3V reference) */
-  int solar_mv = SYS_GetSolarVoltage();
+  /* F-8 (#183) / F-9 (#184): the log must reuse THIS cycle's samples (already
+   * in sensor_data above) instead of running three more ADC conversions.
+   * Previously the extra battery re-read also overwrote s_batt_stale,
+   * so the flag exported at :277 could describe a different conversion than
+   * the voltage exported at :276 - and under SONDE_FLIGHT_BUILD the three
+   * conversions ran purely to feed compiled-out logs (FR-16/R2-15 class). */
+  int batt_mv  = (int)(sensor_data->battery_voltage * 1000.0f);
+  int vdda_mv  = (int)(sensor_data->regulator_voltage * 1000.0f);  /* VDDA rail */
+  int solar_mv = (int)(sensor_data->solar_voltage * 1000.0f);
   (void)batt_mv; (void)vdda_mv; (void)solar_mv;  /* FR-19: log-only in flight */
   SONDE_LOG("Battery: %d.%02d V (%d mV) | VDDA: %d.%02d V (%d mV)\r\n", 
                     batt_mv / 1000, (batt_mv % 1000) / 10, batt_mv,

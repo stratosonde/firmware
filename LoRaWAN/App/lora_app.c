@@ -762,6 +762,13 @@ static uint32_t s_gps_loss_epoch_s = 0;
  * is still trustworthy. Never infer sync from the magnitude of an arbitrary
  * timestamp; this is the single deliberate bridge between the two clocks. */
 static bool s_utc_synced = false;
+
+/* F-8 (#183): this cycle's single battery sample, captured in SendTxData
+ * from sensor_data (where value + staleness flag are read together) so the
+ * OnTxData bulk-opportunity gate uses the SAME conversion as everything
+ * else instead of running its own. */
+static uint16_t s_cycle_batt_mv = 0;
+
 static bool UtcTimeIsValid(void)
 {
   if (!s_utc_synced && SysTimeGet().Seconds >= UTC_EPOCH_PLAUSIBLE_MIN) {
@@ -1748,9 +1755,17 @@ static void SendTxData(void)
   /* D8 (#59) / finding #7: windowed-range float detection, each work cycle */
   MissionState_Update(sensor_data.pressure, !sensor_data.press_stale, now_timestamp);
 
-  // Read raw voltages
-  uint16_t battery_mv_raw = SYS_GetBatteryVoltage();
-  uint16_t solar_mv = SYS_GetSolarVoltage();
+  /* F-8 (#183): ONE battery ADC conversion per cycle - taken inside
+   * EnvSensors_Read above, where the value and its staleness flag are
+   * captured TOGETHER. Every consumer uses that same sample: the plan's
+   * battery_mv_raw is exactly the reading sensor_data.batt_stale describes
+   * (RV-03 can no longer be defeated by a cached/implausible re-read paired
+   * with a fresh flag), and the archived record shows the voltage the power
+   * decision actually used. The bulk-opportunity gate in OnTxData uses it
+   * too via s_cycle_batt_mv. */
+  uint16_t battery_mv_raw = (uint16_t)(sensor_data.battery_voltage * 1000.0f + 0.5f);
+  s_cycle_batt_mv = battery_mv_raw;
+  uint16_t solar_mv = (uint16_t)(sensor_data.solar_voltage * 1000.0f + 0.5f);
   (void)solar_mv;  /* FR-19: log-only in flight */
 
   /* R47: mode selection, slope/prediction, GPS temperature lockout and the
@@ -2163,7 +2178,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
    * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      uint16_t battery_mv = SYS_GetBatteryVoltage();
+      /* F-8 (#183): the cycle's one conversion, not a fresh one mid-burst. */
+      uint16_t battery_mv = s_cycle_batt_mv;
       bool battery_good = (battery_mv >= CfgBulkBattMin());
       bool has_cache = FlashLog_HasUnsentData(&hflashlog);
       SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
