@@ -234,8 +234,44 @@ FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint
 
     hlog->last_transmitted_sequence = through_sequence;
 
+    /* Finding #8 (2026-08-10): deferred header sync during a bulk burst — 20
+     * ACKed packets cost ONE 4 KB header sector erase at burst end instead of
+     * 20 (the two header sectors take all the wear; W25Q16JV is rated 100k
+     * erase cycles). A mid-burst reset replays from the last synced watermark
+     * — at most one burst retransmitted, deduped by the backend. */
+    if (hlog->sync_deferred) {
+        hlog->header_dirty = 1;
+        return FLASH_LOG_OK;
+    }
+
     /* Update header to persist transmission tracking */
     return FlashLog_SyncHeader(hlog);
+}
+
+void FlashLog_DeferHeaderSync(FlashLog_HandleTypeDef *hlog)
+{
+    if (hlog != NULL) {
+        hlog->sync_deferred = 1;
+    }
+}
+
+FlashLog_StatusTypeDef FlashLog_FlushHeaderSync(FlashLog_HandleTypeDef *hlog)
+{
+    if (hlog == NULL || !hlog->initialized) {
+        return FLASH_LOG_ERROR_PARAM;
+    }
+    hlog->sync_deferred = 0;
+    if (!hlog->header_dirty) {
+        return FLASH_LOG_OK;
+    }
+    /* Stay dirty on failure so the next flush retries (never wedges: the RAM
+     * watermark is still correct for this boot, and a reset replays from the
+     * last persisted one). */
+    FlashLog_StatusTypeDef st = FlashLog_SyncHeader(hlog);
+    if (st == FLASH_LOG_OK) {
+        hlog->header_dirty = 0;
+    }
+    return st;
 }
 
 FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count)
@@ -538,6 +574,15 @@ static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog
         if (!FlashLog_VerifyRecord(&probe)) {
             break;  /* erased or torn slot: frontier found */
         }
+        /* 2026-08-11 handoff §6c: identity check. On a WRAPPED ring whose true
+         * frontier sits exactly on a sector boundary, the next sector was never
+         * erased and still holds valid previous-lap records — magic+CRC pass.
+         * Without this the scan adopted up to 10 stale records, inflated
+         * record_count, and the next write landed on an un-erased slot. The
+         * record at the true frontier must carry exactly the current count. */
+        if (probe.sequence != hlog->record_count) {
+            break;  /* valid but from a previous lap: frontier found */
+        }
         hlog->write_addr += FLASH_LOG_RECORD_SIZE;
         if (hlog->write_addr >= FLASH_LOG_DATA_END) {
             hlog->write_addr = FLASH_LOG_DATA_START;
@@ -573,7 +618,8 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
                                             const sensor_t *sensor_data,
                                             uint32_t timestamp,
                                             int16_t voltage_slope,
-                                            uint8_t power_mode)
+                                            uint8_t power_mode,
+                                            uint8_t veto)
 {
     FlashLog_Record_t record;
     W25Q_StatusTypeDef status;
@@ -641,7 +687,8 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
                  | (sensor_data->temp_stale  ? 0x02 : 0)
                  | (sensor_data->hum_stale   ? 0x04 : 0)
                  | (sensor_data->gnss_stale  ? 0x08 : 0)
-                 | (sensor_data->batt_stale  ? 0x10 : 0);  /* #136 */
+                 | (sensor_data->batt_stale  ? 0x10 : 0)   /* #136 */
+                 | (uint8_t)((veto & 0x07U) << 5);         /* §6a: DDR-0003 record WHY */
     
     /* Calculate CRC32 (all fields except crc32) */
     record.crc32 = FlashLog_CRC32((const uint8_t *)&record, 

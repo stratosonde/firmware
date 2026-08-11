@@ -540,3 +540,14 @@ Questions to resolve include:
 - What precisely distinguishes GNSS `fresh`, `stale`, `skipped for energy`, `timeout`, and `hardware failure`?
 
 That topic should remain separate from the lifecycle/cadence policy captured here.
+
+---
+
+## 17. Amendment 2026-08-11 (issue #142, maintainer decision)
+
+Flight-entry and cadence semantics changed after the 2026-08-10/11 flight-readiness reviews:
+
+- **Flight entry is explicit, not join-triggered.** MultiRegion_PreJoinAllRegions() no longer calls MissionState_EnterFlight(). A commissioned unit holds COMMISSIONING (quiet watch: no GPS, no telemetry TX; pressure still read every cycle) until (a) deliberate arming via MissionState_EnterFlight() (button hook; needs a free GPIO - PB3 went analog in F24) or (b) autonomous launch detection per BR-LIFE-007: a cumulative pressure drop of MISSION_LAUNCH_DP_HPA (6 hPa) below the running session maximum. The DR3-persisted state now wins outright over the session bank; DDR-0018's ambiguity rule narrows to: bank commissioned + DR3 wiped -> ASCENT (never commissioning privileges mid-flight).
+- **BR-LIFE-013/014 (fast cadence on significant change / descent) are accepted descopes for first flight.** FLOAT is a terminal one-way latch; the unit never returns to fast cadence. Rationale: simplicity and power determinism beat burst-capture for first flight; recorded as an accepted gap here rather than rediscovered later (also #126).
+- **FLOAT detection is windowed-range (5% over 300 s) with NO altitude guard** - float altitude is payload/balloon-dependent (5-25 km), so no fixed ceiling pressure can be correct. Pad-side protection is structural: detection only runs in ASCENT, and ASCENT requires arming or launch.
+- **ASCENT cadence (10 s) keeps GNSS continuously powered/tracking**; cycles run nearly back-to-back with little STOP2 sleep by design (ascent is ~2 h; float is weeks).

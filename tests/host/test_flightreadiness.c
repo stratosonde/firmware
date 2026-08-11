@@ -220,7 +220,7 @@ static void test_flashlog_basic_roundtrip(void)
 
     for (uint16_t i = 0; i < 5; i++) {
         sensor_t s = make_sensors(i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 1000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 1000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
     CHECK_EQ_I(hlog.record_count, 5);
     CHECK_EQ_I(FlashLog_GetAvailableRecords(&hlog), 5);
@@ -262,7 +262,7 @@ static void test_erase_ahead_slack(void)
     const uint32_t total = FLASH_LOG_MAX_RECORDS + 8U;   /* wrap by 8 records */
     for (uint32_t i = 0; i < total; i++) {
         sensor_t s = make_sensors((uint16_t)(i & 0xFFFFu));
-        if (FlashLog_WriteRecord(&hlog, &s, 1000U + i, 0, 0) != FLASH_LOG_OK) {
+        if (FlashLog_WriteRecord(&hlog, &s, 1000U + i, 0, 0, 0) != FLASH_LOG_OK) {
             CHECK(0);   /* write must not fail */
             break;
         }
@@ -314,7 +314,7 @@ static void test_fifo_skip_contract(void)
 
     for (uint16_t i = 0; i < 6; i++) {
         sensor_t s = make_sensors(i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 2000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 2000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
 
     /* Corrupt the record holding sequence 2 (index 2 from DATA_START). */
@@ -364,7 +364,7 @@ static void test_all_corrupt_does_not_wedge(void)
 
     for (uint16_t i = 0; i < 4; i++) {
         sensor_t s = make_sensors(i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 3000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 3000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
     for (uint32_t i = 0; i < 4; i++) {
         fake_w25q_corrupt(FLASH_LOG_DATA_START + i * FLASH_LOG_RECORD_SIZE,
@@ -409,7 +409,7 @@ static void test_header_pingpong_survives_rewrites(void)
     /* Force many header rewrites; on real NOR without erase these corrupt. */
     for (uint32_t i = 0; i < 40; i++) {
         sensor_t s = make_sensors((uint16_t)i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
     CHECK(hlog.header_generation >= 4U);
 
@@ -459,7 +459,7 @@ static void test_header_pingpong_survives_failed_writes(void)
 
     for (uint32_t i = 0; i < 40; i++) {
         sensor_t s = make_sensors((uint16_t)i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
     CHECK_EQ_I(FlashLog_SyncHeader(&hlog), FLASH_LOG_OK);
     CHECK_EQ_I(hlog.record_count, 40);
@@ -498,7 +498,123 @@ static void test_header_pingpong_survives_failed_writes(void)
 }
 
 /* ========================================================================== */
-/* T-1 / T-3 / T-8 — require production-side extraction, see notes            */
+/* T-8 / finding #8 (2026-08-10): deferred header sync batches a bulk burst    */
+/* ========================================================================== */
+/* Every CommitThrough used to SyncHeader: a 4 KB sector erase per ACKed bulk
+ * packet, 20 per burst, all on the same two header sectors. With defer/flush
+ * a burst costs ONE erase. Mid-burst reset must replay from the last synced
+ * watermark (conservative — backend dedupes by sequence). */
+static void test_deferred_header_sync_batches_burst(void)
+{
+    printf("-- T-8 / finding #8: deferred header sync batches a bulk burst\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    for (uint32_t i = 0; i < 20; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+
+    /* Burst of 20 packet-ACK commits, deferred: ZERO header erases, but the
+     * RAM watermark is live for the read path. */
+    FlashLog_DeferHeaderSync(&hlog);
+    uint32_t erases_before = fake_w25q_erase_count;
+    for (uint32_t seq = 1; seq <= 20; seq++) {
+        CHECK_EQ_I(FlashLog_CommitThrough(&hlog, seq), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(fake_w25q_erase_count, erases_before);
+    CHECK_EQ_I(hlog.last_transmitted_sequence, 20);
+    CHECK(!FlashLog_HasUnsentData(&hlog));
+
+    /* Reset BEFORE the flush: the watermark replays from the last synced
+     * value (0) — conservative direction, records retransmit and dedupe. */
+    {
+        FlashLog_HandleTypeDef crashed;
+        CHECK_EQ_I(FlashLog_Init(&crashed, &hw), FLASH_LOG_OK);
+        CHECK_EQ_I(crashed.last_transmitted_sequence, 0);
+        CHECK(FlashLog_HasUnsentData(&crashed));
+    }
+
+    /* Second burst over 20 fresh records, flushed at burst end: exactly ONE
+     * additional header erase, and the watermark survives the reboot. */
+    for (uint32_t i = 20; i < 40; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    FlashLog_DeferHeaderSync(&hlog);
+    erases_before = fake_w25q_erase_count;
+    for (uint32_t seq = 21; seq <= 40; seq++) {
+        CHECK_EQ_I(FlashLog_CommitThrough(&hlog, seq), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_FlushHeaderSync(&hlog), FLASH_LOG_OK);
+    CHECK_EQ_I(fake_w25q_erase_count, erases_before + 1);
+    {
+        FlashLog_HandleTypeDef reload;
+        CHECK_EQ_I(FlashLog_Init(&reload, &hw), FLASH_LOG_OK);
+        CHECK_EQ_I(reload.last_transmitted_sequence, 40);
+        CHECK(!FlashLog_HasUnsentData(&reload));
+    }
+
+    /* Flush with nothing dirty is a no-op — no erase. */
+    erases_before = fake_w25q_erase_count;
+    CHECK_EQ_I(FlashLog_FlushHeaderSync(&hlog), FLASH_LOG_OK);
+    CHECK_EQ_I(fake_w25q_erase_count, erases_before);
+
+    /* §6a: the veto rides record.flags b5-b7 (DDR-0003: record WHY). */
+    {
+        sensor_t s = make_sensors(999);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 12345U, 0, 0, 2), FLASH_LOG_OK);
+        FlashLog_Record_t rec;
+        CHECK_EQ_I(FlashLog_ReadRecord(&hlog, &rec, 0), FLASH_LOG_OK);
+        CHECK_EQ_I((rec.flags >> 5) & 0x07, 2);
+    }
+
+    fake_w25q_free();
+}
+
+/* ========================================================================== */
+/* T-9 — 2026-08-11 handoff §6c: frontier scan must not adopt previous-lap     */
+/* records when the true frontier sits exactly on a sector boundary            */
+/* ========================================================================== */
+/* Ring geometry: 64 records/sector, header checkpoint every 10. Fill the ring
+ * to a wrap, then stop with the frontier exactly on a sector boundary
+ * (320 records = 5 sectors past the wrap). The sector ahead still holds
+ * CRC-valid records from the PREVIOUS lap. Without the probe.sequence ==
+ * record_count identity check, Init's frontier scan walks up to 10 of them. */
+static void test_frontier_scan_rejects_previous_lap(void)
+{
+    printf("-- T-9 / handoff 6c: frontier scan sector-boundary identity check\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* Fill the whole ring, then 320 more so write_addr lands exactly on a
+     * sector boundary with the next sector holding previous-lap records.
+     * (~2 MB of fake writes, ~1 s — same cost class as T-7.) */
+    for (uint32_t i = 0; i < FLASH_LOG_MAX_RECORDS + 320; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + (i & 0xFFFF), 0, 0, 0), FLASH_LOG_OK);
+    }
+    uint32_t expect_count = hlog.record_count;
+    CHECK_EQ_I((hlog.write_addr - FLASH_LOG_DATA_START) % W25Q_SECTOR_SIZE, 0); /* on boundary */
+    CHECK_EQ_I(FlashLog_SyncHeader(&hlog), FLASH_LOG_OK);
+
+    /* Reboot: the frontier scan probes the not-yet-erased next sector. */
+    FlashLog_HandleTypeDef reload;
+    CHECK_EQ_I(FlashLog_Init(&reload, &hw), FLASH_LOG_OK);
+    CHECK_EQ_I(reload.record_count, expect_count);
+    CHECK_EQ_I(reload.write_addr, hlog.write_addr);
+
+    fake_w25q_free();
+}
+
+/* ========================================================================== */
+/* T-1 / T-3 — require production-side extraction, see notes (T-8 is above)   */
 /* ========================================================================== */
 /* T-1 (FR-03 NVM slot length round-trip) and T-3 (FR-05 context CRC restamp)
  * live in lora_app.c and multiregion_context.c respectively, neither of which
@@ -557,7 +673,7 @@ static void test_r2_02_watermark_overadvance_on_wrap(void)
     const uint32_t total = FLASH_LOG_MAX_RECORDS + 8U;
     for (uint32_t i = 0; i < total; i++) {
         sensor_t s = make_sensors((uint16_t)(i & 0xFFFFu));
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 5000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 5000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
 
     /* Long RF gap: nothing was ever transmitted. */
@@ -607,7 +723,7 @@ static void test_r2_03_sequence_identity_crosscheck(void)
 
     for (uint16_t i = 0; i < 6; i++) {
         sensor_t s = make_sensors(i);
-        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6000U + i, 0, 0), FLASH_LOG_OK);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
 
     /* Plant a CRC-VALID record carrying the WRONG sequence at slot 2 — the
@@ -690,6 +806,8 @@ int main(void)
     test_all_corrupt_does_not_wedge();
     test_header_pingpong_survives_rewrites();
     test_header_pingpong_survives_failed_writes();
+    test_deferred_header_sync_batches_burst();
+    test_frontier_scan_rejects_previous_lap();
     test_erase_ahead_slack();
     test_r2_02_watermark_overadvance_on_wrap();
     test_r2_03_sequence_identity_crosscheck();

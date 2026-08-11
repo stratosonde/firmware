@@ -241,10 +241,57 @@ static void test_float_detection_and_cadence(void)
     free(app);
 }
 
+/* ========================================================================== */
+/* BURST-03 (#141) — geofence must run on the GPS-skip path; GPS-loss silence  */
+/* ========================================================================== */
+/* SelectRegionAndSession (the only rf_silence writer for REGION_RESTRICTED)
+ * used to run only on the GPS-acquisition path — every GPS-off cycle (most of
+ * a long float) transmitted blind. Maintainer decision 2026-08-11: evaluate
+ * the geofence on the backup-register last-known position when GPS is skipped
+ * (inhibit only, no auto-switch on stale position), and if no fresh fix for
+ * GPS_LOSS_SILENCE_S, stop transmitting but keep logging and keep retrying
+ * GPS. Scans: the skip-path geofence helper and the silence knob exist. */
+static void test_geofence_runs_when_gps_skipped(void)
+{
+    printf("-- BURST-03/#141: geofence on GPS-skip path + GPS-loss silence\n");
+
+    char *app = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK_REGRESSION(strstr(app, "GeofenceRestricted") != NULL, "BURST-03");
+    CHECK_REGRESSION(strstr(app, "GPS_LOSS_SILENCE_S") != NULL, "BURST-03");
+    free(app);
+
+    char *hdr = slurp("../../LoRaWAN/App/lora_app.h");
+    CHECK_REGRESSION(strstr(hdr, "GPS_LOSS_SILENCE_S") != NULL, "BURST-03");
+    free(hdr);
+}
+
+/* ========================================================================== */
+/* MISSION-01 (#142) — launch detection, no float altitude guard, quiet watch  */
+/* ========================================================================== */
+/* Maintainer decisions 2026-08-11: flight entry is explicit (arming hook or
+ * BR-LIFE-007 pressure departure), NOT join-triggered; the FLOAT latch has no
+ * altitude ceiling (float is 5-25 km, payload-dependent); a commissioned unit
+ * holds a quiet watch until launch. Scans pin all three. */
+static void test_mission_entry_and_float_guard(void)
+{
+    printf("-- MISSION-01/#142: launch detection, no altitude guard, no join-trigger\n");
+
+    char *msh = slurp("../../Core/Inc/mission_state.h");
+    CHECK_REGRESSION(strstr(msh, "MISSION_LAUNCH_DP_HPA") != NULL, "MISSION-01");
+    CHECK_REGRESSION(strstr(msh, "MISSION_FLOAT_MAX_PRESSURE_HPA") == NULL, "MISSION-01");
+    free(msh);
+
+    char *mr = slurp("../../Core/Src/multiregion_context.c");
+    CHECK_REGRESSION(strstr(mr, "MissionState_EnterFlight") == NULL, "MISSION-01");
+    free(mr);
+}
+
 int main(void)
 {
-    printf("=== 2026-08-10 review findings — source-scan regressions ===\n\n");
+    printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
 
+    test_geofence_runs_when_gps_skipped();
+    test_mission_entry_and_float_guard();
     test_float_detection_and_cadence();
     test_chunk_bound_covers_survival_interval();
     test_linkcheck_consumed_after_read();

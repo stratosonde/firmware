@@ -120,7 +120,7 @@ typedef struct __attribute__((packed)) {
     uint16_t solar_mv;          /**< Solar panel voltage in millivolts (D5/F-025: was never archived) */
     int16_t voltage_slope;      /**< Battery slope mV/hour at write time (D5: honest history) */
     uint8_t power_mode;         /**< Operating mode enum at write time (D5) */
-    uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale, b4 batt_stale (#136) */
+    uint8_t flags;              /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale, b4 batt_stale (#136), b5-b7 TransmitVeto_t (2026-08-11 §6a: record WHY, DDR-0003) */
 
     /* Reserved for expansion (12 bytes) */
     uint8_t reserved[12];       /**< Future expansion space */
@@ -164,6 +164,8 @@ typedef struct {
     uint32_t last_transmitted_sequence; /**< Sequence number of last transmitted record */
     uint32_t header_generation; /**< F-007/R12 (#50): monotonic header generation, incremented every write */
     uint8_t active_header;      /**< Active header slot (0 or 1) */
+    uint8_t sync_deferred;      /**< Finding #8: CommitThrough skips SyncHeader while set (bulk burst) */
+    uint8_t header_dirty;       /**< Finding #8: watermark advanced past the last persisted header */
 } FlashLog_HandleTypeDef;
 
 /* Exported functions --------------------------------------------------------*/
@@ -196,7 +198,8 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
                                             const sensor_t *sensor_data,
                                             uint32_t timestamp,
                                             int16_t voltage_slope,
-                                            uint8_t power_mode);
+                                            uint8_t power_mode,
+                                            uint8_t veto);
 
 /**
   * @brief  Read the most recent record from flash (LIFO)
@@ -322,6 +325,23 @@ FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *h
   *         Monotonic: never moves the watermark backward.
   */
 FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint32_t through_sequence);
+
+/**
+  * @brief  Defer header persistence (finding #8, 2026-08-10): while deferred,
+  *         CommitThrough advances the RAM watermark only — no sector erase per
+  *         ACKed packet. Call FlashLog_FlushHeaderSync() once at burst end.
+  *         Safe under R2-02 absolute-commit semantics: a mid-burst reset
+  *         replays from the last synced watermark (backend dedupes by
+  *         sequence) — conservative direction only.
+  */
+void FlashLog_DeferHeaderSync(FlashLog_HandleTypeDef *hlog);
+
+/**
+  * @brief  End deferral and persist the header if the watermark moved.
+  *         No-op when nothing is dirty. A failed flush stays dirty so the
+  *         next call retries.
+  */
+FlashLog_StatusTypeDef FlashLog_FlushHeaderSync(FlashLog_HandleTypeDef *hlog);
 
 /**
   * @brief  Get count of unsent records

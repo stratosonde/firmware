@@ -1113,17 +1113,20 @@ bool MultiRegion_PreJoinAllRegions(void)
     // Clear pre-join flag to allow TX timer to start
     g_multiregion_in_prejoin = 0;
 
-    /* T3 (DDR-0002) + R30/D6: walk through the one-way door ONLY if at least
-     * one region bank was actually provisioned. Entering FLIGHT with zero
-     * joined banks means permanent RF silence (joins become impossible) — a
-     * balloon that can log but never phone home. With zero successes, stay in
-     * COMMISSIONING so the operator can fix the gateway/credentials and power
-     * cycle to retry the ceremony. */
-    if (join_success_count > 0) {
-        MissionState_EnterFlight();
-    } else {
+    /* MISSION-01b (#142, DDR-0002 amendment): commissioning no longer enters
+     * FLIGHT. A freshly commissioned unit holds COMMISSIONING (quiet watch:
+     * no GPS, no telemetry TX) until deliberate arming (button hook - needs a
+     * free GPIO, see mission_state.h) or autonomous launch detection
+     * (BR-LIFE-007 pressure departure, in MissionState_Update). The old
+     * join-triggered EnterFlight put a bench unit into the 10 s ASCENT
+     * cadence with GPS powered for the whole commissioning-to-launch gap.
+     * R30/D6 note preserved: with zero joined banks the unit stays in
+     * COMMISSIONING either way (joins only possible there). */
+    if (join_success_count == 0) {
         SONDE_LOG_STR("PRE-JOIN: 0/4 regions joined - STAYING IN COMMISSIONING (power cycle to retry)\r\n");
-        APP_LOG(TS_ON, VLEVEL_H, "PRE-JOIN: no banks provisioned - flight entry BLOCKED (R30/D6)\r\n");
+        APP_LOG(TS_ON, VLEVEL_H, "PRE-JOIN: no banks provisioned (R30/D6)\r\n");
+    } else {
+        SONDE_LOG_STR("PRE-JOIN complete - COMMISSIONING quiet watch until arming/launch (#142)\r\n");
     }
 
     return all_success;

@@ -36,12 +36,12 @@ typedef enum {
  *
  * New rule: FLOAT latches when pressure stays inside a WIDE band
  * (MISSION_FLOAT_RANGE_PCT of ambient) for a sustained window
- * (MISSION_FLOAT_WINDOW_S), and only above a minimum altitude proxy
- * (MISSION_FLOAT_MAX_PRESSURE_HPA — a pad-side or just-launched unit can
- * never latch). A 5 m/s climb moves ~18% of ambient per 5 min at ANY
- * altitude, far outside the 5% band, so ascent can never false-latch
+ * (MISSION_FLOAT_WINDOW_S). A 5 m/s climb moves ~18% of ambient per 5 min at
+ * ANY altitude, far outside the 5% band, so ascent can never false-latch
  * regardless of cadence. The latch itself is one-way (DESCENT descoped,
  * #126), so once FLOAT it never leaves — deliberate: latches fast, stays.
+ * (MISSION-01/#142: the original 150 hPa altitude guard was removed — float
+ * altitude is payload/balloon-dependent, 5-25 km.)
  *
  * These are compile-time knobs today; if ops wants them tunable per-flight,
  * move them into SystemConfig_t (config.h) — the detector reads the macros
@@ -52,8 +52,22 @@ typedef enum {
 #ifndef MISSION_FLOAT_WINDOW_S
 #define MISSION_FLOAT_WINDOW_S 300U          /* sustained this long = FLOAT */
 #endif
-#ifndef MISSION_FLOAT_MAX_PRESSURE_HPA
-#define MISSION_FLOAT_MAX_PRESSURE_HPA 150.0f /* ~13.6 km: latch allowed only above */
+/* MISSION-01 (#142), maintainer decision 2026-08-11: NO altitude guard on the
+ * FLOAT latch. Design float altitude is payload/balloon-dependent (5-25 km),
+ * so a fixed ceiling could block the latch for an entire multi-week float.
+ * Pad-side protection comes from the state machine instead: float detection
+ * only runs in ASCENT, and ASCENT is entered only by deliberate arming
+ * (MissionState_EnterFlight — button; see below) or by autonomous launch
+ * detection (BR-LIFE-007). FLOAT is terminal — never exits (DESCENT stays
+ * descoped, #126; BR-LIFE-013/014 accepted as first-flight gaps, DDR-0002
+ * amendment). */
+
+/* BR-LIFE-007 launch detection (MISSION-01b, #142): COMMISSIONING tracks the
+ * running MAX pressure; a cumulative drop of this many hPa below that maximum
+ * means we are climbing (~50 m). One knob, intentionally obvious; tune per
+ * balloon if bench weather false-arms. */
+#ifndef MISSION_LAUNCH_DP_HPA
+#define MISSION_LAUNCH_DP_HPA 6.0f
 #endif
 
 /* DDR-0002 mission cadence (finding #7): the consumer that was missing.
@@ -81,7 +95,11 @@ MissionState_t MissionState_Get(void);
 /** @brief true if in COMMISSIONING (joins, LEDs, GPS config allowed) */
 bool MissionState_IsCommissioning(void);
 
-/** @brief One-way COMMISSIONING -> FLIGHT (ASCENT). Deliberate ground action. */
+/** @brief One-way COMMISSIONING -> FLIGHT (ASCENT). Deliberate ground action:
+ *        call from a button/arming hook. NOTE (#142): no free GPIO is
+ *        currently assigned — the SOS button pin PB3 went analog (solar) in
+ *        F24. Until a pin is assigned, the pressure-based launch detector in
+ *        MissionState_Update() is the entry path. */
 void MissionState_EnterFlight(void);
 
 /** @brief Call each work cycle: ASCENT -> FLOAT by windowed pressure range

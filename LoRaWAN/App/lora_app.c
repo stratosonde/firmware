@@ -728,6 +728,20 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size)
 
 /* USER CODE END PrFD */
 
+/* 2026-08-11 handoff §6b: the bulk-gate knobs are live SystemConfig_t fields;
+ * the lora_app.h macros are the defaults when config is unavailable
+ * (Config_Get() returns NULL before Config_Init). Single accessor point so a
+ * future rename/repack touches one place. */
+/* #141: RTC-second timestamp of the last FRESH GNSS fix this boot
+ * (0 = none). Set in AcquireGnssFix where live NMEA data confirmed a fix -
+ * the last-known-position fallback does NOT count. */
+static uint32_t s_last_fresh_fix_s = 0;
+
+static uint8_t  CfgLinkMargin(void)  { const SystemConfig_t *c = Config_Get(); return c ? c->link_margin_threshold   : LINK_MARGIN_THRESHOLD; }
+static uint8_t  CfgGatewayCount(void){ const SystemConfig_t *c = Config_Get(); return c ? c->gateway_count_threshold : GATEWAY_COUNT_THRESHOLD; }
+static uint16_t CfgBulkBattMin(void) { const SystemConfig_t *c = Config_Get(); return c ? c->bulk_battery_min_mv     : BULK_BATTERY_MIN_MV; }
+static uint8_t  CfgMaxBulkPkts(void) { const SystemConfig_t *c = Config_Get(); return c ? c->max_bulk_packets        : MAX_BULK_PACKETS_PER_CYCLE; }
+
 static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
 {
   /* USER CODE BEGIN OnRxData_1 */
@@ -761,11 +775,11 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
    * (already ACKed) first archive packet. */
   if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent == 1) {
     bool link_good = (linkcheck_received &&
-                      margin >= LINK_MARGIN_THRESHOLD &&
-                      gw_count >= GATEWAY_COUNT_THRESHOLD);
+                      margin >= CfgLinkMargin() &&
+                      gw_count >= CfgGatewayCount());
     SONDE_LOG("First archive response: LinkCheckAns %s, margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
                       linkcheck_received ? "received" : "MISSING",
-                      margin, LINK_MARGIN_THRESHOLD, gw_count, GATEWAY_COUNT_THRESHOLD,
+                      margin, CfgLinkMargin(), gw_count, CfgGatewayCount(),
                       link_good ? "BURST CONTINUES" : "FALLBACK");
     if (!link_good) {
       /* Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
@@ -778,7 +792,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
        * g_bulk_packets_sent == 1 (it runs before this callback; the race
        * produced a spurious full extra work cycle). */
       if (FlashLog_HasUnsentData(&hflashlog) &&
-          g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+          g_bulk_packets_sent < CfgMaxBulkPkts()) {
         SONDE_LOG_STR("OnRxData: link good - re-arming bulk transfer...\r\n");
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
       } else {
@@ -1060,6 +1074,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_alt = hgnss.data.altitude;
         LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
         have_previous_fix = true;
+        { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
         EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
       }
       else
@@ -1092,6 +1107,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
       last_valid_alt = hgnss.data.altitude;
       LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt);  /* F-15 (#72) */
       have_previous_fix = true;
+      { uint16_t ms_d; s_last_fresh_fix_s = TIMER_IF_GetTime(&ms_d); }  /* #141 */
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
       SysTimeSyncFromGnss();            /* F12 (DDR-0013): epoch seconds */
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
@@ -1109,6 +1125,18 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
  *        position (see comment inline). REGION_RESTRICTED sets *rf_silence;
  *        REGION_UNKNOWN keeps the current region and transmits normally.
  */
+/* BURST-03 (#141): single geofence-policy point so the GPS-skip path runs the
+ * SAME restricted-region test as the live-fix path. Pure computation (h3lite),
+ * no hardware. Inhibit only — callers on a stale position must NOT auto-switch
+ * regions (switching on a days-old fix may be worse than holding). */
+static bool GeofenceRestricted(float lat, float lon)
+{
+  if (!GNSS_ValidateCoordinates(lat, lon)) {
+    return false;
+  }
+  return latLngToRegion(lat, lon) == REGION_RESTRICTED;
+}
+
 static void SelectRegionAndSession(bool *rf_silence)
 {    /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 
@@ -1194,7 +1222,8 @@ static void SelectRegionAndSession(bool *rf_silence)
  *        retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
  */
 static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
-                          int16_t slope_mv_per_hour, OperatingMode_t current_mode)
+                          int16_t slope_mv_per_hour, OperatingMode_t current_mode,
+                          uint8_t veto)
 {
   /* ========== FLASH LOGGING: Store high-resolution data ========== */
   /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
@@ -1213,8 +1242,11 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
      * Before the first GPS fix this falls back to boot-relative seconds —
      * honest, monotonic, and distinguishable (small values) from epoch. */
     *now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
+    /* §6a (2026-08-11): the veto rides into record.flags b5-b7 — DDR-0003:
+     * a degraded cycle records WHY, not just THAT. */
     FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data, *now_timestamp,
-                                                             slope_mv_per_hour, (uint8_t)current_mode);
+                                                             slope_mv_per_hour, (uint8_t)current_mode,
+                                                             veto);
     if (log_status == FLASH_LOG_OK) {
       uint32_t record_count = FlashLog_GetRecordCount(&hflashlog);
       (void)record_count;  /* FR-19: log-only in flight */
@@ -1329,6 +1361,12 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
    * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData. */
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
     SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
+    /* Finding #8: the burst (if any) ended last cycle — flush the deferred
+     * header sync exactly once here, the single chokepoint every completed
+     * cycle passes through. No-op when nothing was committed. STOP2 retains
+     * RAM, so the dirty flag survives sleep; a mid-burst reset replays from
+     * the last persisted watermark (conservative, backend dedupes). */
+    FlashLog_FlushHeaderSync(&hflashlog);
     g_tx_state = TX_STATE_PROBE_SF10;
     g_bulk_packets_sent = 0;
   }
@@ -1397,8 +1435,8 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
                         g_bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
       
       // Check if we have unsent data and haven't exceeded packet limit
-      if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
-        
+      if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
+
         // Read up to BULK_V5_MAX_RECORDS unsent records from flash (FIFO order —
         // oldest unsent first, so the absolute commit advances the watermark
         // correctly). Was 6: the 6th record was read and discarded every packet
@@ -1539,7 +1577,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
               
               // Continue bulk transfer if more data available and under packet limit
-              if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+              if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
                 SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
                 // Stay in TX_STATE_BULK_TRANSFER for next packet
               } else {
@@ -1616,11 +1654,19 @@ static void SendTxData(void)
    * missing: ASCENT = MISSION_ASCENT_TX_INTERVAL_MS (10 s), FLOAT =
    * MISSION_FLOAT_TX_INTERVAL_MS (5 min). Only when the battery is healthy
    * (NORMAL/CONSERVATIVE); REDUCED/RECOVERY/SURVIVAL keep their longer,
-   * power-protective intervals (never toward higher power). */
+   * power-protective intervals (never toward higher power).
+   * MISSION-01a (#142, maintainer decision): ASCENT keeps GNSS powered and
+   * tracking continuously — a fresh position is always available and cycles
+   * run nearly back-to-back by design (the 10 s period is measured from cycle
+   * start and GPS acquisition can outlast it, so there is little STOP2 sleep
+   * during the ~2 h climb). Accepted: ascent is short; float is long. */
   if (plan.power_mode <= MODE_CONSERVATIVE) {
     plan.tx_interval_ms = (MissionState_Get() == MISSION_ASCENT)
                           ? MISSION_ASCENT_TX_INTERVAL_MS
                           : MISSION_FLOAT_TX_INTERVAL_MS;
+    if (MissionState_Get() == MISSION_ASCENT) {
+      plan.gps_enabled = true;  /* #142: GNSS always tracking in ASCENT */
+    }
   }
 
   bool gps_enabled_by_power_mgmt = plan.gps_enabled;
@@ -1678,6 +1724,40 @@ static void SendTxData(void)
     SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
 
+  /* MISSION-01b (#142): commissioned but not launched = QUIET WATCH. No GPS,
+   * no telemetry TX — the cycle still reads sensors (pressure feeds the
+   * BR-LIFE-007 launch detector in MissionState_Update above) and logs to
+   * flash. Entry to ASCENT is by arming (button hook) or launch detection.
+   * Unjoined commissioning is untouched above (join retry path). */
+  if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
+    rf_silence = true;
+    gps_enabled_by_power_mgmt = false;
+  }
+
+  /* #141 (maintainer decision 2026-08-11): GPS-LOSS SILENCE. No fresh fix for
+   * GPS_LOSS_SILENCE_S -> stop transmitting; science logging continues (the
+   * archive is the point) and GPS acquisition is FORCED ON below every cycle
+   * until a fresh fix clears it — "keep doing science and logging and keep
+   * trying GPS, but stop transmitting". FLIGHT only: commissioning is exempt
+   * (DDR-0018). The grace epoch arms at this boot's first cycle, so a
+   * never-fixed unit gets the full window before going dark. */
+  {
+    static uint32_t s_gps_loss_epoch_s = 0;
+    if (s_gps_loss_epoch_s == 0) {
+      s_gps_loss_epoch_s = now_timestamp;
+    }
+    uint32_t ref_s = (s_last_fresh_fix_s > s_gps_loss_epoch_s)
+                     ? s_last_fresh_fix_s : s_gps_loss_epoch_s;
+    if (!MissionState_IsCommissioning() &&
+        (now_timestamp - ref_s) > GPS_LOSS_SILENCE_S) {
+      rf_silence = true;
+      gps_enabled_by_power_mgmt = true;   /* keep trying GPS (overrides the
+                                           * power-mode veto) until a fresh
+                                           * fix clears the silence */
+      SONDE_LOG_STR("GPS-LOSS SILENCE: no fresh fix - radio dark, still logging, GPS retry on\r\n");
+    }
+  }
+
   SONDE_LOG_STR("\r\n=== SendTxData START ===\r\n");
 
   /* ========== GPS POWER-CYCLING MODE ========== */
@@ -1705,6 +1785,23 @@ static void SendTxData(void)
      * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
     memset(&hgnss.data, 0, sizeof(hgnss.data));
     ttf_ms = 0;  // No GPS acquisition performed
+
+    /* BURST-03 (#141): the geofence must still run when GPS is skipped —
+     * otherwise every REDUCED/RECOVERY/SURVIVAL cycle (most of a multi-week
+     * float) transmits blind inside restricted regions. Evaluate against the
+     * backup-register last-known position (DDR-0015 already accepts region
+     * decisions on stale position; this extends it to the skip path).
+     * INHIBIT ONLY — never auto-switch regions on a stale fix. Bulk cycles
+     * are exempt: the probe that opened the burst ran the check first. No
+     * fix EVER (cold boot) -> transmit: a sonde that has never had a fix
+     * cannot be known to be restricted, and going dark forever is worse. */
+    if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+      float la, lo, al;
+      if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo)) {
+        rf_silence = true;
+        SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GPS off): RF silence\r\n");
+      }
+    }
   } else {
   
   #ifdef GPS_DISABLED_FOR_TESTING
@@ -1741,7 +1838,8 @@ static void SendTxData(void)
   // re-ran the MS5607 OSR_4096 pair and SHT31 read for no new information.
   EnvSensors_MergeGnss(&sensor_data);
 
-  ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode);
+  ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode,
+                (uint8_t)plan.veto);
 
   #if ENABLE_DEBUG_LPP
   BuildDebugLppPayload(&sensor_data, ttf_ms, slope_mv_per_hour, time_to_target_signed, current_mode);
@@ -1909,13 +2007,16 @@ static void OnTxData(LmHandlerTxParams_t *params)
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       uint16_t battery_mv = SYS_GetBatteryVoltage();
-      bool battery_good = (battery_mv >= BULK_BATTERY_MIN_MV);
+      bool battery_good = (battery_mv >= CfgBulkBattMin());
       bool has_cache = FlashLog_HasUnsentData(&hflashlog);
       SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
                         battery_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
       if (battery_good && has_cache) {
         SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
+        /* Finding #8: defer header persistence for the whole burst — one
+         * sector erase at flush instead of one per ACKed packet. */
+        FlashLog_DeferHeaderSync(&hflashlog);
         g_tx_state = TX_STATE_BULK_TRANSFER;
         g_bulk_packets_sent = 0;
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
@@ -1981,7 +2082,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
    * Only sent > 1 is a terminal condition this callback may decide. */
   if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent > 1) {
     if (FlashLog_HasUnsentData(&hflashlog) &&
-        g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+        g_bulk_packets_sent < CfgMaxBulkPkts()) {
       SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
       UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
     } else {

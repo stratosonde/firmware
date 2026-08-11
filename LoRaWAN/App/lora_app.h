@@ -179,6 +179,19 @@ typedef enum {
 } TxState_t;
 
 /* Link quality thresholds for adaptive transmission */
+/* 2026-08-11 handoff §6b: these macros are the compile-time DEFAULTS. The
+ * live values are SystemConfig_t fields (link_margin_threshold,
+ * gateway_count_threshold, bulk_battery_min_mv, max_bulk_packets) — lora_app.c
+ * reads them via the Cfg*() helpers, which fall back to these macros when
+ * config is unavailable. tests/host/test_burst_fsm.c parses THESE macros, so
+ * keep them present and equal to the config.c defaults. */
+/* #141: GPS-loss silence - no fresh fix for this long -> radio dark (logging
+ * continues, GPS retried every cycle). FLIGHT only (DDR-0018 exempts
+ * commissioning). */
+#ifndef GPS_LOSS_SILENCE_S
+#define GPS_LOSS_SILENCE_S  (6U * 3600U)   /* 6 h */
+#endif
+
 #define LINK_MARGIN_THRESHOLD       15   // dB - minimum demod margin for SF7 bulk
 #define GATEWAY_COUNT_THRESHOLD     2    // Minimum gateway count for SF7 bulk
 #define BULK_BATTERY_MIN_MV         5000 // mV - minimum battery for bulk transfer

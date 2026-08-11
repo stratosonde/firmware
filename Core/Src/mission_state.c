@@ -29,6 +29,9 @@ static float    s_win_min_hpa = 0.0f;
 static float    s_win_max_hpa = 0.0f;
 static uint32_t s_win_start_s = 0;
 static bool     s_win_active = false;
+/* MISSION-01b (#142): launch detection state (COMMISSIONING only) */
+static float    s_launch_ref_max_hpa = 0.0f;
+static bool     s_have_launch_ref = false;
 
 static void MissionState_Persist(void)
 {
@@ -60,15 +63,20 @@ void MissionState_Init(void)
         MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923) ||
         MultiRegion_IsRegionJoined(LORAMAC_REGION_AU915);
 
-    if (bank_commissioned) {
-        /* Bank shows commissioning complete -> FLIGHT, even if DR3 is corrupt */
-        s_state = (bkp_valid && persisted != MISSION_COMMISSIONING)
-                  ? persisted : MISSION_ASCENT;
-    } else if (bkp_valid && persisted != MISSION_COMMISSIONING) {
-        /* Bank virgin but state record says flight: ambiguity -> FLIGHT */
+    /* MISSION-01 (#142, DDR-0002 amendment): the persisted DR3 record now wins
+     * outright — including COMMISSIONING. Previously a commissioned bank
+     * forced ASCENT even with a valid DR3=COMMISSIONING, so a unit entered
+     * ASCENT on the bench immediately after joining and held the 10 s ascent
+     * cadence until launch. Flight entry is now EXPLICIT (arming or launch
+     * detection) and persisted, so DR3=COMMISSIONING is authoritative.
+     * DDR-0018 preserved for the true ambiguity: bank commissioned but DR3
+     * wiped (power loss without VBAT) mid-flight -> ASCENT, never
+     * commissioning with its join/LED privileges. */
+    if (bkp_valid) {
         s_state = persisted;
+    } else if (bank_commissioned) {
+        s_state = MISSION_ASCENT;
     } else {
-        /* Virgin bank, no credible flight record -> COMMISSIONING */
         s_state = MISSION_COMMISSIONING;
     }
 
@@ -103,10 +111,35 @@ void MissionState_EnterFlight(void)
 
 void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s)
 {
+    /* BR-LIFE-007 / MISSION-01b (#142): autonomous launch detection in
+     * COMMISSIONING. Track the running MAX of valid pressure readings; a
+     * cumulative drop of MISSION_LAUNCH_DP_HPA below that maximum means we
+     * are climbing (~50 m). Tracking the max makes slow weather drift
+     * self-cancelling on the upside; a fast storm-front DROP of 6 hPa could
+     * still false-arm — acceptable: it only moves the unit to ASCENT cadence,
+     * and the windowed FLOAT detector will re-settle it if it isn't actually
+     * rising... no — FLOAT is terminal, so a false arm on the bench holds
+     * ASCENT cadence until powerdown. Tune MISSION_LAUNCH_DP_HPA per site if
+     * that matters; the button/arming hook is the deliberate path. */
+    if (s_state == MISSION_COMMISSIONING) {
+        if (pressure_valid && pressure_hpa > 0.0f) {
+            if (!s_have_launch_ref) {
+                s_launch_ref_max_hpa = pressure_hpa;
+                s_have_launch_ref = true;
+            } else if (pressure_hpa > s_launch_ref_max_hpa) {
+                s_launch_ref_max_hpa = pressure_hpa;
+            } else if (s_launch_ref_max_hpa - pressure_hpa >= MISSION_LAUNCH_DP_HPA) {
+                SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
+                MissionState_EnterFlight();
+            }
+        }
+        return;
+    }
+
     /* Finding #7 (2026-08-10): ASCENT -> FLOAT by WINDOWED RANGE.
      * Float = pressure stays inside MISSION_FLOAT_RANGE_PCT of ambient for
-     * MISSION_FLOAT_WINDOW_S, and only below MISSION_FLOAT_MAX_PRESSURE_HPA
-     * (altitude guard — a pad-side unit can never latch). Works at any
+     * MISSION_FLOAT_WINDOW_S (no altitude guard, #142 — see mission_state.h).
+     * Works at any
      * cadence, including the 10 s ascent interval where per-sample deltas
      * are meaningless. Stale/invalid pressure resets the window: it cannot
      * prove float — stay in ASCENT (the safe direction, DDR-0019). The
@@ -132,9 +165,11 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
     if (pressure_hpa > s_win_max_hpa) s_win_max_hpa = pressure_hpa;
 
     float range = s_win_max_hpa - s_win_min_hpa;
-    if (pressure_hpa > MISSION_FLOAT_MAX_PRESSURE_HPA ||
-        range > MISSION_FLOAT_RANGE_PCT * pressure_hpa) {
-        /* Climbing (or too low): restart the window at the current sample. */
+    if (range > MISSION_FLOAT_RANGE_PCT * pressure_hpa) {
+        /* Climbing: restart the window at the current sample. (MISSION-01:
+         * no altitude guard — float can be 5-25 km depending on payload and
+         * balloon; pad-side protection is that this code only runs in ASCENT,
+         * which is entered only by arming or launch detection.) */
         s_win_min_hpa = pressure_hpa;
         s_win_max_hpa = pressure_hpa;
         s_win_start_s = now_s;
