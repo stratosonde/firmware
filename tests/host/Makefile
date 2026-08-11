@@ -21,6 +21,11 @@ FLIGHT_INCLUDES := $(INCLUDES) -I.
 # findings (#1/#2/#3/#5, gate half of #6). Self-contained, no firmware objects.
 FINDINGS_SRCS := test_review_findings.c
 
+# 2026-08-11 review: archive-burst FSM (BURST-01, BURST-02). Replays the
+# OnTxData/OnRxData/SendTxData callback order; the model shape is selected by
+# a scan of lora_app.c, so it cannot go green without a firmware change.
+BURST_SRCS := test_burst_fsm.c
+
 # Sources #included by the test TUs (not linked separately) must still be
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
@@ -34,7 +39,10 @@ test_flight$(EXE): $(FLIGHT_SRCS) $(INCLUDED_SRCS)
 test_findings$(EXE): $(FINDINGS_SRCS)
 	$(CC) $(CFLAGS) -o $@ $(FINDINGS_SRCS)
 
-.PHONY: test flight findings baseline all clean
+test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../LoRaWAN/App/lora_app.h
+	$(CC) $(CFLAGS) -o $@ $(BURST_SRCS)
+
+.PHONY: test flight findings burst baseline all clean
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -46,15 +54,19 @@ flight: test_flight$(EXE)
 findings: test_findings$(EXE)
 	./test_findings$(EXE)
 
+burst: test_burst$(EXE)
+	./test_burst$(EXE)
+
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
+	EXPECT_UNFIXED=1 ./test_burst$(EXE)
 
-all: test flight findings
+all: test flight findings burst
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE)

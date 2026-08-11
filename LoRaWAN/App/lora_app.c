@@ -1845,6 +1845,21 @@ static void OnTxTimerEvent(void *context)
 static void OnTxData(LmHandlerTxParams_t *params)
 {
   /* USER CODE BEGIN OnTxData_1 */
+  /* BURST-02: LmHandler invokes THIS callback from two places — McpsConfirm
+   * (LmHandler.c) with the full TxParams set, and MlmeConfirm (LmHandler.c)
+   * with ONLY TxParams.Status refreshed. On the MLME path AckReceived,
+   * Datarate, Channel and UplinkCounter still hold whatever the previous MCPS
+   * confirm left there. Any uplink carrying an MLME request lands here twice —
+   * and the first archive packet ALWAYS carries LinkCheckReq (protocol §5.2) —
+   * double-counting MultiRegion_SaveCurrentContext() and the 10-TX NVM store
+   * interval, and feeding the burst state machine a stale ACK flag.
+   * MLME outcomes are surfaced by their own callbacks (OnJoinRequest,
+   * OnRxData's LinkCheck fields); only the MCPS confirm describes an
+   * application uplink, which is all this function reasons about. */
+  if (params->IsMcpsConfirm == 0) {
+    return;
+  }
+
   SONDE_LOG("\r\nOnTxData: Status=%d DR=%d Ch=%lu FCnt=%lu\r\n",
                     params->Status, params->Datarate,
                     (unsigned long)params->Channel, (unsigned long)params->UplinkCounter);
@@ -1945,21 +1960,35 @@ static void OnTxData(LmHandlerTxParams_t *params)
   /* C7b FIX: Continue bulk transfer if active - re-arm send task for next packet.
    * After TX+RX windows complete, if we're still in BULK_TRANSFER with data remaining,
    * schedule another SendTxData call to send the next bulk packet immediately.
-   * FR-14 (#88): EXCEPT for the first archive packet — its continuation is
-   * decided by OnRxData's LinkCheck evaluation, which runs after us. Re-arming
-   * here for packet 1 raced that evaluation: a poor-link COMPLETE verdict
-   * reset to PROBE_SF10 while our task was already armed, producing a
-   * spurious full work cycle (GPS power-up, sensor reads, archive write). */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER &&
-      g_bulk_packets_sent > 1 &&
-      FlashLog_HasUnsentData(&hflashlog) &&
-      g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
-    SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
-    UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-  } else if (g_tx_state == TX_STATE_BULK_TRANSFER) {
-    SONDE_LOG_STR("OnTxData: Bulk transfer complete\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-    g_bulk_packets_sent = 0;
+   *
+   * BURST-01: packet counts 0 and 1 are NOT this callback's to terminate.
+   *   sent == 0 — the probe-ACK branch ABOVE, in this same call, just opened
+   *               the archive opportunity and armed the send task. The old
+   *               unguarded `else if` then reset it to COMPLETE twelve lines
+   *               later, so no archive packet was ever built. The armed task
+   *               still ran, spending a full work cycle (GPS power-up, sensor
+   *               read, archive write) to send another confirmed heartbeat —
+   *               which was ACKed, re-opened the opportunity, and was killed
+   *               again: an unbounded transmit loop with zero data return,
+   *               ending only when the battery fell below BULK_BATTERY_MIN_MV.
+   *               Regression introduced by FR-14 (#88), which narrowed the
+   *               `if` to `> 1` but left the `else if` catching everything.
+   *   sent == 1 — OnRxData's LinkCheck evaluation owns the verdict. It runs
+   *               AFTER us in the same LoRaMacProcess pass (LoRaMac.c:
+   *               LoRaMacHandleRequestEvents -> LoRaMacHandleIndicationEvents),
+   *               so touching the state here would race it — the FR-14 (#88)
+   *               finding, which stays fixed.
+   * Only sent > 1 is a terminal condition this callback may decide. */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent > 1) {
+    if (FlashLog_HasUnsentData(&hflashlog) &&
+        g_bulk_packets_sent < MAX_BULK_PACKETS_PER_CYCLE) {
+      SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
+      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+    } else {
+      SONDE_LOG_STR("OnTxData: Bulk transfer complete\r\n");
+      g_tx_state = TX_STATE_COMPLETE;
+      g_bulk_packets_sent = 0;
+    }
   }
   /* USER CODE END OnTxData_1 */
 }
