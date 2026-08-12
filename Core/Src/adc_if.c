@@ -339,13 +339,21 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
   sConfig.SamplingTime = ADC_SAMPLINGTIME_COMMON_1;
   if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
   {
+    /* R10 (#195): terminate the failed transaction - do NOT continue to
+     * Start with an unconfigured (or stale, wrong-channel) config: that
+     * could return a plausible-looking value treated as fresh. Return 0
+     * (read-failure); the #136 plausibility/stale layer degrades honestly. */
     Error_Handler();
+    HAL_ADC_Stop(&hadc);
+    return 0;
   }
 
   if (HAL_ADC_Start(&hadc) != HAL_OK)
   {
-    /* Start Error */
+    /* Start Error - R10 (#195): abort the transaction, not a pointless poll. */
     Error_Handler();
+    HAL_ADC_Stop(&hadc);
+    return 0;
   }
   /** Wait for end of conversion — F-014 (#31): BOUNDED poll (was
    *  HAL_MAX_DELAY: a faulted ADC wedged the work cycle forever). On timeout

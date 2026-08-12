@@ -656,6 +656,30 @@ static void test_r9_poweron_transaction(void)
     g_host_uart_dma_rc = HAL_OK;
 }
 
+/* ========================================================================== */
+/* R10 (P1) — a failed ADC stage must terminate the transaction (ChatGPT)      */
+/* ========================================================================== */
+/* adc_if.c ADC_ReadChannels: HAL_ADC_ConfigChannel and HAL_ADC_Start failures
+ * called Error_Handler() and CONTINUED the transaction (config failure can
+ * convert the previous channel's config -> plausible wrong-channel value
+ * treated as fresh). Calibration (#136) and the bounded poll (F-014/#31) are
+ * already safe. Invariant: config/start failure returns 0 (read-failure),
+ * never falls through.
+ */
+static void test_r10_adc_transaction_abort(const char *adc)
+{
+    printf("-- R10 (P1): ADC config/start failure must abort, not continue\n");
+
+    bool config_falls_through =
+        strstr(adc, "if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)\n  {\n    Error_Handler();\n  }") != NULL;
+    bool start_falls_through =
+        strstr(adc, "if (HAL_ADC_Start(&hadc) != HAL_OK)\n  {\n    /* Start Error */\n    Error_Handler();\n  }") != NULL;
+    printf("   config-failure fall-through: %s, start-failure fall-through: %s\n",
+           config_falls_through ? "yes (BAD)" : "no",
+           start_falls_through ? "yes (BAD)" : "no");
+    CHECK_REGRESSION(!config_falls_through && !start_falls_through, "R10");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -666,6 +690,7 @@ int main(void)
     char *lpm = slurp("../../Core/Src/stm32_lpm_if.c");
     char *cfg = slurp("../../Core/Src/config.c");
     char *sens = slurp("../../Core/Src/sys_sensors.c");
+    char *adc = slurp("../../Core/Src/adc_if.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -706,6 +731,8 @@ int main(void)
     test_r7_region_completeness(app);
     printf("\n");
     test_r9_poweron_transaction();
+    printf("\n");
+    test_r10_adc_transaction_abort(adc);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
