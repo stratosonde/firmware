@@ -85,6 +85,19 @@ This deliberately revises the retired legacy data-honesty record's cold-assumpti
 
 Energy admission is a *gate on top of* RF authorization, never a bypass. Work that passes energy admission is still subject to DDR-0006/0020/0028 region, restricted, and staleness rules. Conversely, energy policy may suppress otherwise-legal RF work.
 
+### INV-PWR-009 — Sustained GNSS outage silences the radio
+
+If no fresh GNSS fix has been obtained for a configured grace window (implementation: `GPS_LOSS_SILENCE_S`, default **6 hours**), the sonde SHALL stop transmitting while continuing to log science to the archive, and SHALL keep attempting GNSS acquisition every cycle until a fresh fix clears the silence.
+
+Rationale (maintainer policy, 2026-08-12): a stale position is not worth radio energy — the archive is the point, and it is recovered when a fresh fix (or recovery) returns. The radio silence conserves the energy that positionless telemetry would burn.
+
+Operational details (as implemented, issue #141 and hardening trail):
+
+- the grace epoch persists across resets (backup register) and is UTC-disciplined, so a reset cannot restart the window;
+- a backward RTC step re-seeds the window rather than evaluating a wrapped delta;
+- the forced GNSS retry carries its own acquisition budget and is never forced over the hard electrical floor (MODE_SURVIVAL stays dark);
+- commissioning is exempt (DDR-0018).
+
 
 ---
 
@@ -111,6 +124,7 @@ Confidence legend:
 | BR-PWR-011 | Science records SHOULD distinguish GNSS "skipped for energy/policy" from "attempted but no fix" when encoding space permits; this is a nice-to-have, since the backend can usually infer cause from battery voltage, temperature, and scenario context. | CONFIRMED (as SHOULD, not SHALL) |
 | BR-PWR-012 | Tier boundaries, tier count, normalization curve, and droop-model parameters SHALL be configuration bindings set by battery/load profiling over temperature. | CONFIRMED |
 | BR-PWR-013 | Whether tier-to-cadence scaling is a fixed table or a continuous function is an implementation choice. | INFERRED |
+| BR-PWR-014 | After a configured GNSS-outage grace window (default 6 h), firmware SHALL inhibit transmission while continuing science logging and GNSS retry, until a fresh fix clears the silence (INV-PWR-009). | CONFIRMED |
 
 ---
 
