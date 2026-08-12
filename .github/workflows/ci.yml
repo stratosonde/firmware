@@ -9,6 +9,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # F-013 (#210): the stability suite scans h3lite.c (a submodule) -
+          # without this the host gate exits 2 on the missing file.
+          submodules: recursive
       # STAB-09 (#156): the FULL host gate — test + flight + findings + burst.
       # The findings/burst suites hold the autonomous-control regressions
       # (BURST-01/02/03, R2-13, STAB-*) and must be merge gates, not opt-in.
