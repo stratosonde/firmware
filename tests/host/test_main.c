@@ -733,14 +733,19 @@ static void test_mission_logic(void)
     CHECK(LaunchDetector_HasRef(&ld));
     CHECK(LaunchDetector_RefHpa(&ld) == 994.0f);   /* reseeded to current */
 
-    /* a REAL launch inside the window still trips */
+    /* a REAL launch inside the window still trips (R3-10: once the drop is
+     * SUSTAINED for the confirm window) */
     LaunchDetector_Reset(&ld);
     CHECK(!LaunchDetector_Update(&ld, 1000.0f, true, 100));
-    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 200));     /* -6.1 hPa */
+    CHECK(!LaunchDetector_Update(&ld, 993.9f, true, 200));    /* -6.1 hPa: candidate arms */
+    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 200 + MISSION_LAUNCH_CONFIRM_S));
 
-    /* boundary: exactly at the window edge the reference is still valid */
+    /* boundary: exactly at the window edge the reference is still valid
+     * (cross early enough that the confirm window closes before expiry) */
     LaunchDetector_Reset(&ld);
     LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(!LaunchDetector_Update(&ld, 993.0f, true,
+                                 MISSION_LAUNCH_REF_WINDOW_S - MISSION_LAUNCH_CONFIRM_S));
     CHECK(LaunchDetector_Update(&ld, 993.0f, true, MISSION_LAUNCH_REF_WINDOW_S));
     /* ...and one second past it, the same drop is weather, not launch */
     LaunchDetector_Reset(&ld);
@@ -753,7 +758,24 @@ static void test_mission_logic(void)
     LaunchDetector_Update(&ld, 1000.0f, true, 0);
     CHECK(!LaunchDetector_Update(&ld, 0.0f, false, 60));
     CHECK(LaunchDetector_RefHpa(&ld) == 1000.0f);
-    CHECK(LaunchDetector_Update(&ld, 993.0f, true, 120));     /* ref intact */
+    CHECK(!LaunchDetector_Update(&ld, 993.0f, true, 120));    /* ref intact, candidate arms */
+    CHECK(LaunchDetector_Update(&ld, 993.0f, true, 120 + MISSION_LAUNCH_CONFIRM_S));
+
+    /* R3-10 (#222): a momentary downward spike arms a candidate that any
+     * recovery cancels - it must NEVER latch launch. */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(!LaunchDetector_Update(&ld, 993.0f, true, 60));     /* spike: candidate */
+    CHECK(!LaunchDetector_Update(&ld, 1000.0f, true, 120));   /* recovered: cancel */
+    CHECK_REGRESSION(!LaunchDetector_Update(&ld, 1000.0f, true, 400), "R3-10-spike");
+
+    /* R3-10: a sustained drop fires only once the confirm window closes */
+    LaunchDetector_Reset(&ld);
+    LaunchDetector_Update(&ld, 1000.0f, true, 0);
+    CHECK(!LaunchDetector_Update(&ld, 993.0f, true, 100));
+    CHECK_REGRESSION(!LaunchDetector_Update(&ld, 993.5f, true,
+                     100 + MISSION_LAUNCH_CONFIRM_S - 1), "R3-10-early");
+    CHECK(LaunchDetector_Update(&ld, 993.5f, true, 100 + MISSION_LAUNCH_CONFIRM_S));
 
     /* 14-day stationary weather replay: a SLOW triangle, +-6 hPa over a 24 h
      * period (1 hPa/h — realistic frontal drift, no fast cliff). Inside any
@@ -771,10 +793,12 @@ static void test_mission_logic(void)
         CHECK_REGRESSION(!launched, "STAB-06-14day");
     }
     /* documented accepted tradeoff (mission_state.c): a fast storm FRONT that
-     * drops 6 hPa inside the window still arms ASCENT cadence */
+     * drops 6 hPa inside the window still arms ASCENT cadence (once sustained
+     * through the R3-10 confirm window) */
     LaunchDetector_Reset(&ld);
     LaunchDetector_Update(&ld, 1000.0f, true, 0);
-    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 3600));
+    CHECK(!LaunchDetector_Update(&ld, 993.9f, true, 3600));
+    CHECK(LaunchDetector_Update(&ld, 993.9f, true, 3600 + MISSION_LAUNCH_CONFIRM_S));
 
     /* --- STAB-07: FLOAT latch guards --- */
     FloatDetector_t fd;

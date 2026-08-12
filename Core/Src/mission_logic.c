@@ -16,6 +16,8 @@ void LaunchDetector_Reset(LaunchDetector_t *d)
     d->ref_set_s = 0;
     d->have_ref = false;
     d->pinned = false;
+    d->cand_since_s = 0;
+    d->candidate = false;
 }
 
 void LaunchDetector_SetRef(LaunchDetector_t *d, float ref_hpa, uint32_t now_s)
@@ -24,12 +26,15 @@ void LaunchDetector_SetRef(LaunchDetector_t *d, float ref_hpa, uint32_t now_s)
     d->ref_set_s = now_s;
     d->have_ref = true;
     d->pinned = true;   /* restored launch pressure: permanent, never ages out */
+    d->cand_since_s = 0;
+    d->candidate = false;
 }
 
 bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
                            bool pressure_valid, uint32_t now_s)
 {
     if (!pressure_valid || pressure_hpa <= 0.0f) {
+        d->candidate = false;   /* R3-10: invalid evidence cancels a candidate */
         return false;   /* stale/invalid proves nothing; window untouched */
     }
 
@@ -41,6 +46,7 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
             d->ref_max_hpa = pressure_hpa;
         }
         d->ref_set_s = now_s;
+        d->candidate = false;
         return false;
     }
 
@@ -54,16 +60,36 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
         d->ref_max_hpa = pressure_hpa;
         d->ref_set_s = now_s;
         d->have_ref = true;
+        d->candidate = false;
         return false;
     }
 
     if (pressure_hpa > d->ref_max_hpa) {
         d->ref_max_hpa = pressure_hpa;
         d->ref_set_s = now_s;
+        d->candidate = false;
         return false;
     }
 
-    return (d->ref_max_hpa - pressure_hpa) >= MISSION_LAUNCH_DP_HPA;
+    if ((d->ref_max_hpa - pressure_hpa) < MISSION_LAUNCH_DP_HPA) {
+        d->candidate = false;   /* R3-10: condition lost - candidate cancels */
+        return false;
+    }
+
+    /* R3-10 (#222): two-evidence latch - the cumulative drop below the
+     * bounded reference must ALSO hold continuously for
+     * MISSION_LAUNCH_CONFIRM_S. A single downward sample (glitch, handling
+     * bump, brief elevator ride) arms a candidate but never fires. A pinned
+     * (restored) reference is the actual launch pressure: fire immediately. */
+    if (d->pinned) {
+        return true;
+    }
+    if (!d->candidate) {
+        d->candidate = true;
+        d->cand_since_s = now_s;
+        return false;
+    }
+    return (now_s - d->cand_since_s) >= MISSION_LAUNCH_CONFIRM_S;
 }
 
 bool LaunchDetector_HasRef(const LaunchDetector_t *d)

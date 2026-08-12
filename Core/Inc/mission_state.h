@@ -74,6 +74,16 @@ typedef enum {
 #ifndef MISSION_LAUNCH_DP_HPA
 #define MISSION_LAUNCH_DP_HPA 6.0f
 #endif
+/* R3-10 (#222): two-evidence launch detection - the cumulative drop must
+ * ALSO hold continuously for this long before launch latches. A momentary
+ * downward spike (handling bump, sensor glitch, elevator) arms a candidate
+ * that any recovery cancels. Sustained real events (driving uphill to the
+ * launch site, aircraft transport) still arm - accepted residual: bounded
+ * energy cost of a false ASCENT (fast cadence + GNSS) until the FLOAT
+ * latch guards or recovery sort it out. */
+#ifndef MISSION_LAUNCH_CONFIRM_S
+#define MISSION_LAUNCH_CONFIRM_S 120U
+#endif
 
 /* DDR-0002 mission cadence (finding #7): the consumer that was missing.
  * ASCENT = fast updates to capture the climb; FLOAT = relaxed cadence.

@@ -45,6 +45,8 @@ typedef struct {
     uint32_t ref_set_s;     /* when ref_max was (re)seeded */
     bool     have_ref;
     bool     pinned;        /* F1 (#167): restored launch ref never ages out */
+    uint32_t cand_since_s;  /* R3-10 (#222): candidate (drop condition) start */
+    bool     candidate;     /* R3-10: drop condition currently holding */
 } LaunchDetector_t;
 
 void LaunchDetector_Reset(LaunchDetector_t *d);
