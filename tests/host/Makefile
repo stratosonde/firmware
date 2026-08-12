@@ -30,7 +30,7 @@ BURST_SRCS := test_burst_fsm.c
 # HAL-bound findings plus behavioural F-4 (burst defeats mode hysteresis,
 # needs the real transmit_plan.c/power_model.c) and F-10/F-11 (GNSS parser,
 # atgm336h.c #included by the test TU).
-STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c
+STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/sys_caps.c
 
 # R15 (2026-08-11 ChatGPT review): the REAL multiregion_context.c compiled
 # against a fake LoRaMac/LmHandler surface with fault injection
@@ -59,7 +59,7 @@ test_findings$(EXE): $(FINDINGS_SRCS)
 test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../LoRaWAN/App/lora_app.h
 	$(CC) $(CFLAGS) -o $@ $(BURST_SRCS)
 
-test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c
+test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c ../../Core/Src/sys_caps.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(STAB_SRCS) -lm
 
 # -fshort-enums matches the arm-none-eabi ABI default - the target builds

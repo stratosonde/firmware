@@ -19,6 +19,7 @@
 ./Core/Src/stm32wlxx_hal_msp.o
 ./Core/Src/stm32wlxx_it.o
 ./Core/Src/sys_app.o
+./Core/Src/sys_caps.o
 ./Core/Src/sys_debug.o
 ./Core/Src/sys_sensors.o
 ./Core/Src/syscalls.o

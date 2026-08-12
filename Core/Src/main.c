@@ -41,6 +41,7 @@
 #include "config.h"
 #include "reset_cause.h"
 #include "backup_regs.h"  /* F-003 (#203): mission backup-register snapshot list */
+#include "sys_caps.h"     /* F-014 (#207): capability marks */
 #include "timer_if.h"  /* RV-09 (#165): TIMER_IF_Init in the deferred failover */
 #include "mission_state.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
@@ -258,6 +259,7 @@ int main(void)
   } else {
     /* Degraded: no archive this flight, but the radio flies. Every FlashLog_*
      * API guards !hlog->initialized, so downstream code is safe. */
+    SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
     SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — flying WITHOUT archive\r\n", w25q_status);
   }
   
@@ -276,11 +278,15 @@ int main(void)
       SONDE_LOG("Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
                         used_records, total_capacity, free_records);
     } else {
+      SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
       SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — flying WITHOUT archive\r\n", flashlog_status);
       /* F-03 (#65): degrade, not reset. hflashlog.initialized stays false;
        * all FlashLog_* APIs guard on it, so the TX path runs normally. */
     }
   }
+  /* F-014 (#207): boot-visible capability summary (0 = all available). */
+  SONDE_LOG("Boot capabilities: failed-mask=0x%02X (bit0 flash, bit1 GNSS, bit2 sensors, bit3 radio)\r\n",
+            (unsigned)SysCaps_Raw());
   
   // Validate payload format sizes at compile time
   SONDE_LOG_STR("Validating payload format sizes...\r\n");

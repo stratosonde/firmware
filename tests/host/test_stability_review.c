@@ -851,6 +851,34 @@ static void test_f011_f012_f013_cleanup(const char *lpm, const char *mainsrc, co
     CHECK_REGRESSION(f011 && f012 && f013, "F-011-13");
 }
 
+/* ========================================================================== */
+/* F-014 (P2/P3) — slimmed capability flags: behavioral unit + marks scan      */
+/* ========================================================================== */
+#include "sys_caps.h"
+static void test_f014_capability_flags(const char *mainsrc, const char *sysapp, const char *msp)
+{
+    printf("-- F-014 (P2/P3): capability flags marked at partial-init sites\n");
+
+    /* Behavioral: the module itself (compiled into this suite). */
+    bool unit = SysCaps_Available(SYS_CAP_FLASH) && SysCaps_Raw() == 0;
+    SysCaps_MarkFailed(SYS_CAP_FLASH);
+    unit = unit && !SysCaps_Available(SYS_CAP_FLASH) &&
+           SysCaps_Available(SYS_CAP_GNSS) && SysCaps_Raw() == SYS_CAP_FLASH;
+    SysCaps_MarkFailed(SYS_CAP_GNSS);
+    unit = unit && !SysCaps_Available(SYS_CAP_GNSS) &&
+           SysCaps_Raw() == (SYS_CAP_FLASH | SYS_CAP_GNSS);
+    printf("   sys_caps unit behavior: %s\n", unit ? "ok" : "WRONG");
+    CHECK_REGRESSION(unit, "F-014-unit");
+
+    /* Marks at the concrete partial-init sites. */
+    bool flash = strstr(mainsrc, "SysCaps_MarkFailed(SYS_CAP_FLASH)") != NULL;
+    bool sensors = strstr(sysapp, "SysCaps_MarkFailed(SYS_CAP_SENSORS)") != NULL;
+    bool gnss = strstr(msp, "SysCaps_MarkFailed(SYS_CAP_GNSS)") != NULL;
+    printf("   marks: flash %s, sensors %s, GNSS-DMA %s\n",
+           flash ? "yes" : "no", sensors ? "yes" : "no", gnss ? "yes" : "no");
+    CHECK_REGRESSION(flash && sensors && gnss, "F-014-marks");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -923,6 +951,8 @@ int main(void)
     test_f006_unknown_policy_documented(app_raw);  /* disposition lives in a comment - need the raw source */
     printf("\n");
     test_f011_f012_f013_cleanup(lpm, mainsrc, h3);
+    printf("\n");
+    test_f014_capability_flags(mainsrc, sysapp, msp);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

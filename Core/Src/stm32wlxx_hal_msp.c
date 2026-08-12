@@ -20,6 +20,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "sys_caps.h"  /* F-014 (#207) */
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
@@ -469,6 +470,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_usart1_tx.Init.Priority = DMA_PRIORITY_LOW;
     if (HAL_DMA_Init(&hdma_usart1_tx) != HAL_OK)
     {
+      /* F-014 (#207): mark the GNSS capability down instead of continuing
+       * with a half-initialized UART path. */
+      SysCaps_MarkFailed(SYS_CAP_GNSS);
       Error_Handler();
     }
 
@@ -491,6 +495,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     hdma_usart1_rx.Init.Priority = DMA_PRIORITY_HIGH;
     if (HAL_DMA_Init(&hdma_usart1_rx) != HAL_OK)
     {
+      SysCaps_MarkFailed(SYS_CAP_GNSS);  /* F-014 (#207) */
       Error_Handler();
     }
     __HAL_LINKDMA(huart, hdmarx, hdma_usart1_rx);

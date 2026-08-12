@@ -30,6 +30,7 @@
 #include "utilities_def.h"
 #include "sys_debug.h"
 #include "sys_sensors.h"
+#include "sys_caps.h"  /* F-014 (#207) */
 
 /* USER CODE BEGIN Includes */
 
@@ -116,7 +117,12 @@ void SystemApp_Init(void)
   SYS_InitMeasurement();
 
   /*Initialize the Sensors */
-  EnvSensors_Init();
+  /* F-014 (#207): the return was ignored - a failed sensor init left the
+   * subsystem "half initialized" with no capability state. Mark it. */
+  if (EnvSensors_Init() != 0)
+  {
+    SysCaps_MarkFailed(SYS_CAP_SENSORS);
+  }
 
   /*Init low power manager*/
   UTIL_LPM_Init();
