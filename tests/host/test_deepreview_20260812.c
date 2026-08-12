@@ -1,0 +1,246 @@
+/**
+  ******************************************************************************
+  * @file    test_deepreview_20260812.c
+  * @brief   Red-first regressions for the 2026-08-12 stability & predictability
+  *          deep review ("R3" series): R3-01
+  ******************************************************************************
+  * R3-01 (P0/P1, #215): bulk archive recovery can starve current science.
+  *
+  * WHY THIS IS A SCAN-CONFIGURED REPLAY (same precedent as test_burst_fsm.c)
+  * The defect is pure control flow: SendTxData re-arms TxTimer RELATIVE TO
+  * INVOCATION TIME, and the bulk-continuation callbacks re-arm the SAME
+  * sequencer task without the timer. The starvation only appears when the
+  * callback order is replayed over a large backlog. The model's SHAPE is
+  * selected by scanning lora_app.c: pre-fix the scan finds the relative-
+  * restart shape (red); post-fix it finds the absolute-deadline shape
+  * (green). Only a firmware change turns the behavioural check green.
+  *
+  * Run:
+  *   make -C tests/host deep        (red until the fixes land)
+  *   make -C tests/host baseline    (EXPECT_UNFIXED=1: green pre-fix CI gate)
+  ******************************************************************************
+  */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+static int g_failures = 0;
+static int g_checks = 0;
+static int g_expected_failures = 0;
+
+#define CHECK(cond) do { \
+    g_checks++; \
+    if (!(cond)) { \
+        g_failures++; \
+        printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+    } \
+} while (0)
+
+#define CHECK_REGRESSION(cond, id) do { \
+    g_checks++; \
+    if (!(cond)) { \
+        g_failures++; \
+        g_expected_failures++; \
+        printf("FAIL [%s] %s:%d: %s\n", id, __FILE__, __LINE__, #cond); \
+    } \
+} while (0)
+
+static char *slurp(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) { printf("FATAL: cannot open %s\n", path); exit(2); }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)n + 1);
+    if (!buf) exit(2);
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) exit(2);
+    buf[n] = '\0';
+    fclose(f);
+    size_t r = 0, w = 0;
+    while (r < (size_t)n) { if (buf[r] != '\r') buf[w++] = buf[r]; r++; }
+    buf[w] = '\0';
+    return buf;
+}
+
+/* Collapse whitespace runs and strip comments so a scan asserts on CODE,
+ * never on prose describing the bug. */
+static char *normalize_code(const char *src)
+{
+    size_t n = strlen(src);
+    char *out = (char *)malloc(n + 2);
+    if (!out) exit(2);
+    size_t o = 0;
+    bool in_block = false, in_line = false, sp = true;
+    for (size_t i = 0; i < n; i++) {
+        if (in_block) {
+            if (src[i] == '*' && src[i + 1] == '/') { in_block = false; i++; }
+            continue;
+        }
+        if (in_line) {
+            if (src[i] == '\n') in_line = false;
+            continue;
+        }
+        if (src[i] == '/' && src[i + 1] == '*') { in_block = true; i++; continue; }
+        if (src[i] == '/' && src[i + 1] == '/') { in_line = true;  i++; continue; }
+        if (src[i] == ' ' || src[i] == '\t' || src[i] == '\r' || src[i] == '\n') {
+            if (!sp) { out[o++] = ' '; sp = true; }
+            continue;
+        }
+        out[o++] = src[i];
+        sp = false;
+    }
+    out[o] = '\0';
+    return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* R3-01 — scheduler replay                                            */
+/* ------------------------------------------------------------------ */
+
+#define SCIENCE_INTERVAL_S   600u    /* 10-minute science cadence */
+#define BULK_TURNAROUND_S      5u    /* fastest allowed radio turnaround */
+#define BACKLOG_RECORDS     1000u    /* pending archive records */
+#define RECORDS_PER_PACKET     5u    /* ~BULK_V6_MAX_RECORDS at good DR */
+#define SIM_HORIZON_S      86400u    /* 24 h */
+#define ALLOWED_JITTER_S      60u    /* explicitly allowed jitter */
+
+typedef enum {
+    SHAPE_RELATIVE_RESTART,  /* pre-fix: every SendTxData re-arms now+interval */
+    SHAPE_ABSOLUTE_DEADLINE  /* post-fix: absolute due, bulk yields to science */
+} SchedShape_t;
+
+static uint32_t replay_max_science_gap(SchedShape_t shape, uint32_t backlog,
+                                       uint32_t *science_cycles_out)
+{
+    uint64_t now = 0;
+    uint64_t next_timer_fire = SCIENCE_INTERVAL_S;
+    uint64_t next_bulk = UINT64_MAX;
+    uint64_t science_due = 0;
+    bool     due_valid = false;
+    bool     bulk_active = false;
+    uint32_t last_science = 0;
+    uint32_t max_gap = 0;
+    uint32_t science_cycles = 0;
+    bool     first_science = true;
+
+    while (now < SIM_HORIZON_S) {
+        uint64_t next = (next_timer_fire < next_bulk) ? next_timer_fire : next_bulk;
+        if (next == UINT64_MAX || next > SIM_HORIZON_S) break;
+        now = next;
+
+        if (next_timer_fire == now) goto science_cycle;
+
+        /* Bulk-continuation invocation of SendTxData. */
+        if (shape == SHAPE_ABSOLUTE_DEADLINE && due_valid && now >= science_due) {
+            bulk_active = false;         /* fixed firmware: bulk yields */
+            next_bulk = UINT64_MAX;
+            goto science_cycle;
+        }
+        if (backlog == 0) { bulk_active = false; next_bulk = UINT64_MAX; continue; }
+        backlog -= (backlog >= RECORDS_PER_PACKET) ? RECORDS_PER_PACKET : backlog;
+        if (backlog > 0) {
+            next_bulk = now + BULK_TURNAROUND_S;   /* OnTxData re-arm */
+        } else {
+            bulk_active = false;
+            next_bulk = UINT64_MAX;
+        }
+        if (shape == SHAPE_RELATIVE_RESTART) {
+            /* THE DEFECT: bulk SendTxData restarts the science timer
+             * relative to NOW - deadline pushed out per packet. */
+            next_timer_fire = now + SCIENCE_INTERVAL_S;
+        }
+        continue;
+
+science_cycle:
+        {
+            uint32_t gap = first_science ? 0 : (uint32_t)(now - last_science);
+            if (!first_science && gap > max_gap) max_gap = gap;
+            first_science = false;
+            last_science = (uint32_t)now;
+            science_cycles++;
+            backlog++;  /* the new current record joins the archive */
+
+            if (shape == SHAPE_RELATIVE_RESTART) {
+                next_timer_fire = now + SCIENCE_INTERVAL_S;
+            } else {
+                if (!due_valid) { science_due = now; due_valid = true; }
+                science_due += SCIENCE_INTERVAL_S;      /* phase-preserving */
+                if (science_due <= now) science_due = now + SCIENCE_INTERVAL_S;
+                next_timer_fire = science_due;
+            }
+            /* Probe ACKed (perfect coverage) -> archive opportunity opens. */
+            if (backlog > 0 && !bulk_active) {
+                bulk_active = true;
+                next_bulk = now + BULK_TURNAROUND_S;
+            }
+        }
+    }
+
+    *science_cycles_out = science_cycles;
+    return max_gap;
+}
+
+static void test_r301_bulk_starvation(const char *app)
+{
+    printf("-- R3-01 (P0/P1, #215): bulk recovery must not starve current science\n");
+
+    bool has_deadline  = strstr(app, "g_science_due_ms") != NULL;
+    bool has_yield     = strstr(app, "ScienceIsDue") != NULL;
+    bool relative_arm  = strstr(app, "UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms)") != NULL;
+
+    printf("   scan: absolute deadline var=%s science-due yield=%s relative re-arm=%s\n",
+           has_deadline ? "yes" : "NO",
+           has_yield ? "yes" : "NO",
+           relative_arm ? "YES (defect)" : "no");
+
+    SchedShape_t shape = (has_deadline && has_yield && !relative_arm)
+                       ? SHAPE_ABSOLUTE_DEADLINE : SHAPE_RELATIVE_RESTART;
+
+    CHECK_REGRESSION(has_deadline, "R3-01-deadline");
+    CHECK_REGRESSION(has_yield, "R3-01-yield");
+    CHECK_REGRESSION(!relative_arm, "R3-01-relative-arm");
+
+    /* Review-mandated scenario: 1000-record backlog, perfect coverage,
+     * fastest turnaround, 10-minute cadence. */
+    uint32_t cycles = 0;
+    uint32_t max_gap = replay_max_science_gap(shape, BACKLOG_RECORDS, &cycles);
+    printf("   replay (backlog=%u): %u science cycles in %u h, max gap %u s (bound %u s)\n",
+           BACKLOG_RECORDS, cycles, SIM_HORIZON_S / 3600u,
+           max_gap, SCIENCE_INTERVAL_S + ALLOWED_JITTER_S);
+    CHECK_REGRESSION(max_gap <= SCIENCE_INTERVAL_S + ALLOWED_JITTER_S, "R3-01");
+    CHECK_REGRESSION(cycles >= (SIM_HORIZON_S / SCIENCE_INTERVAL_S) - 1, "R3-01-cadence");
+
+    uint32_t cycles0 = 0;
+    uint32_t max_gap0 = replay_max_science_gap(shape, 0, &cycles0);
+    printf("   replay (backlog=0): max gap %u s over %u cycles\n", max_gap0, cycles0);
+    CHECK(max_gap0 <= SCIENCE_INTERVAL_S + ALLOWED_JITTER_S);
+
+    uint32_t cycles1 = 0;
+    uint32_t max_gap1 = replay_max_science_gap(shape, 1, &cycles1);
+    printf("   replay (backlog=1): max gap %u s over %u cycles\n", max_gap1, cycles1);
+    CHECK(max_gap1 <= SCIENCE_INTERVAL_S + ALLOWED_JITTER_S);
+}
+
+int main(void)
+{
+    char *app = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
+
+    printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
+
+    test_r301_bulk_starvation(app);
+
+    printf("\n%d checks, %d failures (%d expected pre-fix)\n",
+           g_checks, g_failures, g_expected_failures);
+
+    free(app);
+
+    if (getenv("EXPECT_UNFIXED") && g_failures == g_expected_failures) {
+        printf("BASELINE OK (all failures are known-unfixed findings)\n");
+        return 0;
+    }
+    return g_failures ? 1 : 0;
+}

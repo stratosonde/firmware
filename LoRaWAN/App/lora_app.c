@@ -394,6 +394,16 @@ static PacketQueue_t g_packet_queue = {0};
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
 static uint32_t g_bulk_commit_through = 0;  /* C4/R2-02 (#106): absolute commit point (exclusive seq) after confirmed TX */
+
+/* R3-01 (#215): ABSOLUTE science deadline, HAL_GetTick ms domain (the same
+ * time base UTIL_TIMER uses). Bulk continuation re-arms the SAME SendTxData
+ * task (OnTxData/OnRxData); restarting TxTimer relative to each invocation
+ * pushed the next science deadline out by a full interval per bulk packet -
+ * unbounded starvation with a large backlog, violating DDR-0005
+ * BR-TX-001/002 (current science always wins; recovery yields when science
+ * falls due). The deadline advances ONLY when a science cycle is serviced,
+ * phase-preserving (due += interval); bulk work can never move it. */
+static uint32_t g_science_due_ms = 0;
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -1803,10 +1813,60 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
   }
 }
 
+/**
+ * @brief R3-01 (#215): has the absolute science deadline arrived?
+ *        Wrap-safe (int32 subtraction), false while unscheduled.
+ */
+static bool ScienceIsDue(void)
+{
+  return g_science_due_ms != 0 &&
+         (int32_t)(HAL_GetTick() - g_science_due_ms) >= 0;
+}
+
+/**
+ * @brief R3-01 (#215): re-arm TxTimer against the ABSOLUTE science deadline.
+ * @param interval_ms   the plan's science interval for THIS cycle
+ * @param science_cycle true when this invocation serviced current science:
+ *        the deadline advances phase-preservingly (due += interval), with a
+ *        re-base if we fell a full period behind (never storm catch-up).
+ *        False for bulk continuations: the timer is only re-pointed at the
+ *        existing deadline - archive work can never move it.
+ */
+static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)
+{
+  uint32_t now_ms = HAL_GetTick();
+  if (science_cycle) {
+    if (g_science_due_ms == 0) g_science_due_ms = now_ms;  /* establish phase */
+    g_science_due_ms += interval_ms;
+    if ((int32_t)(g_science_due_ms - now_ms) <= 0) {
+      g_science_due_ms = now_ms + interval_ms;  /* fell >= 1 period behind */
+    }
+  } else if (g_science_due_ms == 0) {
+    g_science_due_ms = now_ms + interval_ms;
+  }
+  uint32_t delay_ms = g_science_due_ms - now_ms;
+  if (delay_ms == 0) delay_ms = 1;
+  UTIL_TIMER_Stop(&TxTimer);
+  UTIL_TIMER_SetPeriod(&TxTimer, delay_ms);
+  UTIL_TIMER_Start(&TxTimer);
+}
+
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
   Deadman_MarkProgress();  /* F13a: a work cycle provably started */
+
+  /* R3-01 (#215): a SendTxData invocation is not necessarily a science cycle -
+   * bulk continuation re-arms THIS task. If the science deadline has arrived,
+   * the burst yields NOW so this run takes the science path (GPS + current
+   * record + probe). Current science always wins (DDR-0005 BR-TX-001/002).
+   * RunTxStateMachine's COMPLETE reset performs the deferred header-sync
+   * flush, so nothing already committed is stranded. */
+  if (g_tx_state == TX_STATE_BULK_TRANSFER && ScienceIsDue()) {
+    SONDE_LOG_STR("R3-01: science deadline reached - bulk transfer yields\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
+    g_bulk_packets_sent = 0;
+  }
 
   /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
   static VoltageSlope_t voltage_slope = {0};
@@ -1879,10 +1939,12 @@ static void SendTxData(void)
   uint16_t battery_mv_normalized = plan.battery_mv_normalized;
   (void)battery_mv_normalized;  /* FR-19: log-only in flight */
 
-  // Update timer interval if changed
-  UTIL_TIMER_Stop(&TxTimer);
-  UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms);
-  UTIL_TIMER_Start(&TxTimer);
+  /* R3-01 (#215): re-arm against the ABSOLUTE science deadline instead of
+   * "now + interval". A bulk continuation (g_tx_state still BULK_TRANSFER at
+   * this point) re-points the timer at the existing deadline WITHOUT
+   * advancing it; only a serviced science cycle moves the deadline. */
+  RescheduleScienceTimer(plan.tx_interval_ms,
+                         g_tx_state != TX_STATE_BULK_TRANSFER);
   
   // Log power management status
   /* F27 FIX: integer-only print (no float printf support linked) */

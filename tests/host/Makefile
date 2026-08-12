@@ -47,6 +47,11 @@ TIMERIF_INCLUDES := $(INCLUDES) -I../../Utilities/timer
 # S-B behavioral against the real power_model.c.
 REVIEW0812_SRCS := test_review_20260812.c ../../Core/Src/power_model.c
 
+# 2026-08-12 stability & predictability deep review (R3 series, #215+):
+# scan-configured scheduler replay (test_burst_fsm.c precedent) for the
+# HAL-bound lora_app.c findings.
+DEEP_SRCS := test_deepreview_20260812.c
+
 # Sources #included by the test TUs (not linked separately) must still be
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
@@ -78,10 +83,16 @@ test_timerif$(EXE): $(TIMERIF_SRCS) ../../Core/Src/timer_if.c ../../Core/Inc/tim
 test_review0812$(EXE): $(REVIEW0812_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/main.c ../../Core/Src/usart_if.c ../../Core/Src/atgm336h.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(REVIEW0812_SRCS) -lm
 
+test_deepreview$(EXE): $(DEEP_SRCS) ../../LoRaWAN/App/lora_app.c
+	$(CC) $(CFLAGS) -o $@ $(DEEP_SRCS)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
-.PHONY: test flight findings burst stability multiregion baseline all clean
+deep: test_deepreview$(EXE)
+	./test_deepreview$(EXE)
+
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -108,7 +119,7 @@ timerif: test_timerif$(EXE)
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
@@ -117,6 +128,7 @@ baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EX
 	EXPECT_UNFIXED=1 ./test_multiregion$(EXE)
 	EXPECT_UNFIXED=1 ./test_timerif$(EXE)
 	EXPECT_UNFIXED=1 ./test_review0812$(EXE)
+	EXPECT_UNFIXED=1 ./test_deepreview$(EXE)
 
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
@@ -129,7 +141,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812
+all: test flight findings burst stability multiregion timerif review0812 deep
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_sanitize$(EXE)
