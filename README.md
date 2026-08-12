@@ -35,7 +35,13 @@ STM32CubeIDE / `arm-none-eabi-gcc` project (`.ioc`: `Radio_Sonde_E5_HF_EU.ioc`).
 
 ### Flight build (logging stripped)
 
-The default `Debug/` build is a **bench** build: all `SONDE_LOG` RTT output is compiled in. For flight, define `SONDE_FLIGHT_BUILD` (gate in `Core/Inc/sonde_log.h`, #47) to compile every debug/log line out. No committed build target sets this yet (tracked under #46); to produce a flight image from the generated `Debug/` makefiles, inject the define into the compile rules before building:
+The default `Debug/` build is a **bench** build: all `SONDE_LOG` RTT output is compiled in. For flight, define `SONDE_FLIGHT_BUILD` (gate in `Core/Inc/sonde_log.h`, #47) to compile every debug/log line out. **First-class target (F-009/#209):**
+
+```powershell
+.\build.ps1 -Flight
+```
+
+This injects the macro into the generated compile fragments with a loud-failure gate (a missed fragment aborts the build), builds from scratch, verifies the embedded `SONDE_BUILD:flight` marker in the binary, restores the fragments to bench default, and writes `dist/flight/` artifacts (`.bin`/`.elf`/`.map`) plus a manifest (git SHA, dirty status, toolchain version, SHA-256 hashes, timestamp, defines). On Linux CI the equivalent sed-injection recipe remains:
 
 ```sh
 cd Debug

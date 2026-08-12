@@ -51,3 +51,4 @@ LoRaWAN/App/se-identity.h
 
 # Local-only LLM workflow notes (never commit, per file header)
 docs/temp/
+`n# F-009 (#209): flight build artifacts`ndist/

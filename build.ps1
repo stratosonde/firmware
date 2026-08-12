@@ -16,6 +16,7 @@
 #>
 param(
     [switch]$Clean,
+    [switch]$Flight,
     [int]$Jobs = 8
 )
 
@@ -57,6 +58,39 @@ if (-not (Test-Path (Join-Path $debugDir "makefile"))) {
     exit 1
 }
 
+# ---------- F-009 (#209): first-class flight build ----------
+# Injects -DSONDE_FLIGHT_BUILD into the CubeMX-generated compile fragments
+# with the F12 (#173) loud-failure gate, forces a from-scratch build, verifies
+# the embedded SONDE_BUILD:flight marker in the binary, and emits an artifact
+# manifest. The fragments are restored afterwards so the tree stays
+# bench-default. Deliberately NOT a CubeMX make-target (regen would eat it).
+$subdirFiles = Get-ChildItem $debugDir -Filter "subdir.mk" -Recurse -ErrorAction SilentlyContinue |
+               Where-Object { $_.FullName -notlike "*\archive\*" }
+$fragmentBackup = @{}
+if ($Flight) {
+    Write-Host "`n>>> FLIGHT build: injecting -DSONDE_FLIGHT_BUILD into compile fragments" -ForegroundColor Magenta
+    foreach ($f in $subdirFiles) {
+        $fragmentBackup[$f.FullName] = Get-Content $f.FullName -Raw
+        $injected = $fragmentBackup[$f.FullName] -replace '-DDEBUG -DCORE_CM4', '-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4'
+        Set-Content -Path $f.FullName -Value $injected -NoNewline
+    }
+    # Loud-failure gate: every C-compile fragment (they carry -DCORE_CM4) must
+    # now carry the flight macro - otherwise we'd ship a "flight" binary that
+    # is not a flight build.
+    $missed = @()
+    foreach ($f in $subdirFiles) {
+        $c = Get-Content $f.FullName -Raw
+        if ($c -match 'DCORE_CM4' -and $c -notmatch 'DSONDE_FLIGHT_BUILD') { $missed += $f.FullName }
+    }
+    if ($missed.Count -gt 0) {
+        foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline }
+        Write-Error "FATAL: flight macro injection missed fragment(s): $($missed -join ', ')"
+        exit 1
+    }
+    Write-Host "Injected into $($subdirFiles.Count) fragments (gate passed)" -ForegroundColor Green
+    $Clean = $true   # flight builds are always from-scratch
+}
+
 # ---------- optional clean ----------
 if ($Clean) {
     Write-Host "`n>>> Cleaning build artifacts" -ForegroundColor Yellow
@@ -94,6 +128,7 @@ $jFlag = "-j$Jobs"
 Write-Host "`n>>> make -C Debug $jFlag all" -ForegroundColor Yellow
 & make -C $debugDir $jFlag all 2>&1 | Write-Host
 if ($LASTEXITCODE -ne 0) {
+    if ($Flight) { foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline } }
     Write-Error "Build FAILED"
     exit $LASTEXITCODE
 }
@@ -115,8 +150,65 @@ if (Test-Path $elfFile) {
     Write-Host "`nBinary size: $([math]::Round($fileSize / 1024, 1)) KB  ($binFile)" -ForegroundColor Green
     Write-Host "Build SUCCEEDED" -ForegroundColor Green
 } else {
+    if ($Flight) { foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline } }
     Write-Error "ELF file not found: $elfFile"
     exit 1
+}
+
+# ---------- F-009 (#209): flight verification + artifact manifest ----------
+if ($Flight) {
+    # Restore the bench-default fragments FIRST so a failure below cannot
+    # leave the tree in the flight configuration.
+    foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline }
+    Write-Host "`n>>> Compile fragments restored to bench default" -ForegroundColor Yellow
+
+    # Release gate: the binary must carry the embedded flight marker (F12/#173).
+    $binText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($binFile))
+    if (-not $binText.Contains("SONDE_BUILD:flight")) {
+        Write-Error "FATAL: SONDE_BUILD:flight marker missing from $binFile - refusing to package"
+        exit 1
+    }
+    if ($binText.Contains("SONDE_BUILD:debug")) {
+        Write-Error "FATAL: bench marker present in a flight binary - refusing to package"
+        exit 1
+    }
+    Write-Host "Marker gate: SONDE_BUILD:flight verified in binary" -ForegroundColor Green
+
+    # Manifest: everything needed to reproduce/identify this exact artifact.
+    $gitSha = (git rev-parse HEAD).Trim()
+    $gitDirty = if ((git status --porcelain).Length -gt 0) { "DIRTY" } else { "clean" }
+    $gccVersion = (& arm-none-eabi-gcc -dumpversion).Trim()
+    $binHash = (Get-FileHash $binFile -Algorithm SHA256).Hash
+    $elfHash = (Get-FileHash $elfFile -Algorithm SHA256).Hash
+    $mapFile = Join-Path $debugDir "Radio_Sonde_E5_HF_EU.map"
+
+    $distDir = Join-Path $PSScriptRoot "dist\flight"
+    New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+    Copy-Item $binFile (Join-Path $distDir "Radio_Sonde_E5_HF_EU_flight.bin") -Force
+    Copy-Item $elfFile (Join-Path $distDir "Radio_Sonde_E5_HF_EU_flight.elf") -Force
+    if (Test-Path $mapFile) { Copy-Item $mapFile (Join-Path $distDir "Radio_Sonde_E5_HF_EU_flight.map") -Force }
+
+    $manifest = @"
+stratosonde flight build manifest (F-009/#209)
+==============================================
+build_mode:        flight (SONDE_FLIGHT_BUILD)
+git_sha:           $gitSha
+git_tree:          $gitDirty
+build_timestamp:   $(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")
+compiler:          arm-none-eabi-gcc $gccVersion
+toolchain_dir:     $toolchainBin
+compile_defines:   -DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4 -DUSE_HAL_DRIVER -DSTM32WLE5xx
+embedded_marker:   SONDE_BUILD:flight (verified in binary)
+bin_sha256:        $binHash
+elf_sha256:        $elfHash
+bin_size_bytes:    $fileSize
+artifacts:         Radio_Sonde_E5_HF_EU_flight.bin / .elf / .map
+"@
+    $manifestPath = Join-Path $distDir "manifest.txt"
+    $manifest | Out-File -FilePath $manifestPath -Encoding ascii
+    Write-Host "`n>>> Flight artifacts + manifest:" -ForegroundColor Magenta
+    Write-Host $manifest
+    Write-Host "Written to $distDir" -ForegroundColor Green
 }
 
 exit 0
