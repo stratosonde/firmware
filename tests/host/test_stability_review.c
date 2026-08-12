@@ -811,6 +811,24 @@ static void test_f004_usart1_dma_symmetry(const char *msp)
     CHECK_REGRESSION(rx_deinit && irq_off && pending, "F-004");
 }
 
+/* ========================================================================== */
+/* F-006 (P1 design) — REGION_UNKNOWN disposition must stay documented         */
+/* ========================================================================== */
+/* The policy (keep current region + transmit on UNKNOWN) is safe ONLY
+ * because the h3lite dataset maps all land - UNKNOWN is ocean/uncovered
+ * water by construction. Pin the documented disposition at the policy site
+ * so a future dataset change without a policy revisit is caught. */
+static void test_f006_unknown_policy_documented(const char *app)
+{
+    printf("-- F-006 (P1 design): UNKNOWN=ocean-by-construction disposition documented\n");
+
+    bool doc = strstr(app, "maps ALL land") != NULL &&
+               strstr(app, "DEPENDENCY") != NULL;
+    printf("   all-land-mapped invariant + dataset dependency documented: %s\n",
+           doc ? "yes" : "no");
+    CHECK_REGRESSION(doc, "F-006");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -878,6 +896,8 @@ int main(void)
     test_f003_mission_survives_failover(mainsrc);
     printf("\n");
     test_f004_usart1_dma_symmetry(msp);
+    printf("\n");
+    test_f006_unknown_policy_documented(app_raw);  /* disposition lives in a comment - need the raw source */
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

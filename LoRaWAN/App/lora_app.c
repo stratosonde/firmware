@@ -1324,6 +1324,16 @@ static void SelectRegionAndSession(bool *rf_silence)
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
+        /* F-006 (#208, 2026-08-11 review disposition): the review warned that
+         * UNKNOWN conflates "open ocean" with "unmapped land", making
+         * continuation a regulatory hazard. DISPOSITION (documented product
+         * decision): the h3lite dataset maps ALL land - every terrestrial
+         * cell resolves to a region or to REGION_RESTRICTED - so UNKNOWN can
+         * only mean ocean/uncovered water BY CONSTRUCTION, which is exactly
+         * the case this keep-current-region-and-transmit policy exists for
+         * (blocking UNKNOWN darkened every ocean crossing). DEPENDENCY: if
+         * unmapped land ever enters the dataset, this policy must be
+         * revisited before flight. */
         SONDE_LOG_STR("UNKNOWN REGION (ocean/uncovered): Keeping current region, transmitting normally\r\n");
         // Do NOT return — continue with current region
       }
