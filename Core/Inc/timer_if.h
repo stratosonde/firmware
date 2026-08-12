@@ -62,6 +62,14 @@ extern "C" {
 UTIL_TIMER_Status_t TIMER_IF_Init(void);
 
 /**
+  * @brief Re-init after a runtime RTC backup-domain reset (F-002/#201).
+  *        Clears the one-shot guard and deliberately reconstructs every
+  *        assumption the reset invalidated. NOT a second-call-safe init.
+  * @return Status based on @ref UTIL_TIMER_Status_t
+  */
+UTIL_TIMER_Status_t TIMER_IF_ReInitAfterRtcReset(void);
+
+/**
   * @brief Set the alarm
   * @note The alarm is set at timeout from timer Reference (TimerContext)
   * @param timeout Duration of the Timer in ticks

@@ -226,6 +226,24 @@ UTIL_TIMER_Status_t TIMER_IF_Init(void)
   return ret;
 }
 
+/* USER CODE BEGIN ReInitAfterRtcReset */
+/* F-002 (#201): deliberate reconstruction after a runtime RTC backup-domain
+ * reset (the LSE->LSI failover). TIMER_IF_Init's one-shot RTC_Initialized
+ * guard makes a plain re-call a silent no-op - which is exactly what the
+ * old failover did: MX_RTC_Init re-armed Alarm A with AlarmMask=NONE,
+ * RtcTimerContext stayed stale against the restarted counter, the bypass-
+ * shadow setting was lost, and the MSB-tick epoch markers were wiped. The
+ * backup-domain reset also cleared the SysTime-valid magic, so the MSB
+ * epoch legitimately restarts at 0 here; mission state is snapshotted and
+ * repersisted by the caller (F-003/#203). */
+UTIL_TIMER_Status_t TIMER_IF_ReInitAfterRtcReset(void)
+{
+  TIMER_IF_StopTimer();
+  RTC_Initialized = false;
+  return TIMER_IF_Init();
+}
+/* USER CODE END ReInitAfterRtcReset */
+
 UTIL_TIMER_Status_t TIMER_IF_StartTimer(uint32_t timeout)
 {
   UTIL_TIMER_Status_t ret = UTIL_TIMER_OK;

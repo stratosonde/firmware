@@ -68,7 +68,50 @@ static inline HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (
 typedef struct { int _host_stub; } SPI_HandleTypeDef;
 typedef struct { int _host_stub; } I2C_HandleTypeDef;
 typedef struct { int _host_stub; } ADC_HandleTypeDef;
-typedef struct { int _host_stub; } RTC_HandleTypeDef;
+/* ---- RTC (F-002/#201: timer_if.c behavioral suite) ---- */
+typedef struct { volatile uint32_t SSR; } RTC_TypeDef;
+extern RTC_TypeDef g_host_rtc_regs;   /* test-defined; SSR drives the tick */
+#define RTC                 (&g_host_rtc_regs)
+typedef struct {
+    RTC_TypeDef *Instance;
+    struct { uint32_t RtcFeatures; } IsEnabled;
+} RTC_HandleTypeDef;
+typedef struct {
+    uint32_t BinaryAutoClr;
+    struct { uint32_t SubSeconds; } AlarmTime;
+    uint32_t AlarmMask;
+    uint32_t AlarmSubSecondMask;
+    uint32_t Alarm;
+} RTC_AlarmTypeDef;
+#define RTC_ALARM_A                        0u
+#define RTC_FLAG_ALRAF                     0x1u
+#define RTC_FORMAT_BCD                     0u
+#define RTC_ALARMMASK_NONE                 0u
+#define RTC_ALARMSUBSECONDBIN_AUTOCLR_NO   0u
+#define RTC_ALARMSUBSECONDBINMASK_NONE     0u
+#define RTC_BKP_DR0                        0u
+#define RTC_BKP_DR1                        1u
+#define RTC_BKP_DR2                        2u
+#define RTC_BKP_DR3                        3u
+#define RTC_BKP_DR4                        4u
+#define RTC_BKP_DR5                        5u
+#define RTC_BKP_DR6                        6u
+#define RTC_BKP_DR7                        7u
+#define RTC_BKP_DR8                        8u
+#define RTC_BKP_DR9                        9u
+#define RTC_BKP_DR10                       10u
+#define RTC_BKP_DR11                       11u
+#define RTC_BKP_DR12                       12u
+#define RTC_BKP_DR13                       13u
+#define RTC_BKP_DR14                       14u
+#define RTC_BKP_DR15                       15u
+#define __NOP()                            do { } while (0)
+#define __HAL_RTC_ALARM_CLEAR_FLAG(h, f)   do { (void)(h); (void)(f); } while (0)
+HAL_StatusTypeDef HAL_RTC_DeactivateAlarm(RTC_HandleTypeDef *hrtc, uint32_t Alarm);
+HAL_StatusTypeDef HAL_RTC_SetAlarm_IT(RTC_HandleTypeDef *hrtc, RTC_AlarmTypeDef *sAlarm, uint32_t Format);
+HAL_StatusTypeDef HAL_RTCEx_EnableBypassShadow(RTC_HandleTypeDef *hrtc);
+void HAL_RTCEx_BKUPWrite(RTC_HandleTypeDef *hrtc, uint32_t BackupRegister, uint32_t Data);
+uint32_t HAL_RTCEx_BKUPRead(RTC_HandleTypeDef *hrtc, uint32_t BackupRegister);
 /* ---- IWDG (multiregion_context.c joins) ---- */
 typedef struct { void *Instance; } IWDG_HandleTypeDef;
 static inline HAL_StatusTypeDef HAL_IWDG_Refresh(IWDG_HandleTypeDef *h) { (void)h; return HAL_OK; }

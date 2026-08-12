@@ -472,11 +472,12 @@ static void LSE_FailoverToLSI(void)
   MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
   /* RV-09 (#165): bare MX_RTC_Init left the timer subsystem inconsistent —
    * Alarm A re-armed with AlarmMask=NONE, RtcTimerContext stale against a
-   * restarted counter (alarms scheduled from it might never fire). Run the
-   * full timer post-init (DeactivateAlarm, bypass shadow, timer context,
-   * MSB-tick markers), same as the boot path. */
-  if (TIMER_IF_Init() != UTIL_TIMER_OK) {
-    SONDE_LOG_STR("ERROR: TIMER_IF_Init failed after LSI failover\r\n");
+   * restarted counter (alarms scheduled from it might never fire).
+   * F-002 (#201): TIMER_IF_Init's one-shot guard made that call a silent
+   * no-op; the deliberate reconstruction entry point actually does the work
+   * (DeactivateAlarm, bypass shadow, timer context, MSB-tick markers). */
+  if (TIMER_IF_ReInitAfterRtcReset() != UTIL_TIMER_OK) {
+    SONDE_LOG_STR("ERROR: TIMER_IF re-init failed after LSI failover\r\n");
   }
   SONDE_LOG_STR("WARNING: LSE died in flight - RTC on LSI (~1% drift)\r\n");
 }
