@@ -1098,18 +1098,30 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
   
   SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
+  /* R3-02 (#216): set conservative provenance BEFORE attempting the wake.
+   * If GNSS_WakeFromStandby fails we return immediately - previously the
+   * previous cycle's hgnss.data survived AND s_gnss_stale kept its last
+   * value (false after any good fix), so EnvSensors_MergeGnss archived the
+   * OLD coordinates as FRESH: wrong-but-plausible data, worse than none.
+   * Mark stale + invalidate first; the acquisition paths below re-clear
+   * stale only on a REAL fix. Last-known-good still lives in the
+   * last_valid_* statics. */
+  EnvSensors_MarkGnssStale(true);
+  /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA
+   * sentences. This prevents reusing data from the previous cycle (which
+   * would give false 0ms TTF).
+   * R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
+   * partial sentence must never meet last cycle's sats/hdop/lat/lon. */
+  memset(&hgnss.data, 0, sizeof(hgnss.data));
+
   if (GNSS_WakeFromStandby(&hgnss) != GNSS_OK)
   {
+    /* Data already invalidated + marked stale above: the science record
+     * shows GNSS-unavailable (zeros + stale), never old-but-fresh. */
     SONDE_LOG_STR("GPS: Wake from standby failed!\r\n");
     return false;
   }
 
-    /* CRITICAL: Invalidate old GPS data to force waiting for fresh NMEA sentences */
-    /* This prevents reusing data from previous cycle (which would give false 0ms TTF) */
-    /* R31 (#57): FULL invalidation — the GGA parser skips empty tokens, so a
-     * partial sentence must never meet last cycle's sats/hdop/lat/lon.
-     * Last-known-good lives in the last_valid_* statics below. */
-    memset(&hgnss.data, 0, sizeof(hgnss.data));
     SONDE_LOG_STR("GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
     
     gps_start = HAL_GetTick();

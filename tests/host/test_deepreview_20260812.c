@@ -225,6 +225,46 @@ static void test_r301_bulk_starvation(const char *app)
     CHECK(max_gap1 <= SCIENCE_INTERVAL_S + ALLOWED_JITTER_S);
 }
 
+/* True if needle occurs in [start, limit). */
+static bool occurs_before(const char *start, const char *limit, const char *needle)
+{
+    const char *hit = strstr(start, needle);
+    return hit != NULL && hit < limit;
+}
+
+/* ------------------------------------------------------------------ */
+/* R3-02 — GNSS wake failure must not archive a previous fix as FRESH  */
+/* ------------------------------------------------------------------ */
+static void test_r302_gnss_wake_stale(const char *app)
+{
+    printf("-- R3-02 (P1, #216): GNSS wake failure must not keep a previous fix FRESH\n");
+
+    const char *sig = strstr(app, "static bool AcquireGnssFix(");
+    CHECK(sig != NULL);
+    if (!sig) return;
+    const char *wake = strstr(sig, "GNSS_WakeFromStandby(&hgnss)");
+    CHECK(wake != NULL);
+    if (!wake) return;
+
+    /* Conservative provenance BEFORE the wake attempt: if the wake fails the
+     * function returns immediately, and any state set only AFTER this point
+     * is skipped - the previous cycle's hgnss.data and stale flag then flow
+     * into EnvSensors_MergeGnss as a FRESH fix. */
+    bool stale_first = occurs_before(sig, wake, "EnvSensors_MarkGnssStale(true)");
+    bool inval_first = occurs_before(sig, wake, "memset(&hgnss.data, 0");
+    printf("   stale-marked before wake: %s | working data invalidated before wake: %s\n",
+           stale_first ? "yes" : "NO (defect)",
+           inval_first ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(stale_first, "R3-02-stale-first");
+    CHECK_REGRESSION(inval_first, "R3-02-invalidate-first");
+
+    /* Guard: the acquisition-timeout path must STILL mark last-known stale
+     * (post-fix there must remain a stale mark after the wake call too). */
+    CHECK(strstr(wake, "EnvSensors_MarkGnssStale(true)") != NULL);
+    /* Guard: a real fix still clears the flag. */
+    CHECK(strstr(wake, "EnvSensors_MarkGnssStale(false)") != NULL);
+}
+
 int main(void)
 {
     char *app = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -232,6 +272,8 @@ int main(void)
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
     test_r301_bulk_starvation(app);
+    printf("\n");
+    test_r302_gnss_wake_stale(app);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
