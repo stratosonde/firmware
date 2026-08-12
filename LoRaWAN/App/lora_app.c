@@ -57,6 +57,8 @@
 #include "RegionEU868.h"
 #include "RegionAS923.h"
 #include "RegionAU915.h"
+#include "RegionIN865.h"      /* R7 (#193): all six advertised regions need a complete SF mapping */
+#include "RegionKR920.h"
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -656,6 +658,14 @@ static int8_t DatarateFromSF(uint8_t sf)
       table = DataratesAS923; table_len = sizeof(DataratesAS923); break;
     case LORAMAC_REGION_AU915:
       table = DataratesAU915; table_len = sizeof(DataratesAU915); break;
+    /* R7 (#193): the firmware advertises six regions - the resolver must not
+     * drop IN865/KR920 into the default fallback (LORAWAN_DEFAULT_DATA_RATE
+     * is not necessarily valid for the active region; the MAC rejects the
+     * uplink). Six advertised, six mapped. */
+    case LORAMAC_REGION_IN865:
+      table = DataratesIN865; table_len = sizeof(DataratesIN865); break;
+    case LORAMAC_REGION_KR920:
+      table = DataratesKR920; table_len = sizeof(DataratesKR920); break;
     default:
       return LORAWAN_DEFAULT_DATA_RATE;
   }

@@ -589,6 +589,28 @@ static void test_r6_provisioning_no_flight(const char *app)
     CHECK_REGRESSION(!enters_flight, "R6");
 }
 
+/* ========================================================================== */
+/* R7 (P1) — every advertised region needs a complete DatarateFromSF mapping   */
+/* ========================================================================== */
+/* DatarateFromSF covered only US915/EU868/AS923/AU915; IN865/KR920 fell into
+ * the default branch (LORAWAN_DEFAULT_DATA_RATE - not necessarily valid for
+ * the active region, MAC rejects the uplink). Invariant: all six advertised
+ * regions have an explicit table case.
+ */
+static void test_r7_region_completeness(const char *app)
+{
+    printf("-- R7 (P1): DatarateFromSF must cover all six advertised regions\n");
+
+    const char *tables[] = { "DataratesUS915", "DataratesEU868", "DataratesAS923",
+                             "DataratesAU915", "DataratesIN865", "DataratesKR920" };
+    int covered = 0;
+    for (int i = 0; i < 6; i++) {
+        if (strstr(app, tables[i]) != NULL) covered++;
+    }
+    printf("   region datarate tables referenced: %d/6\n", covered);
+    CHECK_REGRESSION(covered == 6, "R7");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -635,6 +657,8 @@ int main(void)
     test_r5_boot_region_anchor(app);
     printf("\n");
     test_r6_provisioning_no_flight(app);
+    printf("\n");
+    test_r7_region_completeness(app);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
