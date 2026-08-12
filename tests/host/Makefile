@@ -92,7 +92,11 @@ review0812: test_review0812$(EXE)
 deep: test_deepreview$(EXE)
 	./test_deepreview$(EXE)
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep
+# R3-11 (#223): DDR identity integrity against the canonical manifest.
+ddrmanifest:
+	python3 ../../tools/check_ddr_manifest.py
+
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep ddrmanifest
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -141,7 +145,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep
+all: test flight findings burst stability multiregion timerif review0812 deep ddrmanifest
 
 clean:
 	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_sanitize$(EXE)

@@ -9,29 +9,35 @@ Migration rule: a legacy record may be retired only when no unique design knowle
 
 ## V2 Records
 
+**Canonical identity: `manifest.yaml` (R3-11/#223)** — validated in CI by
+`tools/check_ddr_manifest.py`. This table was renumbered 2026-08-12 to match
+the actual files (it previously showed the pre-2026-08-09 numbering, +13).
+Bare references to 0014-0021 are ambiguous across generations; the manifest
+`aliases` section records the old mapping.
+
 | DDR | Title | Status |
 |---|---|---|
-| 0014 | Energy-Gated Resilient Wake Cycle | Draft — open questions resolved by 0029/0032 |
-| 0015 | Mission Lifecycle, Privacy, and Energy-Sustainable Cadence | Draft |
-| 0016 | GNSS Position, Time, Provenance, and Stale-Data Semantics | Draft |
-| 0017 | Immutable Circular Science Archive and Record Identity | Draft |
-| 0018 | Live Telemetry and Archive Delivery Protocol | Draft — radio mechanics bound by 0032 |
-| 0019 | LoRaWAN Region Selection and Open-Ocean Probing | Draft — stale-position follow-up resolved by 0028 |
-| 0020 | RF Transmission Authorization and Restricted-Region Policy | Draft — stale-position follow-up resolved by 0028 |
-| 0021 | Predictive Satellite Opportunity Scheduling | Proposed — future scope, not first flight |
-| 0022 | Fail-Soft Operation and Deterministic Fault Recovery | Draft |
-| 0023 | Persistent Mission State and Clean Reset Recovery | Draft |
-| 0024 | Persistent Storage Integrity and Recovery Mechanics | Draft |
-| 0025 | Boot Sequence and Startup Recovery | Draft |
-| 0026 | Time Authority, RTC Continuity, and Monotonic Mission Time | Draft |
-| 0027 | Configuration Management and Future Remote Commands | Proposed — future-oriented; power follow-up resolved by 0029 |
-| 0028 | Stale-Position RF Legality and the Staleness Budget | Draft — resolved 2026-08-09 |
-| 0029 | Power-Management and Energy-Adaptation Policy | Draft — thresholds pending battery profiling (OD-PWR-001) |
-| 0030 | Qwiic Expansion and Application Services | Draft — resolved 2026-08-09 |
-| 0031 | Commissioning and LoRaWAN Session Bootstrap | Draft — resolved 2026-08-09 |
-| 0032 | Radio and Payload Policy Bindings | Draft — resolved 2026-08-09 |
-| 0033 | Watchdog and Progress Supervision | Draft — resolved 2026-08-09 |
-| 0034 | GNSS Receiver Configuration Policy | Draft — resolved 2026-08-09 |
+| 0001 | Energy-Gated Resilient Wake Cycle | Draft — open questions resolved by DDR-0016/0019 |
+| 0002 | Mission Lifecycle, Privacy, and Energy-Sustainable Cadence | Draft |
+| 0003 | GNSS Position, Time, Provenance, and Stale-Data Semantics | Draft |
+| 0004 | Immutable Circular Science Archive and Record Identity | Draft |
+| 0005 | Live Telemetry and Archive Delivery Protocol | Draft — radio mechanics bound by DDR-0019 |
+| 0006 | LoRaWAN Region Selection and Open-Ocean Probing | Draft — stale-position follow-up resolved by DDR-0015 |
+| 0007 | RF Transmission Authorization and Restricted-Region Policy | Draft — stale-position follow-up resolved by DDR-0015 |
+| 0008 | Predictive Satellite Opportunity Scheduling | Proposed — future scope, not first flight |
+| 0009 | Fail-Soft Operation and Deterministic Fault Recovery | Draft |
+| 0010 | Persistent Mission State and Clean Reset Recovery | Draft |
+| 0011 | Persistent Storage Integrity and Recovery Mechanics | Draft |
+| 0012 | Boot Sequence and Startup Recovery | Draft |
+| 0013 | Time Authority, RTC Continuity, and Monotonic Mission Time | Draft |
+| 0014 | Configuration Management and Future Remote Commands | Proposed — future-oriented; power follow-up resolved by DDR-0016 |
+| 0015 | Stale-Position RF Legality and the Staleness Budget | Draft — resolved 2026-08-09 |
+| 0016 | Power-Management and Energy-Adaptation Policy | Draft — thresholds pending battery profiling (OD-PWR-001) |
+| 0017 | Qwiic Expansion and Application Services | Draft — resolved 2026-08-09 |
+| 0018 | Commissioning and LoRaWAN Session Bootstrap | Draft — resolved 2026-08-09 |
+| 0019 | Radio and Payload Policy Bindings | Draft — resolved 2026-08-09 |
+| 0020 | Watchdog and Progress Supervision | Draft — resolved 2026-08-09 |
+| 0021 | GNSS Receiver Configuration Policy | Draft — resolved 2026-08-09 |
 
 ## Legacy Migration Coverage Matrix
 

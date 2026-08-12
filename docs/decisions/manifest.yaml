@@ -1,0 +1,59 @@
+# Canonical DDR manifest (R3-11, #223). This file is the single source of
+# truth for DDR identity. Validated by tools/check_ddr_manifest.py, wired
+# into `make -C tests/host all` (CI gate).
+#
+# Rules:
+# - an ID, once assigned, NEVER changes meaning; retire, never renumber
+# - every docs/decisions/NNNN-*.md file appears here exactly once
+# - filename number == id number
+# - aliases record the 2026-08-09 renumber generation (README table era);
+#   new prose must use canonical IDs only
+
+records:
+  - { id: DDR-0001, file: 0001-energy-gated-resilient-wake-cycle.md, title: Energy-Gated Resilient Wake Cycle, status: Draft }
+  - { id: DDR-0002, file: 0002-mission-lifecycle-privacy-adaptive-cadence.md, title: Mission Lifecycle, Privacy, and Energy-Sustainable Cadence, status: Draft }
+  - { id: DDR-0003, file: 0003-gnss-time-position-provenance.md, title: GNSS Position, Time, Provenance, and Stale-Data Semantics, status: Draft }
+  - { id: DDR-0004, file: 0004-immutable-circular-science-archive.md, title: Immutable Circular Science Archive and Record Identity, status: Draft }
+  - { id: DDR-0005, file: 0005-live-telemetry-and-archive-delivery-protocol.md, title: Live Telemetry and Archive Delivery Protocol, status: Draft }
+  - { id: DDR-0006, file: 0006-lorawan-region-selection-open-ocean.md, title: LoRaWAN Region Selection and Open-Ocean Probing, status: Draft }
+  - { id: DDR-0007, file: 0007-rf-transmission-authorization-restricted-region.md, title: RF Transmission Authorization and Restricted-Region Policy, status: Draft }
+  - { id: DDR-0008, file: 0008-predictive-satellite-opportunity-scheduling.md, title: Predictive Satellite Opportunity Scheduling, status: Proposed }
+  - { id: DDR-0009, file: 0009-fail-soft-operation-deterministic-fault-recovery.md, title: Fail-Soft Operation and Deterministic Fault Recovery, status: Draft }
+  - { id: DDR-0010, file: 0010-persistent-mission-state-clean-reset-recovery.md, title: Persistent Mission State and Clean Reset Recovery, status: Draft }
+  - { id: DDR-0011, file: 0011-persistent-storage-integrity-recovery-mechanics.md, title: Persistent Storage Integrity and Recovery Mechanics, status: Draft }
+  - { id: DDR-0012, file: 0012-boot-sequence-startup-recovery.md, title: Boot Sequence and Startup Recovery, status: Draft }
+  - { id: DDR-0013, file: 0013-time-authority-rtc-monotonic-mission-time.md, title: Time Authority, RTC Continuity, and Monotonic Mission Time, status: Draft }
+  - { id: DDR-0014, file: 0014-configuration-management-future-remote-commands.md, title: Configuration Management and Future Remote Commands, status: Proposed }
+  - { id: DDR-0015, file: 0015-stale-position-rf-legality.md, title: Stale-Position RF Legality and the Staleness Budget, status: Draft }
+  - { id: DDR-0016, file: 0016-power-management-energy-adaptation-policy.md, title: Power-Management and Energy-Adaptation Policy, status: Draft }
+  - { id: DDR-0017, file: 0017-qwiic-expansion-application-services.md, title: Qwiic Expansion and Application Services, status: Draft }
+  - { id: DDR-0018, file: 0018-commissioning-session-bootstrap.md, title: Commissioning and LoRaWAN Session Bootstrap, status: Draft }
+  - { id: DDR-0019, file: 0019-radio-payload-policy-bindings.md, title: Radio and Payload Policy Bindings, status: Draft }
+  - { id: DDR-0020, file: 0020-watchdog-progress-supervision.md, title: Watchdog and Progress Supervision, status: Draft }
+  - { id: DDR-0021, file: 0021-gnss-receiver-configuration-policy.md, title: GNSS Receiver Configuration Policy, status: Draft }
+
+# Retired aliases from the pre-2026-08-09 V2 numbering (README table era).
+# Alias references in older prose still resolve, but are reported as
+# warnings; new text must use canonical IDs.
+aliases:
+  - { alias: DDR-0014, of: DDR-0001 }
+  - { alias: DDR-0015, of: DDR-0002 }
+  - { alias: DDR-0016, of: DDR-0003 }
+  - { alias: DDR-0017, of: DDR-0004 }
+  - { alias: DDR-0018, of: DDR-0005 }
+  - { alias: DDR-0019, of: DDR-0006 }
+  - { alias: DDR-0020, of: DDR-0007 }
+  - { alias: DDR-0021, of: DDR-0008 }
+  - { alias: DDR-0022, of: DDR-0009 }
+  - { alias: DDR-0023, of: DDR-0010 }
+  - { alias: DDR-0024, of: DDR-0011 }
+  - { alias: DDR-0025, of: DDR-0012 }
+  - { alias: DDR-0026, of: DDR-0013 }
+  - { alias: DDR-0027, of: DDR-0014 }
+  - { alias: DDR-0028, of: DDR-0015 }
+  - { alias: DDR-0029, of: DDR-0016 }
+  - { alias: DDR-0030, of: DDR-0017 }
+  - { alias: DDR-0031, of: DDR-0018 }
+  - { alias: DDR-0032, of: DDR-0019 }
+  - { alias: DDR-0033, of: DDR-0020 }
+  - { alias: DDR-0034, of: DDR-0021 }
