@@ -8,8 +8,12 @@
   * Design Principles:
   *   1. Power-safe: Uses ping-pong headers and append-only writes
   *   2. Self-describing: Each record has magic number and CRC32
-  *   3. FIFO drain: Oldest unsent records are bulk-transmitted first so the
-  *      transmitted watermark advances monotonically (see C4/F15)
+  *   3. One-pass recovery (R3-04, #218 / DDR-0005 BR-TX-008..011): newest
+ *      records are sent FIRST; the recovery watermark advances AT SEND TIME
+ *      (never on ACK); the walker never autonomously resends a record.
+ *      Backend owns gap repair (BR-TX-012). Supersedes the legacy FIFO drain
+ *      / commit-on-ACK watermark (C4/F15);
+ *      see the v5 migration note at FLASH_LOG_HEADER_VERSION.
   *   4. Expandable: 64-byte records with reserved space for future fields
   *
   * Memory Layout (2MB W25Q16JV), T4 / FlashStorageNotes.md:
@@ -52,8 +56,16 @@ extern "C" {
  *  v3 (T4): headers moved to separate sectors 0/1, data starts at sector 2.
  *  v4 (D5/#35): record layout — altitude_gps int32, altitude_bar deleted,
  *  solar_mv/voltage_slope/power_mode added. Old v3 headers fail validation
- *  -> clean init (acceptable pre-launch). */
-#define FLASH_LOG_HEADER_VERSION  4
+ *  -> clean init (acceptable pre-launch).
+ *  v5 (R3-04/#218, DDR-0005 one-pass recovery): SEMANTICS of two existing
+ *  fields change — last_transmitted_seq becomes tx_high_water (highest seq
+ *  ever sent, monotonic up) and reserved[0] becomes recovery_frontier
+ *  (walker visited every seq >= frontier, monotonic down). Same struct
+ *  layout/size; v4 headers are ACCEPTED and migrated (frontier =
+ *  next_sequence: the retained archive is re-walked once, newest-first;
+ *  the backend dedupes by sequence). */
+#define FLASH_LOG_HEADER_VERSION  5
+#define FLASH_LOG_HEADER_VERSION_LEGACY_FIFO  4
 
 /** @brief Record size in bytes (must be power of 2 for efficiency) */
 #define FLASH_LOG_RECORD_SIZE     64
@@ -146,8 +158,13 @@ typedef struct __attribute__((packed)) {
     uint32_t sequence;          /**< Header update sequence (for ping-pong selection) */
     uint32_t oldest_addr;       /**< Address of oldest valid record */
     uint32_t flags;             /**< Status flags */
-    uint32_t last_transmitted_seq; /**< Last transmitted sequence (persisted for reboot recovery) */
-    uint32_t reserved[2];       /**< Reserved for future use */
+    uint32_t last_transmitted_seq; /**< v5: TX HIGH WATER - highest sequence ever
+                                        handed to the radio (monotonic up).
+                                        (v4: rising FIFO commit watermark) */
+    uint32_t reserved[2];       /**< reserved[0] v5: RECOVERY FRONTIER - the
+                                        one-pass walker has visited every
+                                        sequence >= frontier (monotonic
+                                        down); reserved[1] free */
     uint32_t crc32;             /**< CRC32 of preceding bytes */
 } FlashLog_Header_t;
 
@@ -161,10 +178,11 @@ typedef struct {
     uint32_t oldest_addr;       /**< Cached oldest record address */
     uint32_t record_count;      /**< Cached total record count */
     uint32_t next_sequence;     /**< Next record sequence number */
-    uint32_t last_transmitted_sequence; /**< Sequence number of last transmitted record */
+    uint32_t tx_high_water;     /**< v5: highest sequence ever handed to the radio (monotonic up) */
+    uint32_t recovery_frontier; /**< v5: one-pass walker watermark — every seq >= frontier visited (monotonic down) */
     uint32_t header_generation; /**< F-007/R12 (#50): monotonic header generation, incremented every write */
     uint8_t active_header;      /**< Active header slot (0 or 1) */
-    uint8_t sync_deferred;      /**< Finding #8: CommitThrough skips SyncHeader while set (bulk burst) */
+    uint8_t sync_deferred;      /**< Finding #8: MarkRecoverySent skips SyncHeader while set (bulk burst) */
     uint8_t header_dirty;       /**< Finding #8: watermark advanced past the last persisted header */
 } FlashLog_HandleTypeDef;
 
@@ -288,51 +306,45 @@ FlashLog_StatusTypeDef FlashLog_GetStats(FlashLog_HandleTypeDef *hlog,
 bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog);
 
 /**
-  * @brief  Get unsent records for bulk transmission
+  * @brief  R3-04 (#218, DDR-0005 BR-TX-008): get records for one-pass
+  *         archive recovery, NEWEST FIRST. The sendable set is the union of
+  *         pending-live records (seq > tx_high_water, not yet sent by any
+  *         path) and walker-eligible records (oldest_seq <= seq <
+  *         recovery_frontier). Corrupt/torn records are skipped and counted;
+  *         a contiguous corrupt run at the leading edge is retired
+  *         immediately (never wedge, T4/RV-01 discipline).
   * @param  hlog: Pointer to flash log handle
-  * @param  records: Array to store unsent records
-  * @param  max_count: Maximum records to read (typically 6 for 222-byte packet)
+  * @param  records: Array to store records (descending sequence order)
+  * @param  max_count: Maximum records to read
   * @param  actual_count: Pointer to store actual number read
-  * @retval FlashLog_StatusTypeDef
-  * @note   F26: despite the name, returns OLDEST unsent first (FIFO) so the
-  *         transmitted watermark advances monotonically. Corrupt/torn records
-  *         are skipped (watermark advanced past them) — never wedge (T4).
+  * @param  skipped_count: Pointer to store corrupt-skip count (may be NULL)
+  * @retval FlashLog_StatusTypeDef (FLASH_LOG_ERROR_EMPTY when nothing sendable)
   */
-/* FW-19: renamed ...LIFO -> ...FIFO. The name was stale from before the C4
- * fix — the implementation reads FIFO (oldest unsent first) so that
- * MarkRecordsTransmitted advances last_transmitted_sequence from the old end. */
-FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
-                                                     FlashLog_Record_t *records,
-                                                     uint32_t max_count,
-                                                     uint32_t *actual_count,
-                                                     uint32_t *skipped_count);
+FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
+                                                   FlashLog_Record_t *records,
+                                                   uint32_t max_count,
+                                                   uint32_t *actual_count,
+                                                   uint32_t *skipped_count);
 
 /**
-  * @brief  Mark records as transmitted to avoid retransmission
+  * @brief  R3-04 (#218, DDR-0005 BR-TX-009/010): advance the one-pass
+  *         watermark AT SEND TIME for one record. seq > tx_high_water raises
+  *         the high water; seq < recovery_frontier lowers the frontier. The
+  *         walker never revisits a record autonomously; there is no ACK
+  *         retry (BR-TX-011). Respects DeferHeaderSync batching (#8).
   * @param  hlog: Pointer to flash log handle
-  * @param  count: Number of newest records to mark as transmitted
+  * @param  sequence: the sequence just handed to the radio
   * @retval FlashLog_StatusTypeDef
   */
-FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count);
-
-/**
-  * @brief  Commit all records through an absolute sequence (exclusive)
-  * @param  hlog: Pointer to flash log handle
-  * @param  through_sequence: first sequence NOT yet transmitted
-  * @retval FlashLog_StatusTypeDef
-  * @note   R2-02 (#106): preferred over the count-based API - immune to the
-  *         read-path wrap clamp moving the watermark under the caller.
-  *         Monotonic: never moves the watermark backward.
-  */
-FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint32_t through_sequence);
+FlashLog_StatusTypeDef FlashLog_MarkRecoverySent(FlashLog_HandleTypeDef *hlog, uint32_t sequence);
 
 /**
   * @brief  Defer header persistence (finding #8, 2026-08-10): while deferred,
-  *         CommitThrough advances the RAM watermark only — no sector erase per
-  *         ACKed packet. Call FlashLog_FlushHeaderSync() once at burst end.
-  *         Safe under R2-02 absolute-commit semantics: a mid-burst reset
-  *         replays from the last synced watermark (backend dedupes by
-  *         sequence) — conservative direction only.
+  *         FlashLog_MarkRecoverySent advances the RAM watermarks only — no
+  *         sector erase per sent packet. Call FlashLog_FlushHeaderSync() once
+  *         at burst end. A mid-burst reset replays from the last synced
+  *         watermarks (backend dedupes by sequence) — conservative direction
+  *         only.
   */
 void FlashLog_DeferHeaderSync(FlashLog_HandleTypeDef *hlog);
 

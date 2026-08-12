@@ -182,7 +182,7 @@ typedef enum { ST_PROBE, ST_WAIT_PROBE_ACK, ST_BULK, ST_COMPLETE } TxState_t;
 
 static TxState_t g_tx_state;
 static int  g_bulk_packets_sent;
-static int  g_bulk_commit_through;
+/* R3-04 (#218): g_bulk_commit_through deleted - one-pass advance at send. */
 
 /* environment knobs */
 static bool env_has_unsent, env_ack, env_linkcheck, env_batt_good;
@@ -192,7 +192,7 @@ static int  env_margin, env_gateways;
 static bool seq_task_armed;
 static int  obs_archive_packets;     /* archive uplinks actually built */
 static int  obs_heartbeats;          /* confirmed probe uplinks */
-static int  obs_commits;             /* FlashLog_CommitThrough calls */
+static int  obs_commits;             /* R3-04: send-time watermark advances */
 static int  obs_nvm_tx_counter;      /* the every-10th-TX NVM store counter */
 static int  obs_ctx_saves;           /* MultiRegion_SaveCurrentContext calls */
 static bool obs_onrxdata_branch;     /* OnRxData packet-1 branch reached */
@@ -201,7 +201,6 @@ static void reset_world(void)
 {
     g_tx_state = ST_PROBE;
     g_bulk_packets_sent = 0;
-    g_bulk_commit_through = 0;
     env_has_unsent = true; env_ack = true; env_linkcheck = true; env_batt_good = true;
     env_margin = LINK_MARGIN_THRESHOLD + 5;
     env_gateways = GATEWAY_COUNT_THRESHOLD + 2;
@@ -221,10 +220,8 @@ static void OnTxData(bool is_mcps_confirm, bool status_ok, bool ack_received)
         obs_nvm_tx_counter++;
     }
 
-    if (g_bulk_commit_through > 0) {
-        if (status_ok && ack_received) obs_commits++;
-        g_bulk_commit_through = 0;
-    }
+    /* R3-04 (#218): commit-on-ACK block deleted - unconfirmed one-pass sends
+     * advance the watermark at send time (modeled in SendTxData). */
 
     if (g_tx_state == ST_WAIT_PROBE_ACK) {
         if (status_ok && ack_received) {
@@ -240,10 +237,8 @@ static void OnTxData(bool is_mcps_confirm, bool status_ok, bool ack_received)
         }
     }
 
-    if (g_tx_state == ST_BULK && g_bulk_packets_sent >= 1 && !ack_received) {
-        g_tx_state = ST_COMPLETE;
-        g_bulk_packets_sent = 0;
-    }
+    /* R3-04 (#218): the unACKed-archive fallback is deleted - archive frames
+     * are unconfirmed (BR-TX-011); AckReceived is meaningless for them. */
 
     /* the tail under test */
     if (g_tx_state == ST_BULK && g_bulk_packets_sent > 1) {
@@ -300,7 +295,7 @@ static bool SendTxData(bool *carried_linkcheckreq)
             *carried_linkcheckreq = (g_bulk_packets_sent == 0);  /* protocol §5.2 */
             g_bulk_packets_sent++;
             obs_archive_packets++;
-            g_bulk_commit_through = 1000 + g_bulk_packets_sent;
+            obs_commits++;   /* R3-04: watermark advance AT SEND TIME */
             if (!env_has_unsent || g_bulk_packets_sent >= MAX_BULK_PACKETS_PER_CYCLE)
                 g_tx_state = ST_COMPLETE;
             return true;
@@ -412,16 +407,19 @@ static void test_onrxdata_owns_packet_one(void)
     CHECK_REGRESSION(obs_archive_packets == 1, "BURST-01");
 }
 
-/* T-B5: DDR-0005 — an unACKed archive packet ends the burst and must not
- * commit. Guards the fix against over-correction. */
+/* T-B5: DDR-0005 BR-TX-003/004 — the compact probe stays CONFIRMED and its
+ * ACK gates the archive opportunity: no probe ACK, no recovery at all.
+ * (R3-04/#218 reframing: archive frames themselves are unconfirmed
+ * one-pass; the legacy "unACKed archive ends the burst" rule is gone.) */
 static void test_unacked_archive_packet_falls_back(void)
 {
-    printf("-- T-B5 / DDR-0005: unACKed archive packet ends the burst, no commit\n");
+    printf("-- T-B5 / DDR-0005: no probe ACK -> no archive opportunity\n");
     reset_world();
     env_ack = false;
     (void)run_cycle(200);
-    printf("   archive packets=%d  commits=%d (want 0)\n",
+    printf("   archive packets=%d  sends-marked=%d (want 0)\n",
            obs_archive_packets, obs_commits);
+    CHECK(obs_archive_packets == 0);
     CHECK(obs_commits == 0);
     CHECK(g_tx_state != ST_BULK);
 }

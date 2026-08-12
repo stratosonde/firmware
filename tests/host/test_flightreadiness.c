@@ -160,7 +160,7 @@ static void test_bulk_identity_with_skips(void)
     }
 
     /* Non-contiguous batch: record 101 was corrupt and skipped by
-     * FlashLog_GetUnsentRecordsFIFO, so the array holds sequences
+     * FlashLog_GetRecoveryRecords, so the array holds sequences
      * {100, 102, 103}. v5 must report exactly {100, 102, 103}. */
     {
         HighResTelemetryRecord_t recs[3];
@@ -233,16 +233,20 @@ static void test_flashlog_basic_roundtrip(void)
     CHECK_EQ_I(FlashLog_ReadRecord(&hlog, &r, 4), FLASH_LOG_OK);
     CHECK_EQ_I(r.sequence, 0);
 
-    /* FIFO read returns oldest-unsent first */
+    /* R3-04 (#218): recovery read; a fresh log is all pending-live, read
+     * ascending from the high water. */
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
-    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
     CHECK_EQ_I(got, 5);
     CHECK_EQ_I(skipped, 0);
     CHECK_EQ_I(batch[0].sequence, 0);
     CHECK_EQ_I(batch[4].sequence, 4);
 
-    CHECK_EQ_I(FlashLog_MarkRecordsTransmitted(&hlog, 5), FLASH_LOG_OK);
+    /* advance at send time, per record */
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
     CHECK(!FlashLog_HasUnsentData(&hlog));
 
     fake_w25q_free();
@@ -298,14 +302,14 @@ static void test_erase_ahead_slack(void)
 /* ========================================================================== */
 /* T-5 / T-6 — corrupt-record skip accounting                                 */
 /* ========================================================================== */
-/* The composition rule that FR-08 and FR-09 are about lives in lora_app.c and
- * is not host-compilable. What IS testable here is the contract
- * GetUnsentRecordsFIFO exports to that caller — if this contract is not what
- * lora_app.c assumes, the caller cannot be correct. These tests pin the
- * contract so the FR-08/FR-09 rework has something to build against. */
+/* The composition rule that FR-08 and FR-09 were about lived in lora_app.c.
+ * R3-04 (#218) removed it: marking is per-record by absolute sequence
+ * (FlashLog_MarkRecoverySent), so no count arithmetic exists to go wrong.
+ * What remains load-bearing is the READ contract: gaps are surfaced, not
+ * hidden. */
 static void test_fifo_skip_contract(void)
 {
-    printf("-- T-5/T-6 / FR-08,FR-09: FIFO skip accounting contract\n");
+    printf("-- T-5/T-6 / FR-08,FR-09 + R3-04: recovery read skip contract\n");
 
     fake_w25q_init();
     W25Q_HandleTypeDef hw;
@@ -323,30 +327,29 @@ static void test_fifo_skip_contract(void)
 
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
-    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
 
     CHECK_EQ_I(skipped, 1);
     CHECK_EQ_I(got, 5);
 
-    /* Contract the caller depends on: the returned array is NOT contiguous in
-     * sequence. lora_app.c's base_seq + i assumption is therefore unsound —
-     * this is the machine-checkable statement of FR-07. */
+    /* The returned array is NOT contiguous in sequence (the machine-checkable
+     * statement of FR-07): the v6 wire format carries per-record explicit
+     * sequence identity precisely because of this. */
     CHECK_EQ_I(batch[0].sequence, 0);
     CHECK_EQ_I(batch[1].sequence, 1);
     CHECK_EQ_I(batch[2].sequence, 3);   /* NOT 2 — the gap */
     CHECK(batch[2].sequence != batch[1].sequence + 1U);
 
-    /* FR-08: the watermark is count-based, so committing (packed + skipped)
-     * is only correct when every skip precedes the packing cut. Here a caller
-     * that packed only batch[0..1] (budget-limited) and marked
-     * 2 + skipped(1) = 3 would retire sequences 0,1,2 — retiring the corrupt
-     * record 2 that sits AFTER the cut is fine, but the same arithmetic with
-     * a trailing corrupt record silently retires an untransmitted good one.
-     * Pin the entry watermark so the rework has a fixed reference. */
-    CHECK_EQ_I(hlog.last_transmitted_sequence, 0);
-    CHECK_EQ_I(FlashLog_MarkRecordsTransmitted(&hlog, 3), FLASH_LOG_OK);
-    CHECK_EQ_I(hlog.last_transmitted_sequence, 3);
-    CHECK_EQ_I(FlashLog_GetUnsentCount(&hlog), 3);   /* 3,4,5 remain */
+    /* R3-04: per-record advance at send. The corrupt record 2 is skipped on
+     * every read; marking the good records leaves exactly it behind until a
+     * later leading-run retire. */
+    CHECK_EQ_I(hlog.tx_high_water, 0);
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
+    /* 0,1 marked live-ascending -> H = 2; 3,4,5 raise H to 6. */
+    CHECK_EQ_I(hlog.tx_high_water, 6);
+    CHECK(!FlashLog_HasUnsentData(&hlog));   /* 2 is corrupt: unrecoverable, excluded */
 
     fake_w25q_free();
 }
@@ -373,18 +376,14 @@ static void test_all_corrupt_does_not_wedge(void)
 
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
-    FlashLog_StatusTypeDef st = FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped);
+    FlashLog_StatusTypeDef st = FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped);
     CHECK_EQ_I(st, FLASH_LOG_OK);
     CHECK_EQ_I(got, 0);
     CHECK_EQ_I(skipped, 4);
 
-    /* The anti-wedge retire path in lora_app.c (post R2-02/#106 rework; also
-     * closes the caller half of R2-04/#108) commits ABSOLUTELY:
-     * retire_through = watermark + skipped when nothing read clean. Verify
-     * that retiring exactly the consumed run clears the backlog - if it
-     * does not, the caller anti-wedge is insufficient (FR-09). */
-    CHECK_EQ_I(FlashLog_CommitThrough(&hlog,
-                  hlog.last_transmitted_sequence + skipped), FLASH_LOG_OK);
+    /* R3-04 (#218): the leading corrupt run is retired INLINE by the read
+     * (H advances past the whole contiguous run) - the anti-wedge property
+     * no longer depends on any caller-side retire path (FR-09, RV-01). */
     CHECK(!FlashLog_HasUnsentData(&hlog));
 
     fake_w25q_free();
@@ -465,9 +464,10 @@ static void test_header_pingpong_survives_failed_writes(void)
     CHECK_EQ_I(hlog.record_count, 40);
 
     /* Advance the transmission watermark so the header-loss check below is
-     * load-bearing (an untouched watermark is 0 on both sides of the bug). */
-    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, 10U), FLASH_LOG_OK);
-    CHECK_EQ_I(hlog.last_transmitted_sequence, 10);
+     * load-bearing (an untouched watermark is 0 on both sides of the bug).
+     * R3-04: per-record advance; marking seq 9 raises H to 10. */
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 9U), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.tx_high_water, 10);
 
     /* Control: ONE failed write must survive even on the unfixed tree (the
      * second header copy carries the unit). Guards the test itself. */
@@ -477,7 +477,7 @@ static void test_header_pingpong_survives_failed_writes(void)
         FlashLog_HandleTypeDef reload1;
         CHECK_EQ_I(FlashLog_Init(&reload1, &hw), FLASH_LOG_OK);
         CHECK_EQ_I(reload1.record_count, 40);
-        CHECK_EQ_I(reload1.last_transmitted_sequence, 10);
+        CHECK_EQ_I(reload1.tx_high_water, 10);
     }
 
     /* The bug: a SECOND consecutive failed write. On the unfixed tree the
@@ -489,7 +489,7 @@ static void test_header_pingpong_survives_failed_writes(void)
         FlashLog_HandleTypeDef reload2;
         CHECK_EQ_I(FlashLog_Init(&reload2, &hw), FLASH_LOG_OK);
         CHECK_REGRESSION(reload2.record_count == 40, "FINDING-4");
-        CHECK_REGRESSION(reload2.last_transmitted_sequence == 10, "FINDING-4");
+        CHECK_REGRESSION(reload2.tx_high_water == 10, "FINDING-4");
         printf("   after 2 failed writes: record_count=%lu (want 40)\n",
                (unsigned long)reload2.record_count);
     }
@@ -500,10 +500,11 @@ static void test_header_pingpong_survives_failed_writes(void)
 /* ========================================================================== */
 /* T-8 / finding #8 (2026-08-10): deferred header sync batches a bulk burst    */
 /* ========================================================================== */
-/* Every CommitThrough used to SyncHeader: a 4 KB sector erase per ACKed bulk
- * packet, 20 per burst, all on the same two header sectors. With defer/flush
- * a burst costs ONE erase. Mid-burst reset must replay from the last synced
- * watermark (conservative — backend dedupes by sequence). */
+/* Every watermark advance used to SyncHeader: a 4 KB sector erase per ACKed
+ * bulk packet, 20 per burst, all on the same two header sectors. With
+ * defer/flush a burst costs ONE erase. Mid-burst reset must replay from the
+ * last synced watermark (conservative — backend dedupes by sequence).
+ * R3-04 (#218): advances are per-record MarkRecoverySent at send time. */
 static void test_deferred_header_sync_batches_burst(void)
 {
     printf("-- T-8 / finding #8: deferred header sync batches a bulk burst\n");
@@ -518,15 +519,15 @@ static void test_deferred_header_sync_batches_burst(void)
         CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 4000U + i, 0, 0, 0), FLASH_LOG_OK);
     }
 
-    /* Burst of 20 packet-ACK commits, deferred: ZERO header erases, but the
+    /* Burst of 20 send-time marks, deferred: ZERO header erases, but the
      * RAM watermark is live for the read path. */
     FlashLog_DeferHeaderSync(&hlog);
     uint32_t erases_before = fake_w25q_erase_count;
-    for (uint32_t seq = 1; seq <= 20; seq++) {
-        CHECK_EQ_I(FlashLog_CommitThrough(&hlog, seq), FLASH_LOG_OK);
+    for (uint32_t seq = 0; seq < 20; seq++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, seq), FLASH_LOG_OK);
     }
     CHECK_EQ_I(fake_w25q_erase_count, erases_before);
-    CHECK_EQ_I(hlog.last_transmitted_sequence, 20);
+    CHECK_EQ_I(hlog.tx_high_water, 20);
     CHECK(!FlashLog_HasUnsentData(&hlog));
 
     /* Reset BEFORE the flush: the watermark replays from the last synced
@@ -534,7 +535,7 @@ static void test_deferred_header_sync_batches_burst(void)
     {
         FlashLog_HandleTypeDef crashed;
         CHECK_EQ_I(FlashLog_Init(&crashed, &hw), FLASH_LOG_OK);
-        CHECK_EQ_I(crashed.last_transmitted_sequence, 0);
+        CHECK_EQ_I(crashed.tx_high_water, 0);
         CHECK(FlashLog_HasUnsentData(&crashed));
     }
 
@@ -546,15 +547,15 @@ static void test_deferred_header_sync_batches_burst(void)
     }
     FlashLog_DeferHeaderSync(&hlog);
     erases_before = fake_w25q_erase_count;
-    for (uint32_t seq = 21; seq <= 40; seq++) {
-        CHECK_EQ_I(FlashLog_CommitThrough(&hlog, seq), FLASH_LOG_OK);
+    for (uint32_t seq = 20; seq < 40; seq++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, seq), FLASH_LOG_OK);
     }
     CHECK_EQ_I(FlashLog_FlushHeaderSync(&hlog), FLASH_LOG_OK);
     CHECK_EQ_I(fake_w25q_erase_count, erases_before + 1);
     {
         FlashLog_HandleTypeDef reload;
         CHECK_EQ_I(FlashLog_Init(&reload, &hw), FLASH_LOG_OK);
-        CHECK_EQ_I(reload.last_transmitted_sequence, 40);
+        CHECK_EQ_I(reload.tx_high_water, 40);
         CHECK(!FlashLog_HasUnsentData(&reload));
     }
 
@@ -677,37 +678,39 @@ static void test_r2_02_watermark_overadvance_on_wrap(void)
     }
 
     /* Long RF gap: nothing was ever transmitted. */
-    CHECK_EQ_I(hlog.last_transmitted_sequence, 0);
+    CHECK_EQ_I(hlog.tx_high_water, 0);
 
-    /* Emulate the lora_app.c caller composition. Post-fix (R2-02): there is
-     * NO entry-watermark pin and NO count-based mark - the read path may
-     * legitimately clamp the watermark (BUG 1.7) under any pinned base, so
-     * the caller commits ABSOLUTELY by record sequence. */
+    /* R3-04 (#218): there is no count-based caller composition left to go
+     * wrong (R2-02's hazard class is eliminated, not just fixed) - the read
+     * walks by absolute sequence and marking is per-record. What must still
+     * hold after a wrap: the phantom low sequences (overwritten slots) are
+     * detected as corruption by the identity check and retired without any
+     * successful TX, until the real records are reached. */
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
-    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped),
-               FLASH_LOG_OK);
+    int reached = 0;
+    for (int cycle = 0; cycle < 40 && !reached; cycle++) {
+        got = 0; skipped = 0;
+        FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped);
+        if (got > 0) reached = 1;
+    }
+    CHECK_REGRESSION(reached == 1, "R2-02-reach");
 
-    /* Guards (pass on every tree): the BUG 1.7 clamp jumped the watermark to
-     * the oldest record that still exists, and the batch starts there. */
-    CHECK_EQ_I(got, 6);
-    CHECK(hlog.last_transmitted_sequence > 0);       /* wrap clamp fired (W -> W') */
-    CHECK_EQ_I(batch[0].sequence, hlog.last_transmitted_sequence);  /* oldest existing */
-    /* The read clamped the watermark to the oldest existing record. */
+    /* The first good record read is the oldest still retained. */
+    CHECK_EQ_I(batch[0].sequence,
+               hlog.next_sequence - FlashLog_GetAvailableRecords(&hlog));
 
-    /* Commit exactly what was sent, by absolute sequence. */
+    /* Mark exactly what was sent, by absolute sequence; the high water must
+     * land exactly past it. */
     uint32_t last_sent = batch[got - 1].sequence;
-    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, last_sent + 1U), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
+    CHECK_REGRESSION(hlog.tx_high_water == last_sent + 1U, "R2-02");
 
-    /* The watermark must land exactly past the last transmitted record.
-     * Today it lands (clamped_base) records further on: sequences past
-     * last_sent were never read, never sent,
-     * never counted as skipped — silently, permanently discarded. */
-    CHECK_REGRESSION(hlog.last_transmitted_sequence == last_sent + 1U, "R2-02");
-
-    /* And the absolute API must refuse to move the watermark backward. */
-    CHECK_EQ_I(FlashLog_CommitThrough(&hlog, 1U), FLASH_LOG_OK);
-    CHECK_EQ_I(hlog.last_transmitted_sequence, last_sent + 1U);
+    /* And the API must refuse to move the watermark backward. */
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 1U), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.tx_high_water, last_sent + 1U);
 
     fake_w25q_free();
 }
@@ -749,7 +752,7 @@ static void test_r2_03_sequence_identity_crosscheck(void)
 
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
-    CHECK_EQ_I(FlashLog_GetUnsentRecordsFIFO(&hlog, batch, 6, &got, &skipped),
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped),
                FLASH_LOG_OK);
 
     /* Desired: identity mismatch is treated as corruption — counted skipped,
@@ -819,7 +822,7 @@ static void test_rv01_all_corrupt_window_wedge(void)
         fake_w25q_corrupt(FLASH_LOG_DATA_START + i * FLASH_LOG_RECORD_SIZE, 4);
     }
 
-    uint32_t watermark_before = hlog.last_transmitted_sequence;
+    uint32_t watermark_before = hlog.tx_high_water;
     CHECK_EQ_I(watermark_before, 0);
 
     FlashLog_Record_t batch[BULK_V6_MAX_RECORDS];
@@ -827,29 +830,120 @@ static void test_rv01_all_corrupt_window_wedge(void)
 
     /* Ten consecutive bulk cycles, no TX (nothing reads clean). The log must
      * make forward progress across the unrecoverable run WITHOUT needing a
-     * successful transmission. */
+     * successful transmission. R3-04: the leading corrupt run retires inline
+     * (live range ascending from the high water). */
     int cycles_with_no_progress = 0;
     for (int cycle = 0; cycle < 10; cycle++) {
         got = 0; skipped = 0;
-        uint32_t wm = hlog.last_transmitted_sequence;
-        FlashLog_GetUnsentRecordsFIFO(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
-        if (got == 0 && hlog.last_transmitted_sequence == wm) {
+        uint32_t wm = hlog.tx_high_water;
+        FlashLog_GetRecoveryRecords(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
+        if (got == 0 && hlog.tx_high_water == wm) {
             cycles_with_no_progress++;
         }
     }
-    printf("   after 10 no-TX cycles: watermark=%lu (was %lu)\n",
-           (unsigned long)hlog.last_transmitted_sequence, (unsigned long)watermark_before);
+    printf("   after 10 no-TX cycles: high water=%lu (was %lu)\n",
+           (unsigned long)hlog.tx_high_water, (unsigned long)watermark_before);
     CHECK_REGRESSION(cycles_with_no_progress == 0, "RV-01");
-    CHECK_REGRESSION(hlog.last_transmitted_sequence > watermark_before, "RV-01-wm");
+    CHECK_REGRESSION(hlog.tx_high_water > watermark_before, "RV-01-wm");
 
     /* The 100 good records behind the corrupt run must become reachable. */
     int reached_good = 0;
     for (int cycle = 0; cycle < 400 && !reached_good; cycle++) {
         got = 0; skipped = 0;
-        FlashLog_GetUnsentRecordsFIFO(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
+        FlashLog_GetRecoveryRecords(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
         if (got > 0) reached_good = 1;
     }
     CHECK_REGRESSION(reached_good == 1, "RV-01-reach");
+
+    fake_w25q_free();
+}
+
+/* ========================================================================== */
+/* R3-04 (#218) — DDR-0005 one-pass recovery: v4->v5 migration, newest-first
+ * walker, send-time advance, no autonomous resend, pending-live lead. */
+/* ========================================================================== */
+static void test_r3_04_one_pass_recovery(void)
+{
+    printf("-- R3-04 (#218): one-pass newest-first recovery + v4 migration\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    for (uint32_t i = 0; i < 10; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 7000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_SyncHeader(&hlog), FLASH_LOG_OK);
+
+    /* Forge a v4 header: legacy FIFO watermark at 3 (seqs 0..2 "sent" under
+     * the old protocol). */
+    {
+        uint32_t addr = (hlog.active_header == 0) ? 0U : (uint32_t)W25Q_SECTOR_SIZE;
+        FlashLog_Header_t h4;
+        CHECK_EQ_I(W25Q_Read(&hw, addr, (uint8_t *)&h4, sizeof(h4)), W25Q_OK);
+        h4.version = FLASH_LOG_HEADER_VERSION_LEGACY_FIFO;
+        h4.last_transmitted_seq = 3;
+        h4.reserved[0] = 0;
+        h4.crc32 = FlashLog_CRC32((const uint8_t *)&h4, sizeof(h4) - sizeof(uint32_t));
+        fake_w25q_poke(addr, &h4, sizeof(h4));
+    }
+
+    /* Migration: both watermarks restart at the top; the whole retained
+     * archive becomes walker-eligible exactly once (backend dedupes). */
+    FlashLog_HandleTypeDef mig;
+    CHECK_EQ_I(FlashLog_Init(&mig, &hw), FLASH_LOG_OK);
+    CHECK_EQ_I(mig.record_count, 10);
+    CHECK_REGRESSION(mig.tx_high_water == 10, "R3-04-migrate");
+    CHECK_REGRESSION(mig.recovery_frontier == 10, "R3-04-migrate");
+    CHECK(FlashLog_HasUnsentData(&mig));
+
+    /* The walker reads NEWEST FIRST (BR-TX-008). */
+    FlashLog_Record_t batch[6];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&mig, batch, 5, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 5);
+    CHECK_REGRESSION(batch[0].sequence == 9, "R3-04-order");
+    CHECK_EQ_I(batch[4].sequence, 5);
+
+    /* Advance at SEND time: the frontier drops to the lowest sent; the next
+     * read resumes OLDER - a sent record is never walked again (BR-TX-010). */
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&mig, batch[i].sequence), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(mig.recovery_frontier, 5);
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&mig, batch, 5, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 5);
+    CHECK_REGRESSION(batch[0].sequence == 4, "R3-04-onepass");
+    CHECK_EQ_I(batch[4].sequence, 0);
+    for (uint32_t i = 0; i < got; i++) {
+        FlashLog_MarkRecoverySent(&mig, batch[i].sequence);
+    }
+    CHECK(!FlashLog_HasUnsentData(&mig));
+
+    /* A NEW write is pending-live and leads the next batch (BR-TX-005). */
+    {
+        sensor_t s = make_sensors(77);
+        CHECK_EQ_I(FlashLog_WriteRecord(&mig, &s, 7100U, 0, 0, 0), FLASH_LOG_OK);
+    }
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&mig, batch, 5, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 1);
+    CHECK_REGRESSION(batch[0].sequence == 10, "R3-04-live");
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&mig, 10), FLASH_LOG_OK);
+    CHECK(!FlashLog_HasUnsentData(&mig));
+
+    /* Persistence: the watermarks survive a reboot (header synced by the
+     * non-deferred marks above). */
+    {
+        FlashLog_HandleTypeDef reload;
+        CHECK_EQ_I(FlashLog_Init(&reload, &hw), FLASH_LOG_OK);
+        CHECK_EQ_I(reload.tx_high_water, 11);
+        CHECK_EQ_I(reload.recovery_frontier, 0);
+        CHECK(!FlashLog_HasUnsentData(&reload));
+    }
 
     fake_w25q_free();
 }
@@ -872,6 +966,7 @@ int main(void)
     test_r2_03_sequence_identity_crosscheck();
     test_r2_14_ts_wrap_false_latch();
     test_rv01_all_corrupt_window_wedge();
+    test_r3_04_one_pass_recovery();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {

@@ -100,27 +100,56 @@ static FlashLog_StatusTypeDef FlashLog_ReadHeader(FlashLog_HandleTypeDef *hlog,
     return FLASH_LOG_OK;
 }
 
+/* R3-04 (#218): oldest sequence still retained (wrap-aware). */
+static uint32_t FlashLog_OldestSequence(FlashLog_HandleTypeDef *hlog)
+{
+    uint32_t available = FlashLog_GetAvailableRecords(hlog);
+    return (hlog->next_sequence > available) ? (hlog->next_sequence - available) : 0;
+}
+
 bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog)
 {
     if (hlog == NULL || !hlog->initialized) {
         return false;
     }
-    
-    return (hlog->next_sequence > hlog->last_transmitted_sequence);
+
+    /* v5 one-pass (R3-04/#218): sendable = pending-live (seq >= tx_high_water,
+     * never handed to the radio) UNION walker-eligible (oldest <= seq <
+     * recovery_frontier). Invariant: recovery_frontier <= tx_high_water. */
+    if (hlog->next_sequence > hlog->tx_high_water) {
+        return true;  /* pending-live */
+    }
+    return (hlog->recovery_frontier > FlashLog_OldestSequence(hlog));
 }
 
-FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlog,
-                                                     FlashLog_Record_t *records,
-                                                     uint32_t max_count,
-                                                     uint32_t *actual_count,
-                                                     uint32_t *skipped_count)
+/* R3-04 (#218, DDR-0005 BR-TX-008..011): one-pass recovery read.
+ * Supersedes FlashLog_GetUnsentRecordsFIFO (C4/F15).
+ *
+ * Exact O(1)-state model (invariant F <= H; offered = [F, H) ALWAYS):
+ *   tx_high_water H     - pending-live = [H, next_sequence): records written
+ *                         but never sent. Read ASCENDING and marked per
+ *                         record (H := seq + 1) — exact, no resend, no
+ *                         stranding even when a payload budget cuts a batch.
+ *   recovery_frontier F - the BACKLOG walker: unsent = [oldest_seq, F).
+ *                         Read DESCENDING (BR-TX-008 newest-first archive
+ *                         recovery) and marked per record (F := seq).
+ * The live range leads the batch only while the live backlog is small
+ * (the common case: the current cycle's record goes out in its own
+ * opportunity, BR-TX-005); the deep archive drains newest-first via F.
+ * Corrupt/torn records are skipped and counted; a contiguous corrupt run at
+ * a leading edge is retired once after the loop (T4/RV-01/S-G anti-wedge
+ * discipline); holes past a good record retire when a later send marks
+ * past them. */
+FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
+                                                   FlashLog_Record_t *records,
+                                                   uint32_t max_count,
+                                                   uint32_t *actual_count,
+                                                   uint32_t *skipped_count)
 {
     FlashLog_StatusTypeDef status;
-    uint32_t unsent_count, i;
-    uint32_t sequence_to_read;
 
     /* R13 (#51): bound the scan — a long corrupt run must not spin thousands
-     * of SPI reads in one call. The watermark persists, so the next call
+     * of SPI reads in one call. The watermarks persist, so the next call
      * resumes exactly where this one stopped. */
     #define FLASH_LOG_MAX_PROBES_PER_CALL  256U
     uint32_t probes = 0;
@@ -133,138 +162,150 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
     if (skipped_count != NULL) {
         *skipped_count = 0;
     }
-    
-    /* BUG 1.7 FIX: Clamp watermark after ring-buffer wraparound.
-     * If unsent backlog exceeds capacity (e.g. long ocean gap), the oldest-unsent
-     * sequence maps to an overwritten record. Skip to the oldest record that still
-     * exists in flash to prevent permanent bulk-transfer wedge. */
-    uint32_t available = FlashLog_GetAvailableRecords(hlog);
-    if (hlog->next_sequence > available &&
-        hlog->last_transmitted_sequence < (hlog->next_sequence - available)) {
-        hlog->last_transmitted_sequence = hlog->next_sequence - available;
-    }
-    
-    /* Calculate how many unsent records we have */
-    unsent_count = FlashLog_GetUnsentCount(hlog);
-    
-    if (unsent_count == 0) {
+
+    if (!FlashLog_HasUnsentData(hlog)) {
         return FLASH_LOG_ERROR_EMPTY;
     }
     
-    /* Limit to requested count */
-    if (max_count > unsent_count) {
-        max_count = unsent_count;
+    /* Defensive clamps (persistence corruption, downgrade-reupgrade): the
+     * watermarks must stay inside [0, next_sequence] and satisfy F <= H. */
+    if (hlog->tx_high_water > hlog->next_sequence) {
+        hlog->tx_high_water = hlog->next_sequence;
     }
-    
-    /* C4 FIX: Read FIFO (oldest unsent first) so MarkRecordsTransmitted
-     * correctly advances last_transmitted_sequence from the old end.
-     *
-     * T4 FIX: torn-write tolerance. A power loss mid-record leaves garbage that
-     * fails CRC; previously ANY read error aborted the batch and wedged bulk
-     * transfer forever. Now: skip the corrupt record by advancing the
-     * last_transmitted_sequence watermark past it (it is unrecoverable), and
-     * keep packing the remaining good records. The caller marks only the
-     * records actually sent, so the watermark lands exactly past every
-     * consumed sequence (good + skipped). */
-    sequence_to_read = hlog->last_transmitted_sequence;
-    uint32_t retire_through = 0;   /* S-G (#214): single deferred retire point */
-    bool retire_pending = false;
-    while ((*actual_count) < max_count &&
-           sequence_to_read < hlog->next_sequence &&
-           probes < FLASH_LOG_MAX_PROBES_PER_CALL) {
-        /* Convert sequence to ReadRecord offset (newest-relative) */
-        uint32_t offset = (hlog->next_sequence - 1) - sequence_to_read;
-        probes++;
+    if (hlog->recovery_frontier > hlog->tx_high_water) {
+        hlog->recovery_frontier = hlog->tx_high_water;
+    }
 
-        status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);
+    const uint32_t oldest = FlashLog_OldestSequence(hlog);
+    uint32_t sendable = FlashLog_GetUnsentCount(hlog);
+    if (max_count > sendable) {
+        max_count = sendable;
+    }
 
-        /* R2-03 (#107): positional reads are committed by STORED sequence, so
-         * a CRC-valid record carrying the wrong identity (frontier-scan /
-         * sector-boundary mixup, or a stale slot after wrap) must not sail
-         * through - the caller's commit arithmetic assumes batch[i].sequence
-         * == base + i. Identity mismatch = corruption: skip it, count it. */
-        if (status == FLASH_LOG_OK &&
-            records[*actual_count].sequence != sequence_to_read) {
-            status = FLASH_LOG_ERROR_CRC;
+    /* Live range [tx_high_water, next_sequence) ASCENDING first, then the
+     * walker range (recovery_frontier - 1 .. oldest) DESCENDING. int64 loop
+     * vars: the walker range can legitimately reach seq 0. */
+    uint32_t retire_live = 0;    /* S-G (#214): deferred leading-run retire */
+    uint32_t retire_walker = 0;
+    bool live_retire_pending = false;
+    bool walker_retire_pending = false;
+
+    for (int range = 0; range < 2 && (*actual_count) < max_count &&
+                       probes < FLASH_LOG_MAX_PROBES_PER_CALL; range++) {
+        int64_t seq, seq_end, step;
+        if (range == 0) {
+            if (hlog->next_sequence <= hlog->tx_high_water) continue;
+            seq = (int64_t)hlog->tx_high_water;            /* ascending */
+            seq_end = (int64_t)hlog->next_sequence - 1;
+            step = 1;
+        } else {
+            if (hlog->recovery_frontier <= oldest) continue;
+            seq = (int64_t)hlog->recovery_frontier - 1;    /* descending */
+            seq_end = (int64_t)oldest;
+            step = -1;
         }
 
-        if (status != FLASH_LOG_OK) {
-            /* F-006/R13 (#51): corrupt/torn record — count it, but do NOT
-             * advance the watermark here. Skip + good reads compose with the
-             * caller's count-based mark ONLY if marking happens from the
-             * entry watermark: caller marks (packed + skipped) after TX
-             * confirm, landing the watermark exactly past every consumed
-             * sequence. Never silent (DDR-0003): the count is returned. */
-            if (skipped_count != NULL) {
-                (*skipped_count)++;
+        for (; (step > 0) ? (seq <= seq_end) : (seq >= seq_end);
+             seq += step) {
+            if ((*actual_count) >= max_count ||
+                probes >= FLASH_LOG_MAX_PROBES_PER_CALL) break;
+            /* Convert sequence to ReadRecord offset (newest-relative) */
+            uint32_t offset = (hlog->next_sequence - 1) - (uint32_t)seq;
+            probes++;
+
+            status = FlashLog_ReadRecord(hlog, &records[*actual_count], offset);
+
+            /* R2-03 (#107): identity check — a CRC-valid record carrying the
+             * wrong sequence is corruption: skip it, count it. */
+            if (status == FLASH_LOG_OK &&
+                records[*actual_count].sequence != (uint32_t)seq) {
+                status = FLASH_LOG_ERROR_CRC;
             }
-            sequence_to_read++;
-            /* RV-01 (#160): a contiguous corrupt run AT the watermark edge is
-             * already declared unrecoverable — retire it NOW. The caller's
-             * retire path is unreachable when nothing reads clean
-             * (record_count == 0 -> "no unsent records" -> COMPLETE), so a
-             * >= 256-record corrupt run wedged bulk transfer permanently with
-             * the good archive behind it unreachable. Holes past a good record
-             * still cannot retire here (the watermark is a scalar) — those
-             * wait for the caller's ACK commit as before. CommitThrough clamps
-             * and honors the deferred-header batching (#8).
-             *
-             * S-G (#214): retire ONCE after the loop, not per record. With
-             * sync_deferred == 0 the per-record version cost one 4 KB header
-             * sector erase PER corrupt record — the call-site discipline
-             * (defer set by the time BULK runs) made that latent, not safe.
-             * The watermark monotonicity is identical: CommitThrough clamps
-             * and never moves backward. */
-            if (*actual_count == 0) {
-                retire_through = sequence_to_read;
-                retire_pending = true;
+
+            if (status != FLASH_LOG_OK) {
+                /* F-006/R13 (#51): corrupt/torn — count it, never silent
+                 * (DDR-0003). Retire inline ONLY while nothing good has been
+                 * read this call (RV-01 #160 leading-run rule, mirrored for
+                 * the descending walker); holes past a good record retire
+                 * when a later MarkRecoverySent lands below them. */
+                if (skipped_count != NULL) {
+                    (*skipped_count)++;
+                }
+                if (*actual_count == 0) {
+                    if (range == 0) {
+                        /* ascending: the leading corrupt run is contiguous
+                         * from tx_high_water; tracking the LAST (highest)
+                         * corrupt lets the deferred retire H := seq + 1 cover
+                         * the whole run. */
+                        retire_live = (uint32_t)seq;
+                        live_retire_pending = true;
+                    } else {
+                        /* descending: track the LOWEST corrupt of the leading
+                         * run; retiring it (F := seq) covers the contiguous
+                         * run down from recovery_frontier - 1. */
+                        retire_walker = (uint32_t)seq;
+                        walker_retire_pending = true;
+                    }
+                }
+                continue;
             }
-            continue;
+
+            (*actual_count)++;
         }
-
-        (*actual_count)++;
-        sequence_to_read++;
     }
-    (void)i;
 
-    if (retire_pending) {
-        FlashLog_CommitThrough(hlog, retire_through);
+    /* S-G (#214): one deferred retire per range, after the loop — never a
+     * header sector erase per corrupt record. MarkRecoverySent honors the
+     * deferred-header batching (#8) and both monotonicities. The leading
+     * corrupt run is contiguous while *actual_count == 0:
+     *   live (ascending):   retire_live = HIGHEST corrupt; H := it + 1
+     *   walker (descending): retire_walker = LOWEST corrupt; F := it */
+    if (live_retire_pending) {
+        FlashLog_MarkRecoverySent(hlog, retire_live);
+    }
+    if (walker_retire_pending) {
+        FlashLog_MarkRecoverySent(hlog, retire_walker);
     }
 
     return FLASH_LOG_OK;
 }
 
-/* R2-02 (#106): absolute commit. The count-based MarkRecordsTransmitted only
- * works if the caller's base matches the CURRENT watermark - but the BUG 1.7
- * wrap clamp mutates the watermark inside GetUnsentRecordsFIFO, UNDER a caller
- * that pinned its base before the read. The composed result over-advanced the
- * watermark past records that were never read, never sent, never counted as
- * skipped: silent, permanent data loss on every post-wrap bulk cycle.
- * CommitThrough takes the absolute (exclusive) sequence instead; clamped to
- * [current watermark, next_sequence], it cannot over-advance no matter what
- * the read did to the base. */
-FlashLog_StatusTypeDef FlashLog_CommitThrough(FlashLog_HandleTypeDef *hlog, uint32_t through_sequence)
+/* R3-04 (#218, DDR-0005 BR-TX-009/010/011): the one-pass watermark advances
+ * AT SEND TIME - there is no commit-on-ACK and no autonomous retry.
+ * Supersedes FlashLog_CommitThrough (R2-02/#106) and the count-based
+ * FlashLog_MarkRecordsTransmitted.
+ *
+ * Two monotone watermarks (invariant: recovery_frontier <= tx_high_water):
+ *   tx_high_water H    - first never-sent (pending-live) sequence; rises
+ *   recovery_frontier F - walker has visited every seq >= F; falls
+ * A send of seq s: s >= H raises H := s + 1 (and clamps F down to H);
+ * s < F lowers F := s. Anything else is already covered -> no-op. */
+FlashLog_StatusTypeDef FlashLog_MarkRecoverySent(FlashLog_HandleTypeDef *hlog, uint32_t sequence)
 {
     if (hlog == NULL || !hlog->initialized) {
         return FLASH_LOG_ERROR_PARAM;
     }
 
-    if (through_sequence > hlog->next_sequence) {
-        through_sequence = hlog->next_sequence;
+    bool moved = false;
+    if (sequence >= hlog->tx_high_water) {
+        hlog->tx_high_water = sequence + 1U;
+        if (hlog->recovery_frontier > hlog->tx_high_water) {
+            hlog->recovery_frontier = hlog->tx_high_water;  /* F <= H invariant */
+        }
+        moved = true;
+    } else if (sequence < hlog->recovery_frontier) {
+        hlog->recovery_frontier = sequence;
+        moved = true;
     }
-
-    /* Never move the watermark backward (a stale ACK must not un-send). */
-    if (through_sequence <= hlog->last_transmitted_sequence) {
+    if (!moved) {
         return FLASH_LOG_OK;
     }
 
-    hlog->last_transmitted_sequence = through_sequence;
-
-    /* Finding #8 (2026-08-10): deferred header sync during a bulk burst — 20
-     * ACKed packets cost ONE 4 KB header sector erase at burst end instead of
-     * 20 (the two header sectors take all the wear; W25Q16JV is rated 100k
-     * erase cycles). A mid-burst reset replays from the last synced watermark
-     * — at most one burst retransmitted, deduped by the backend. */
+    /* Finding #8 (2026-08-10): deferred header sync during a bulk burst — N
+     * sent packets cost ONE 4 KB header sector erase at burst end instead of
+     * N (the two header sectors take all the wear; W25Q16JV is rated 100k
+     * erase cycles). A mid-burst reset replays from the last synced
+     * watermarks — at most one burst retransmitted, deduped by the backend. */
     if (hlog->sync_deferred) {
         hlog->header_dirty = 1;
         return FLASH_LOG_OK;
@@ -300,35 +341,22 @@ FlashLog_StatusTypeDef FlashLog_FlushHeaderSync(FlashLog_HandleTypeDef *hlog)
     return st;
 }
 
-FlashLog_StatusTypeDef FlashLog_MarkRecordsTransmitted(FlashLog_HandleTypeDef *hlog, uint32_t count)
-{
-    if (hlog == NULL || !hlog->initialized) {
-        return FLASH_LOG_ERROR_PARAM;
-    }
-    
-    if (count == 0) {
-        return FLASH_LOG_OK; /* Nothing to mark */
-    }
-    
-    /* R2-02 (#106): count-based marking is retained for existing callers but
-     * now composes through the absolute commit (F15's next_sequence clamp is
-     * inherited from CommitThrough). New callers: use FlashLog_CommitThrough
-     * with an absolute sequence - a count is only meaningful relative to a
-     * base that nothing enforces. */
-    return FlashLog_CommitThrough(hlog, hlog->last_transmitted_sequence + count);
-}
-
 uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog)
 {
     if (hlog == NULL || !hlog->initialized) {
         return 0;
     }
-    
-    if (hlog->next_sequence > hlog->last_transmitted_sequence) {
-        return hlog->next_sequence - hlog->last_transmitted_sequence;
+
+    /* v5 (R3-04/#218): pending-live + walker-eligible. */
+    uint32_t count = 0;
+    if (hlog->next_sequence > hlog->tx_high_water) {
+        count += hlog->next_sequence - hlog->tx_high_water;
     }
-    
-    return 0;
+    uint32_t oldest = FlashLog_OldestSequence(hlog);
+    if (hlog->recovery_frontier > oldest) {
+        count += hlog->recovery_frontier - oldest;
+    }
+    return count;
 }
 
 /**
@@ -343,8 +371,12 @@ static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header)
         return false;
     }
     
-    /* Check version */
-    if (header->version != FLASH_LOG_HEADER_VERSION) {
+    /* Check version. R3-04 (#218): v4 (legacy FIFO watermark) headers are
+     * ACCEPTED and migrated by Init (the retained archive is re-walked once,
+     * newest-first; the backend dedupes by sequence). Older than v4: clean
+     * init as before. */
+    if (header->version != FLASH_LOG_HEADER_VERSION &&
+        header->version != FLASH_LOG_HEADER_VERSION_LEGACY_FIFO) {
         return false;
     }
     
@@ -370,6 +402,14 @@ static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header)
      * meaningful plausibility constraint on record_count. */
     if (header->last_transmitted_seq > header->record_count) {
         return false;  /* watermark ahead of the frontier is impossible */
+    }
+    /* R3-04 (#218): v5 carries the walker frontier in reserved[0]; it must
+     * satisfy the same bound and the F <= H invariant. (v4 headers predate
+     * the frontier — Init migrates them, no check here.) */
+    if (header->version == FLASH_LOG_HEADER_VERSION &&
+        (header->reserved[0] > header->record_count ||
+         header->reserved[0] > header->last_transmitted_seq)) {
+        return false;
     }
 
     /* Validate CRC32 */
@@ -401,7 +441,8 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
     header.sequence = hlog->header_generation;
     header.oldest_addr = hlog->oldest_addr;
     header.flags = 0;
-    header.last_transmitted_seq = hlog->last_transmitted_sequence;
+    header.last_transmitted_seq = hlog->tx_high_water;       /* v5 semantics */
+    header.reserved[0] = hlog->recovery_frontier;            /* v5: walker */
     
     /* Calculate CRC32 (all fields except crc32 itself) */
     header.crc32 = FlashLog_CRC32((const uint8_t *)&header, 
@@ -476,7 +517,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     FlashLog_Header_t header_a, header_b;
     FlashLog_StatusTypeDef status;
     bool valid_a, valid_b;
-    
+    bool from_v4 = false;  /* R3-04 (#218): legacy FIFO watermark migration */
     if (hlog == NULL || hw25q == NULL) {
         return FLASH_LOG_ERROR_PARAM;
     }
@@ -511,33 +552,41 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
             hlog->write_addr = header_a.write_addr;
             hlog->record_count = header_a.record_count;
             hlog->oldest_addr = header_a.oldest_addr;
-            hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
+            hlog->tx_high_water = header_a.last_transmitted_seq;
+            hlog->recovery_frontier = header_a.reserved[0];
             hlog->header_generation = header_a.sequence + 1;
             hlog->active_header = 0;
+            from_v4 = (header_a.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
         } else {
             hlog->write_addr = header_b.write_addr;
             hlog->record_count = header_b.record_count;
             hlog->oldest_addr = header_b.oldest_addr;
-            hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
+            hlog->tx_high_water = header_b.last_transmitted_seq;
+            hlog->recovery_frontier = header_b.reserved[0];
             hlog->header_generation = header_b.sequence + 1;
             hlog->active_header = 1;
+            from_v4 = (header_b.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
         }
     } else if (valid_a) {
         /* Only A valid */
         hlog->write_addr = header_a.write_addr;
         hlog->record_count = header_a.record_count;
         hlog->oldest_addr = header_a.oldest_addr;
-        hlog->last_transmitted_sequence = header_a.last_transmitted_seq;
+        hlog->tx_high_water = header_a.last_transmitted_seq;
+        hlog->recovery_frontier = header_a.reserved[0];
         hlog->header_generation = header_a.sequence + 1;
         hlog->active_header = 0;
+        from_v4 = (header_a.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
     } else if (valid_b) {
         /* Only B valid */
         hlog->write_addr = header_b.write_addr;
         hlog->record_count = header_b.record_count;
         hlog->oldest_addr = header_b.oldest_addr;
-        hlog->last_transmitted_sequence = header_b.last_transmitted_seq;
+        hlog->tx_high_water = header_b.last_transmitted_seq;
+        hlog->recovery_frontier = header_b.reserved[0];
         hlog->header_generation = header_b.sequence + 1;
         hlog->active_header = 1;
+        from_v4 = (header_b.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
     } else {
         /* No valid headers - initialize fresh */
         hlog->write_addr = FLASH_LOG_DATA_START;
@@ -566,8 +615,19 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     }
 
     hlog->next_sequence = hlog->record_count;
+
+    /* R3-04 (#218): v4 -> v5 migration. The legacy rising FIFO commit
+     * watermark has no usable direction under one-pass semantics; restart
+     * both watermarks at the top so the whole RETAINED archive becomes
+     * walker-eligible exactly once (newest-first). Records sent under v4
+     * are re-sent at most once; the backend dedupes by sequence. */
+    if (from_v4) {
+        hlog->tx_high_water = hlog->next_sequence;
+        hlog->recovery_frontier = hlog->next_sequence;
+    }
+
     hlog->initialized = true;
-    
+
     return FLASH_LOG_OK;
 }
 

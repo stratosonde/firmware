@@ -294,9 +294,53 @@ static void test_r303_ascent_no_bulk(const char *app)
     CHECK(occurs_before(sig, end, "TX_STATE_BULK_TRANSFER"));
 }
 
+/* ------------------------------------------------------------------ */
+/* R3-04 — archive recovery implements DDR-0005 one-pass semantics      */
+/* ------------------------------------------------------------------ */
+static void test_r304_one_pass_protocol(const char *app, const char *flashc,
+                                        const char *flashh)
+{
+    printf("-- R3-04 (P1, #218): archive recovery must implement DDR-0005 one-pass\n");
+
+    /* lora_app.c: newest-first recovery read, send-time watermark advance,
+     * UNCONFIRMED archive frames, no commit-on-ACK machinery. */
+    bool lifo_read   = strstr(app, "FlashLog_GetRecoveryRecords(&hflashlog") != NULL;
+    bool send_mark   = strstr(app, "FlashLog_MarkRecoverySent(&hflashlog") != NULL;
+    bool unconfirmed = strstr(app, "LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0)") != NULL;
+    bool no_commit   = strstr(app, "g_bulk_commit_through") == NULL;
+    bool probe_conf  = strstr(app, "LORAMAC_HANDLER_CONFIRMED_MSG") != NULL;
+
+    printf("   lora_app: recovery read=%s send-time mark=%s unconfirmed bulk=%s commit-on-ACK gone=%s probe still confirmed=%s\n",
+           lifo_read ? "yes" : "NO", send_mark ? "yes" : "NO",
+           unconfirmed ? "yes" : "NO", no_commit ? "yes" : "NO(defect)",
+           probe_conf ? "yes" : "NO");
+
+    CHECK_REGRESSION(lifo_read, "R3-04-read");
+    CHECK_REGRESSION(send_mark, "R3-04-mark");
+    CHECK_REGRESSION(unconfirmed, "R3-04-unconfirmed");
+    CHECK_REGRESSION(no_commit, "R3-04-no-commit");
+    CHECK(probe_conf);   /* BR-TX-003: the compact probe stays confirmed */
+
+    /* flash_log: walker frontier persisted, header v5, legacy API gone. */
+    bool frontier    = strstr(flashc, "recovery_frontier") != NULL;
+    bool legacy_gone = strstr(flashc, "FlashLog_CommitThrough") == NULL &&
+                       strstr(flashc, "GetUnsentRecordsFIFO") == NULL;
+    bool v5          = strstr(flashh, "#define FLASH_LOG_HEADER_VERSION 5") != NULL;
+
+    printf("   flash_log: frontier=%s legacy API gone=%s header v5=%s\n",
+           frontier ? "yes" : "NO", legacy_gone ? "yes" : "NO(defect)",
+           v5 ? "yes" : "NO");
+
+    CHECK_REGRESSION(frontier, "R3-04-frontier");
+    CHECK_REGRESSION(legacy_gone, "R3-04-legacy");
+    CHECK_REGRESSION(v5, "R3-04-v5");
+}
+
 int main(void)
 {
-    char *app = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
+    char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
+    char *flashc = normalize_code(slurp("../../Core/Src/flash_log.c"));
+    char *flashh = normalize_code(slurp("../../Core/Inc/flash_log.h"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -305,6 +349,11 @@ int main(void)
     test_r302_gnss_wake_stale(app);
     printf("\n");
     test_r303_ascent_no_bulk(app);
+    printf("\n");
+    test_r304_one_pass_protocol(app, flashc, flashh);
+
+    free(flashh);
+    free(flashc);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

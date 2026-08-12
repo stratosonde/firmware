@@ -393,7 +393,9 @@ static PacketQueue_t g_packet_queue = {0};
 /* Adaptive transmission strategy state */
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
-static uint32_t g_bulk_commit_through = 0;  /* C4/R2-02 (#106): absolute commit point (exclusive seq) after confirmed TX */
+/* R3-04 (#218): g_bulk_commit_through DELETED - DDR-0005 one-pass recovery
+ * advances the watermark AT SEND TIME (FlashLog_MarkRecoverySent); there is
+ * no commit-on-ACK and no autonomous retry (BR-TX-009/010/011). */
 
 /* R3-01 (#215): ABSOLUTE science deadline, HAL_GetTick ms domain (the same
  * time base UTIL_TIMER uses). Bulk continuation re-arms the SAME SendTxData
@@ -869,7 +871,8 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
                       link_good ? "BURST CONTINUES" : "FALLBACK");
     if (!link_good) {
       /* Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
-       * The first packet's records were already committed on its ACK — no loss. */
+       * R3-04 (#218): the first packet's records were already marked sent
+       * (one-pass advance at send time) — no loss, no retry. */
       g_tx_state = TX_STATE_COMPLETE;
       g_bulk_packets_sent = 0;
     } else {
@@ -1646,22 +1649,20 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       // Check if we have unsent data and haven't exceeded packet limit
       if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
 
-        // Read up to BULK_V6_MAX_RECORDS unsent records from flash (FIFO order —
-        // oldest unsent first, so the absolute commit advances the watermark
-        // correctly). Was 6: the 6th record was read and discarded every packet
-        // (finding #9) — the wire format packs at most 5.
+        /* R3-04 (#218, DDR-0005 BR-TX-008): one-pass recovery read, NEWEST
+         * FIRST - pending-live records (never sent) lead, then the walker
+         * works backward from the recovery frontier. Was 6: the 6th record
+         * was read and discarded every packet (finding #9) — the wire format
+         * packs at most 5. */
         FlashLog_Record_t flash_records[BULK_V6_MAX_RECORDS];
         uint32_t record_count;
         uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
-        /* R2-02 (#106): no entry-watermark pin - the read path may clamp the
-         * watermark (BUG 1.7) under any base pinned here. Commits below are
-         * ABSOLUTE (FlashLog_CommitThrough), derived from record sequences. */
 
-        FlashLog_StatusTypeDef flash_status = FlashLog_GetUnsentRecordsFIFO(&hflashlog,
-                                                                            flash_records,
-                                                                            BULK_V6_MAX_RECORDS,
-                                                                            &record_count,
-                                                                            &skipped_count);
+        FlashLog_StatusTypeDef flash_status = FlashLog_GetRecoveryRecords(&hflashlog,
+                                                                          flash_records,
+                                                                          BULK_V6_MAX_RECORDS,
+                                                                          &record_count,
+                                                                          &skipped_count);
         if (skipped_count > 0) {
           /* DDR-0003: a skipped record is visible, not silent */
           SONDE_LOG("Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
@@ -1693,18 +1694,15 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
              * consumed batch, not just the corrupt skips: a record that reads
              * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
              * unconvertible — leaving it pending re-probes it forever and
-             * wedges bulk transfer. Positional mark covers corrupt + read. */
-            /* R2-02 (#106): absolute retire point. Read probes are consecutive
-             * sequences from the (post-clamp) watermark, so when nothing read
-             * clean the corrupt run spans watermark..watermark+skipped-1. */
-            uint32_t retire_through = (record_count > 0)
-                ? flash_records[record_count - 1].sequence + 1U
-                : hflashlog.last_transmitted_sequence + skipped_count;
-            if (retire_through > hflashlog.last_transmitted_sequence) {
-              SONDE_LOG("Retiring through seq %lu with no TX (%lu corrupt, %lu unconvertible)\r\n",
-                                (unsigned long)retire_through, (unsigned long)skipped_count,
-                                (unsigned long)record_count);
-              FlashLog_CommitThrough(&hflashlog, retire_through);
+             * wedges bulk transfer.
+             * R3-04 (#218): retire = advance the one-pass watermark past each
+             * consumed record (MarkRecoverySent is range-aware: live records
+             * raise H, walker records lower F). Leading corrupt runs were
+             * already retired inline by the read. */
+            SONDE_LOG("Retiring %lu unconvertible records with no TX (%lu corrupt skipped)\r\n",
+                              (unsigned long)record_count, (unsigned long)skipped_count);
+            for (uint32_t i = 0; i < record_count; i++) {
+              FlashLog_MarkRecoverySent(&hflashlog, flash_records[i].sequence);
             }
             g_tx_state = TX_STATE_COMPLETE;
             break;
@@ -1758,29 +1756,26 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
             SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
                               v5_len, LORAWAN_BULK_PORT, v5_packed);
 
-            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
-            
+            /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
+             * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
+             * frame is never retried autonomously. The backend owns gap
+             * repair (BR-TX-012, deferred: #125). */
+            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+
             if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
               g_bulk_packets_sent++;
-              
-              /* F-005/R21 (#51) + FR-08 (#91): positional commit point. The
-               * old arithmetic (packed + skipped) was only correct when every
-               * skip sat before the packing cut — a trailing corrupt record
-               * plus a truncating budget committed a record that was never
-               * transmitted. Now: everything from the entry watermark through
-               * the last PACKED record's own sequence is consumed (packed
-               * records + any corrupt slots below them); records read but cut
-               * by the budget stay pending. The exact-identity ack lands with
-               * the confirmed-delivery rework (#34).
-               * R2-02 (#106): the commit point is ABSOLUTE - not a count vs a
-               * base the read path may have clamped. */
-              if (v5_packed != record_count) {
-                SONDE_LOG("WARN: packed %u of %lu read - marking through seq %lu only\r\n",
-                                  v5_packed, (unsigned long)record_count,
-                                  (unsigned long)highres_seqs[v5_packed - 1]);
+
+              /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
+               * TIME, per packed record (newest-first as read). Records read
+               * but cut by the payload budget stay sendable. */
+              for (uint8_t i = 0; i < v5_packed; i++) {
+                FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
               }
-              g_bulk_commit_through = highres_seqs[v5_packed - 1] + 1U;
-              
+              if (v5_packed != record_count) {
+                SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
+                                  v5_packed, (unsigned long)record_count);
+              }
+
               SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
                                 g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
               
@@ -2314,24 +2309,10 @@ static void OnTxData(LmHandlerTxParams_t *params)
     }
   }
 
-  /* DDR-0005 (#34): delivery commit requires the NETWORK acknowledgement of a
-   * confirmed uplink — never bare radio-TX completion (F-004/N-04). Records
-   * without an ACK stay pending and are retransmitted later; the backend
-   * deduplicates by (device, base_seq + i). */
-  if (g_bulk_commit_through > 0) {
-    if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      /* R2-02 (#106): absolute commit - cannot over-advance even if the
-       * read path clamped the watermark after this batch was read. */
-      FlashLog_CommitThrough(&hflashlog, g_bulk_commit_through);
-      SONDE_LOG("OnTxData: ACK received — archive committed through seq %lu\r\n",
-                        (unsigned long)g_bulk_commit_through);
-    } else {
-      SONDE_LOG("OnTxData: no network ACK (status %d, ack %d) — records through seq %lu stay PENDING\r\n",
-                        params->Status, params->AckReceived,
-                        (unsigned long)g_bulk_commit_through);
-    }
-    g_bulk_commit_through = 0;
-  }
+  /* R3-04 (#218): the commit-on-ACK block is DELETED. DDR-0005 one-pass
+   * recovery sends archive frames UNCONFIRMED and advances the watermark at
+   * send time (FlashLog_MarkRecoverySent in RunTxStateMachine). The backend
+   * deduplicates by (device, base_seq + i) and owns gap repair. */
 
   /* DDR-0005 (#34): the confirmed probe heartbeat opens the archive opportunity.
    * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
@@ -2371,15 +2352,11 @@ static void OnTxData(LmHandlerTxParams_t *params)
     }
   }
 
-  /* DDR-0005 (#34): burst continues only while archive packets are ACKed
-   * (protocol §5.3). First archive packet unACKed -> immediate fallback. */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER &&
-      g_bulk_packets_sent >= 1 && !params->AckReceived) {
-    SONDE_LOG_STR("Archive packet unACKed — FALLBACK to heartbeat mode\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-    g_bulk_packets_sent = 0;
-  }
-  
+  /* R3-04 (#218): the unACKed-archive fallback is DELETED. Archive frames
+   * are unconfirmed now (BR-TX-011) - AckReceived carries no meaning for
+   * them. Burst continuation is governed by the LinkCheck verdict on the
+   * first archive packet (BR-TX-006/007, OnRxData) and the packet cap. */
+
   /* Drain packet queue after RX windows complete */
   /* This callback fires AFTER RX2 window closes, so MAC is ready for next TX */
   if (!PacketQueue_IsEmpty(&g_packet_queue))
