@@ -82,6 +82,29 @@ int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32
         return 0;  // No slope yet (same value)
     }
 
+    /* S-B (#213, 2026-08-12, RV-06 class): backward time step. The LSE->LSI
+     * failover re-inits the RTC and restarts the counter near zero, but
+     * this state lives in RAM and survives (no MCU reset), so
+     * (current - baseline) wraps. The SMALL backward step is the dangerous
+     * one: it casts to a small NEGATIVE int32_t below and (dv * 3600) / -dt
+     * both SIGN-FLIPS and MAGNIFIES. Measured on the host harness: a
+     * genuine -108 mV/h discharge reported as +14400 mV/h fast charging,
+     * then republished for the whole FW-6 600 s window - enough separated
+     * observations to confirm an F8 mode UPGRADE at ASCENT cadence. Re-seed
+     * and report no slope - the same guard Deadman_Check,
+     * LaunchDetector_Update and FloatDetector_Update already carry
+     * (RV-06/#162). (The F-002/#201 fix makes the failover RTC restart
+     * actually happen, which makes this guard load-bearing, not
+     * theoretical.) */
+    if (now_timestamp < slope->baseline_timestamp) {
+        slope->baseline_voltage_mv = battery_mv;
+        slope->baseline_timestamp  = now_timestamp;
+        slope->current_voltage_mv  = battery_mv;
+        slope->current_timestamp   = now_timestamp;
+        slope->last_slope_mv_per_hour = 0;
+        return 0;
+    }
+
     // Update current values
     slope->current_voltage_mv = battery_mv;
     slope->current_timestamp = now_timestamp;
