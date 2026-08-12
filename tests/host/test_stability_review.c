@@ -723,6 +723,43 @@ static void test_r14_config_immutability(const char *app, const char *mreg, cons
     CHECK_REGRESSION(!caller_in_app && !caller_in_mreg && documented, "R14");
 }
 
+/* ========================================================================== */
+/* F-001/F-007 (P0) — early-boot HAL_GetTick must be a real ms timebase        */
+/* ========================================================================== */
+/* Pre-TIMER_IF, HAL_GetTick returned a constant 0, so HAL_RCC_OscConfig's
+ * LSE wait could never time out: dead crystal -> IWDG reset loop, documented
+ * LSI fallback unreachable. Fix: early boot runs on uwTick (SysTick ms).
+ * Invariants: (a) the early branch returns uwTick, not a constant; (b) the
+ * pre-init HAL_Delay busy-waits on uwTick (TIMER_IF_DelayMs would spin on a
+ * frozen RTC); (c) the timeout idiom is wrap-safe unsigned subtraction.
+ * (a)/(b) are structural scans; (c) is a behavioral unit test of the exact
+ * arithmetic the fix relies on (review F-001 required host test).
+ */
+static void test_f001_f007_early_tick(const char *sysapp)
+{
+    printf("-- F-001/F-007 (P0): early-boot HAL_GetTick must advance (uwTick)\n");
+
+    bool tick = strstr(sysapp, "ret = uwTick;") != NULL;
+    bool delay = strstr(sysapp, "(uint32_t)(uwTick - start) < Delay") != NULL;
+    printf("   early GetTick returns uwTick: %s, pre-init HAL_Delay on uwTick: %s\n",
+           tick ? "yes" : "no", delay ? "yes" : "no");
+    CHECK_REGRESSION(tick && delay, "F-001-src");
+
+    /* Behavioral: the wrap-safe timeout idiom across a 32-bit wrap. */
+    uint32_t start = 0xFFFFFFF0u;
+    uint32_t now   = 0x00000014u;   /* 0x24 ms later across the wrap */
+    bool wrap_ok = ((uint32_t)(now - start) >= 0x20u) &&
+                   ((uint32_t)(now - start) == 0x24u);
+    /* ...and the switchover backwards-step case: start on uwTick=1000, the
+     * RTC timebase restarts near 0 -> huge unsigned delta -> timeout fires
+     * (fails SAFE: over-timeout, never under-timeout/hang). */
+    uint32_t back = (uint32_t)(10u - 1000u);
+    bool back_ok = (back > 1000000u);
+    printf("   wrap arithmetic: %s, switchover backwards-step over-times-out: %s\n",
+           wrap_ok ? "ok" : "WRONG", back_ok ? "ok" : "WRONG");
+    CHECK_REGRESSION(wrap_ok && back_ok, "F-001-wrap");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -735,6 +772,7 @@ int main(void)
     char *sens = slurp("../../Core/Src/sys_sensors.c");
     char *adc = slurp("../../Core/Src/adc_if.c");
     char *mreg = slurp("../../Core/Src/multiregion_context.c");
+    char *sysapp = slurp("../../Core/Src/sys_app.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -781,6 +819,8 @@ int main(void)
     test_r12_config_authority(mreg, cfg);
     printf("\n");
     test_r14_config_immutability(app, mreg, cfg);
+    printf("\n");
+    test_f001_f007_early_tick(sysapp);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

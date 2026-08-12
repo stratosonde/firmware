@@ -334,7 +334,19 @@ uint32_t HAL_GetTick(void)
     /* Note: when TIMER_IF is based on RTC, stm32wlxx_hal_rtc.c calls this function before TimeServer is functional */
     /* RTC TIMEOUT will not expire, i.e. if RTC has an hw problem it will keep looping in the RTC_Init function */
     /* USER CODE BEGIN HAL_GetTick_EarlyCall */
-
+    /* F-001/F-007 (#202): the CubeMX default left ret = 0 here - a CONSTANT,
+     * non-advancing tick - so every HAL_GetTick-based timeout in early boot
+     * could never expire. Concretely: HAL_RCC_OscConfig() waiting for a dead
+     * LSE hung forever, the IWDG reset the MCU, the next boot repeated it
+     * (documented LSI fallback unreachable) = permanent ~33 s reset loop.
+     * Return uwTick instead: the real 1 ms SysTick counter HAL_Init() starts
+     * before SystemClock_Config(). This restores the 1 ms HAL_GetTick
+     * contract in early boot (F-007) AND makes the LSE timeout / LSI
+     * fallback actually reachable (F-001).
+     * Switchover note: the RTC-based tick restarts near 0 when TIMER_IF
+     * comes up, so the timebase steps backward once by up to boot duration.
+     * Unsigned (now - start) >= timeout arithmetic absorbs that safely. */
+    ret = uwTick;
     /* USER CODE END HAL_GetTick_EarlyCall */
   }
   else
@@ -354,7 +366,16 @@ void HAL_Delay(__IO uint32_t Delay)
 {
   /* TIMER_IF can be based on other counter the SysTick e.g. RTC */
   /* USER CODE BEGIN HAL_Delay_1 */
-
+  /* F-001/F-007 (#202): TIMER_IF_DelayMs spins on the RTC timer value, which
+   * is frozen before TIMER_IF init - a pre-init HAL_Delay would hang just
+   * like the old constant-0 GetTick. Busy-wait on the SysTick ms counter
+   * (wrap-safe unsigned subtraction) until the RTC timebase is live. */
+  if (SYS_TimerInitialisedFlag == 0)
+  {
+    uint32_t start = uwTick;
+    while ((uint32_t)(uwTick - start) < Delay) { }
+    return;
+  }
   /* USER CODE END HAL_Delay_1 */
   TIMER_IF_DelayMs(Delay);
   /* USER CODE BEGIN HAL_Delay_2 */
