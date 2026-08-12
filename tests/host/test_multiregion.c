@@ -377,6 +377,7 @@ static void test_r3_fcnt_reset_margin(void)
     }
     uint32_t true2 = resumed + 5;
     g_initialized = false;
+
     g_unsaved_tx_count = 0;
     memset(&g_storage, 0, sizeof(g_storage));
     MultiRegion_Init();
@@ -384,6 +385,65 @@ static void test_r3_fcnt_reset_margin(void)
     printf("   second reset: NS last saw %lu, resumed at %lu (want > %lu)\n",
            (unsigned long)true2, (unsigned long)resumed2, (unsigned long)true2);
     CHECK_REGRESSION(resumed2 > true2, "R3-margin-chain");
+}
+
+/* ========================================================================== */
+/* R2 (P1-high) — CRC-valid but semantically dead contexts must be rejected   */
+/* ========================================================================== */
+/* ValidateContextCRC proves only that the bytes survived. Zero the session
+ * keys of a commissioned context and re-stamp a VALID CRC with the real
+ * UpdateContextCRC: the context is CRC-valid and semantically dead.
+ * IsRegionJoined / SwitchToRegion must reject it before any restore runs.
+ */
+static void test_r2_semantic_validation(void)
+{
+    printf("-- R2 (P1-high): CRC-valid but semantically dead context must be rejected\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED\n"); exit(2); }
+
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* Guard: the healthy context is joined. */
+    CHECK_REGRESSION(MultiRegion_IsRegionJoined(LORAMAC_REGION_US915), "R2-guard");
+
+    /* Poison: keys all-zero, CRC re-stamped VALID (incomplete-commissioning
+     * pattern). */
+    memset(g_storage.contexts[slot].app_s_key, 0x00, 16);
+    memset(g_storage.contexts[slot].nwk_s_key, 0x00, 16);
+    UpdateContextCRC(&g_storage.contexts[slot]);
+    printf("   zeroed keys + valid CRC: IsRegionJoined=%s (want no)\n",
+           MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ? "yes" : "no");
+    CHECK_REGRESSION(!MultiRegion_IsRegionJoined(LORAMAC_REGION_US915), "R2a-keys");
+
+    /* Restore the keys, poison DevAddr instead (broadcast/erased pattern). */
+    commission_two_regions();
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED 2\n"); exit(2); }
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    g_storage.contexts[slot].dev_addr = 0xFFFFFFFFUL;
+    UpdateContextCRC(&g_storage.contexts[slot]);
+    printf("   DevAddr=0xFFFFFFFF + valid CRC: IsRegionJoined=%s (want no)\n",
+           MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ? "yes" : "no");
+    CHECK_REGRESSION(!MultiRegion_IsRegionJoined(LORAMAC_REGION_US915), "R2b-devaddr");
+
+    /* Poisoned context must not be switchable either (belt: the CRC gate in
+     * SwitchToRegion is a second call site). */
+    LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "R2c-switch");
 }
 
 int main(void)
@@ -394,6 +454,8 @@ int main(void)
     test_r1_restore_fail_closed();
     printf("\n");
     test_r3_fcnt_reset_margin();
+    printf("\n");
+    test_r2_semantic_validation();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

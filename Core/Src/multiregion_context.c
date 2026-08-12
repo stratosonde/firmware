@@ -153,6 +153,7 @@ static bool FlashReadTier2(Tier2Bank_t *out);
 static bool FlashWriteTier2(void);
 static int8_t FindContextSlot(LoRaMacRegion_t region);
 static bool CaptureCurrentContext(MinimalRegionContext_t *ctx);
+static bool ValidateContextSemantics(const MinimalRegionContext_t *ctx);  /* R2 (#189) */
 static bool RestoreContextToMAC(MinimalRegionContext_t *ctx);
 const char* RegionToString(LoRaMacRegion_t region);
 
@@ -233,8 +234,10 @@ bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region)
     if (ctx->dev_addr == 0 || ctx->dev_addr == 0xFFFFFFFF) {
         return false;
     }
-    
-    return ValidateContextCRC(ctx);
+
+    /* R2 (#189): CRC-valid is not enough - the context must also be
+     * semantically a real session. */
+    return ValidateContextCRC(ctx) && ValidateContextSemantics(ctx);
 }
 
 /**
@@ -740,8 +743,8 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     }
     
     MinimalRegionContext_t *ctx = &g_storage.contexts[slot];
-    if (!ValidateContextCRC(ctx)) {
-        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Context CRC validation failed\r\n");
+    if (!ValidateContextCRC(ctx) || !ValidateContextSemantics(ctx)) {  /* R2 (#189) */
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Context validation failed\r\n");
         return LORAMAC_HANDLER_ERROR;
     }
     
@@ -1315,6 +1318,36 @@ static bool ValidateContextCRC(MinimalRegionContext_t *ctx)
     ctx->crc16 = stored_crc;
     
     return (stored_crc == calculated_crc);
+}
+
+/**
+ * @brief R2 (#189): semantic validation - a CRC proves the bytes SURVIVED,
+ *        not that they were ever a real session. Reject CRC-valid but
+ *        semantically dead contexts: uniformly 0x00 / 0xFF session keys
+ *        (erased-flash or incomplete-commissioning patterns that still got
+ *        CRC-stamped), a null/broadcast DevAddr, or a region ordinal outside
+ *        the enum. Belt-and-braces with the CRC check at every gate.
+ */
+static bool ValidateContextSemantics(const MinimalRegionContext_t *ctx)
+{
+    if (ctx->region > LORAMAC_REGION_RU864) {  /* last enum member */
+        return false;
+    }
+    if (ctx->dev_addr == 0 || ctx->dev_addr == 0xFFFFFFFFUL) {
+        return false;
+    }
+    bool app_uniform = true, nwk_uniform = true;
+    for (int i = 1; i < 16; i++) {
+        if (ctx->app_s_key[i] != ctx->app_s_key[0]) app_uniform = false;
+        if (ctx->nwk_s_key[i] != ctx->nwk_s_key[0]) nwk_uniform = false;
+    }
+    if (app_uniform && (ctx->app_s_key[0] == 0x00 || ctx->app_s_key[0] == 0xFF)) {
+        return false;
+    }
+    if (nwk_uniform && (ctx->nwk_s_key[0] == 0x00 || ctx->nwk_s_key[0] == 0xFF)) {
+        return false;
+    }
+    return true;
 }
 
 /**
