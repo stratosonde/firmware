@@ -57,7 +57,10 @@ extern "C" {
 
 /* Magic number for flash storage validation */
 #define MULTIREGION_MAGIC                0xDEADBEEF
-#define MULTIREGION_VERSION              2  // v2 = two-tier storage (FW-1/DDR-0018)
+/* v2 = two-tier storage (FW-1/DDR-0018); v3 = Tier-1 banks carry a monotonic
+ * generation (R8/#190). No deployed fleet: older banks read as virgin and the
+ * device falls back to COMMISSIONING, same precedent as FR-18. */
+#define MULTIREGION_VERSION              3
 
 /* Exported types ------------------------------------------------------------*/
 

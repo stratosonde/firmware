@@ -68,6 +68,7 @@ typedef struct {
     uint16_t version;                    // MULTIREGION_VERSION
     uint8_t num_valid;                   // How many contexts are joined
     uint8_t active_slot;                 // Active slot at commissioning time
+    uint32_t generation;                 // R8 (#190): monotonic; newest valid copy wins
     MinimalRegionContext_t contexts[MAX_REGION_CONTEXTS];
     uint32_t crc32;                      // Whole-bank validation
 } __attribute__((aligned(8))) Tier1Bank_t;
@@ -133,6 +134,7 @@ static const uint32_t TIER2_ADDRS[TIER2_NUM_SLOTS]  = { 0x0803D800UL, 0x0803E000
 static uint32_t g_t2_sequence = 0;       // Last Tier-2 sequence written/read
 static int8_t g_t2_last_slot = -1;       // Last Tier-2 slot written (-1 = none)
 static bool g_tier1_dirty = false;       // Static credentials changed, Tier-1 rewrite needed
+static uint32_t g_t1_generation = 0;     // R8 (#190): last Tier-1 generation read/written
 
 /* Batched frame counter save infrastructure */
 static uint8_t g_unsaved_tx_count = 0;  // Track unsaved successful transmissions
@@ -1368,7 +1370,9 @@ static void UpdateContextCRC(MinimalRegionContext_t *ctx)
 static bool FlashReadTier1(Tier1Bank_t *out)
 {
     bool copy_ok[TIER1_NUM_COPIES] = { false, false, false };
+    uint32_t copy_gen[TIER1_NUM_COPIES] = { 0, 0, 0 };
     int8_t good = -1;
+    uint32_t best_gen = 0;
 
     for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
         Tier1Bank_t tmp;
@@ -1386,8 +1390,13 @@ static bool FlashReadTier1(Tier1Bank_t *out)
         }
         tmp.crc32 = stored_crc;
         copy_ok[i] = true;
-        if (good < 0) {
+        copy_gen[i] = tmp.generation;
+        /* R8 (#190): NEWEST CRC-valid copy wins, not first-valid. Without a
+         * generation a torn re-commission resurrects a stale credential bank
+         * (and the old repair path then propagated it over the good copies). */
+        if (good < 0 || tmp.generation > best_gen) {
             memcpy(out, &tmp, sizeof(Tier1Bank_t));
+            best_gen = tmp.generation;
             good = (int8_t)i;
         }
     }
@@ -1395,10 +1404,13 @@ static bool FlashReadTier1(Tier1Bank_t *out)
     if (good < 0) {
         return false;
     }
+    g_t1_generation = best_gen;  /* seed the write-side counter */
 
-    // Restore-repair: rewrite any bad copy from the good one
+    // Restore-repair: rewrite any bad copy OR stale-generation copy from the
+    // winner (R8: a lingering older copy must not outlive the newest bank's
+    // copies and resurrect later).
     for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
-        if (copy_ok[i]) {
+        if (copy_ok[i] && copy_gen[i] == best_gen) {
             continue;
         }
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Repairing Tier-1 copy %d from copy %d\r\n", i, good);
@@ -1424,6 +1436,7 @@ static bool FlashWriteTier1(void)
     t1.version = MULTIREGION_VERSION;
     t1.num_valid = g_storage.num_valid;
     t1.active_slot = g_storage.active_slot;
+    t1.generation = ++g_t1_generation;  /* R8 (#190): newest valid copy wins on read */
     memcpy(t1.contexts, g_storage.contexts, sizeof(t1.contexts));
     t1.crc32 = 0;
     t1.crc32 = CalculateCRC32((uint8_t*)&t1, sizeof(Tier1Bank_t) - 4);

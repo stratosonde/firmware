@@ -446,6 +446,8 @@ static void test_r2_semantic_validation(void)
     CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "R2c-switch");
 }
 
+static void test_r8_tier1_generation_order(void);
+
 int main(void)
 {
     printf("=== R15 harness: real multiregion_context.c vs fake LoRaMac ===\n\n");
@@ -456,6 +458,8 @@ int main(void)
     test_r3_fcnt_reset_margin();
     printf("\n");
     test_r2_semantic_validation();
+    printf("\n");
+    test_r8_tier1_generation_order();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
@@ -465,5 +469,73 @@ int main(void)
         return 0;
     }
     return g_failures ? 1 : 0;
+}
+
+/* ========================================================================== */
+/* R8 (P1) — newest CRC-valid Tier-1 copy must win, not first-valid           */
+/* ========================================================================== */
+/* Tier1Bank_t has CRCs but no generation: FlashReadTier1 takes the FIRST
+ * CRC-valid copy. After a torn re-commission (copy A still holds the OLD
+ * bank, B/C the NEW one), the stale bank resurrects and the repair path
+ * propagates it over the good copies.
+ */
+static void test_r8_tier1_generation_order(void)
+{
+    printf("-- R8 (P1): newest CRC-valid Tier-1 copy must win, not first-valid\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED\n"); exit(2); }
+
+    /* Re-commissioning on target always follows a boot, and boot READS the
+     * banks (seeding the generation counter) - emulate that reboot so the
+     * rewrite below stamps a genuinely newer generation. */
+    g_initialized = false;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* Snapshot the current (old-generation) bank bytes. */
+    Tier1Bank_t old_bank;
+    if (FLASH_IF_Read(&old_bank, (void*)TIER1_ADDRS[1], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+        printf("   SETUP FAILED: read\n"); exit(2);
+    }
+    uint32_t old_addr = old_bank.contexts[slot].dev_addr;
+
+    /* Re-commission: new DevAddr for US915, rewrite Tier-1 (new generation). */
+    g_storage.contexts[slot].dev_addr = 0x26019999UL;
+    UpdateContextCRC(&g_storage.contexts[slot]);
+    g_tier1_dirty = true;
+    if (!FlashWriteTier1()) { printf("   SETUP FAILED: rewrite\n"); exit(2); }
+
+    /* Torn re-commission: copy A still holds the OLD bank, B/C the NEW. */
+    FLASH_IF_Erase((void*)TIER1_ADDRS[0], MULTIREGION_FLASH_PAGE_SIZE);
+    FLASH_IF_Write((void*)TIER1_ADDRS[0], &old_bank, sizeof(Tier1Bank_t));
+
+    /* Reboot. */
+    g_initialized = false;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+
+    uint32_t got = g_storage.contexts[slot].dev_addr;
+    printf("   copy A=old(0x%08lX), B/C=new(0x%08lX): restored 0x%08lX (want new)\n",
+           (unsigned long)old_addr, 0x26019999UL, (unsigned long)got);
+    CHECK_REGRESSION(got == 0x26019999UL, "R8-newest-wins");
+
+    /* The repair path must have propagated the NEW bank to copy A (not the
+     * old one over B/C). */
+    Tier1Bank_t repaired;
+    FLASH_IF_Read(&repaired, (void*)TIER1_ADDRS[0], sizeof(Tier1Bank_t));
+    printf("   copy A after repair: DevAddr=0x%08lX (want new)\n",
+           (unsigned long)repaired.contexts[slot].dev_addr);
+    CHECK_REGRESSION(repaired.contexts[slot].dev_addr == 0x26019999UL, "R8-repair");
 }
 
