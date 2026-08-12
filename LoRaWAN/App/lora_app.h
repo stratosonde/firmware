@@ -192,6 +192,18 @@ typedef enum {
 #define GPS_LOSS_SILENCE_S  (6U * 3600U)   /* 6 h */
 #endif
 
+/* S-A (#211, 2026-08-12 review): acquisition budget for the #141
+ * GPS-loss-silence forced retry. The forced retry runs in modes whose
+ * ApplyOperatingMode budget is 0 ms (REDUCED/RECOVERY), so it MUST carry
+ * its own timeout or the retry is a power-cycle with zero acquisition
+ * iterations and the silence can never clear. Deliberately shorter than
+ * the 60 s NORMAL/CONSERVATIVE budget: this fires in energy-constrained
+ * modes. Decision: constant, not config-authoritative (30 s covers a
+ * warm start after the dark period with margin). */
+#ifndef GPS_LOSS_RETRY_TIMEOUT_MS
+#define GPS_LOSS_RETRY_TIMEOUT_MS  30000U   /* 30 s */
+#endif
+
 #define LINK_MARGIN_THRESHOLD       15   // dB - minimum demod margin for SF7 bulk
 #define GATEWAY_COUNT_THRESHOLD     2    // Minimum gateway count for SF7 bulk
 #define BULK_BATTERY_MIN_MV         5000 // mV - minimum battery for bulk transfer

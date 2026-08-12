@@ -1993,6 +1993,18 @@ static void SendTxData(void)
        * stale-position age -> repeat). Stay dark and retry next cycle. */
       if (current_mode != MODE_SURVIVAL) {
         gps_enabled_by_power_mgmt = true;
+        /* S-A (#211, 2026-08-12): forcing the ENABLE flag without a BUDGET is
+         * a no-op. Every GPS-off mode carries gps_timeout_ms == 0 from
+         * ApplyOperatingMode, so AcquireGnssFix() powered the receiver up,
+         * ran `while ((HAL_GetTick() - gps_start) < 0)` zero times, took the
+         * stale-position branch and powered it back down. s_last_fresh_fix_s
+         * could never advance, so the silence never cleared: a permanently
+         * dark unit paying a full GPS power-cycle every cycle to guarantee
+         * no fix. This is the RV-08 sawtooth re-entering through the modes a
+         * power-starved float actually lives in. */
+        if (gps_timeout_ms == 0U) {
+          gps_timeout_ms = GPS_LOSS_RETRY_TIMEOUT_MS;
+        }
       }
       SONDE_LOG_STR("GPS-LOSS SILENCE: no fresh fix - radio dark, still logging, GPS retry on\r\n");
     }
