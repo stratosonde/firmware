@@ -237,6 +237,46 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval GNSS status
   */
+/* R3-06 (#220): receiver-side behavioral verification. PCAS writes have no
+ * query/ACK, so the only in-band evidence that the NMEA mask took effect is
+ * the OUTPUT stream changing: GGA keeps flowing while GSV stops. Streams the
+ * DMA buffer for window_ms with a rolling 4-char matcher (split-sentence
+ * safe), counting whole "GGA,"/"GSV," sentence IDs. */
+static void GNSS_SampleSentenceMix(GNSS_HandleTypeDef *hgnss, uint32_t window_ms,
+                                   uint32_t *gga_count, uint32_t *gsv_count)
+{
+  *gga_count = 0;
+  *gsv_count = 0;
+  if (hgnss == NULL || hgnss->huart == NULL || hgnss->huart->hdmarx == NULL)
+  {
+    return;
+  }
+
+  uint16_t prev = (uint16_t)((GNSS_DMA_BUFFER_SIZE -
+      __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) % GNSS_DMA_BUFFER_SIZE);
+  char shift[4];
+  uint8_t shift_len = 0;
+  uint32_t start = HAL_GetTick();
+  while ((HAL_GetTick() - start) < window_ms)
+  {
+    uint16_t head = (uint16_t)((GNSS_DMA_BUFFER_SIZE -
+        __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) % GNSS_DMA_BUFFER_SIZE);
+    while (prev != head)
+    {
+      char c = (char)hgnss->dma_buffer[prev];
+      prev = (uint16_t)((prev + 1U) % GNSS_DMA_BUFFER_SIZE);
+      if (shift_len < 4) { shift[shift_len++] = c; }
+      else { memmove(shift, shift + 1, 3); shift[3] = c; }
+      if (shift_len == 4)
+      {
+        if (memcmp(shift, "GGA,", 4) == 0) { (*gga_count)++; }
+        else if (memcmp(shift, "GSV,", 4) == 0) { (*gsv_count)++; }
+      }
+    }
+    HAL_Delay(20);
+  }
+}
+
 GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
 {
   if (hgnss == NULL || !hgnss->is_powered)
@@ -309,6 +349,17 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   }
   HAL_Delay(100);  /* Give GPS time to save to flash */
 
+  /* R3-06 (#220): receiver-side verification of the NMEA mask. The PCAS
+   * write protocol has no query/ACK, so the only in-band evidence is the
+   * output stream: after the mask command, GGA must keep flowing and GSV
+   * must stop. ~3 s of 1 Hz output is enough for both. */
+  uint32_t gga_seen = 0, gsv_seen = 0;
+  GNSS_SampleSentenceMix(hgnss, 3000, &gga_seen, &gsv_seen);
+  bool nmea_verified = (gga_seen > 0) && (gsv_seen == 0);
+  SONDE_LOG("NMEA mask verification: GGA sentences=%lu GSV sentences=%lu -> %s\r\n",
+            (unsigned long)gga_seen, (unsigned long)gsv_seen,
+            nmea_verified ? "VERIFIED receiver-side" : "NO receiver-side evidence");
+
   /* F2 (#168): never claim success the receiver did not confirm */
   if (cfg_failures > 0)
   {
@@ -317,7 +368,20 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
-  SONDE_LOG_STR("=== GNSS Configuration Complete (saved to flash) ===\r\n\r\n");
+  /* R3-06 (#220): precise claims. KNOWN: every command was handed to the
+   * UART. VERIFIED (receiver-side): the NMEA output mask. NOT verifiable
+   * in-band (no PCAS query): the airborne dynamic model and the flash save -
+   * those need the bench commissioning procedure (full power removal, cold
+   * restart, controlled acquisition check). */
+  if (nmea_verified)
+  {
+    SONDE_LOG_STR("=== GNSS config transmitted; NMEA mask VERIFIED receiver-side ===\r\n");
+    SONDE_LOG_STR("    (airborne model + flash save: transmitted, not receiver-verifiable - bench commissioning check required)\r\n\r\n");
+  }
+  else
+  {
+    SONDE_LOG_STR("=== GNSS config transmitted; UNVERIFIED - no receiver-side evidence (see bench commissioning procedure) ===\r\n\r\n");
+  }
 
   return GNSS_OK;
 }
@@ -1349,7 +1413,15 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   if (hgnss->huart != NULL)
   {
     /* Reinitialize UART peripheral - restores PB6/PB7 to UART function */
-    HAL_UART_Init(hgnss->huart);
+    /* R3-06 (#220): check the init result - a failed UART restore must not
+     * continue blindly (the DMA would start on a dead peripheral). Roll back
+     * the LPM lock exactly like the DMA-failure path below. */
+    if (HAL_UART_Init(hgnss->huart) != HAL_OK)
+    {
+      SONDE_LOG_STR("[GPS WAKE] ERROR - UART reinit failed\r\n");
+      UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+      return GNSS_ERROR;
+    }
     SONDE_LOG_STR("[GPS WAKE] UART reinitialized\r\n");
     
     /* CRITICAL: Flush UART hardware FIFO to ensure clean start */

@@ -336,11 +336,43 @@ static void test_r304_one_pass_protocol(const char *app, const char *flashc,
     CHECK_REGRESSION(v5, "R3-04-v5");
 }
 
+/* ------------------------------------------------------------------ */
+/* R3-06 — GNSS commissioning must not claim unverified success         */
+/* ------------------------------------------------------------------ */
+static void test_r306_gnss_config_verification(const char *app, const char *gnssc)
+{
+    printf("-- R3-06 (P2, #220): GNSS config success needs receiver-side evidence\n");
+
+    /* The wake path must check HAL_UART_Init's return (and roll back LPM). */
+    bool uart_init_checked =
+        strstr(gnssc, "HAL_UART_Init(hgnss->huart) != HAL_OK") != NULL;
+    printf("   wake HAL_UART_Init return checked: %s\n",
+           uart_init_checked ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(uart_init_checked, "R3-06-uartinit");
+
+    /* Some receiver-side verification mechanism must exist (the PCAS write
+     * protocol has no query/ACK, so behavioral evidence: the NMEA mask takes
+     * visible effect in the output stream). */
+    bool has_verification = strstr(gnssc, "receiver-side") != NULL;
+    printf("   receiver-side verification mechanism: %s\n",
+           has_verification ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(has_verification, "R3-06-verify");
+
+    /* The unconditional "reconfigured and saved to flash" banner must be
+     * gone from the commissioning path (log strings survive comment
+     * stripping - this is CODE output, not prose). */
+    bool honest = strstr(app, "GPS reconfigured and saved to flash") == NULL;
+    printf("   unconditional saved-to-flash banner removed: %s\n",
+           honest ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(honest, "R3-06-honest");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
     char *flashc = normalize_code(slurp("../../Core/Src/flash_log.c"));
     char *flashh = normalize_code(slurp("../../Core/Inc/flash_log.h"));
+    char *gnssc  = normalize_code(slurp("../../Core/Src/atgm336h.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -351,7 +383,10 @@ int main(void)
     test_r303_ascent_no_bulk(app);
     printf("\n");
     test_r304_one_pass_protocol(app, flashc, flashh);
+    printf("\n");
+    test_r306_gnss_config_verification(app, gnssc);
 
+    free(gnssc);
     free(flashh);
     free(flashc);
 

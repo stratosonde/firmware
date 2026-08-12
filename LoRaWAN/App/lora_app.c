@@ -504,10 +504,15 @@ void LoRaWAN_Init(void)
      * be loud, not a warning line above a "success" banner. */
     if (GNSS_Configure(&hgnss) != GNSS_OK) {  // PCAS04,7 + PCAS11 airborne + PCAS00
       SONDE_LOG_STR("*** COMMISSIONING: GNSS CONFIGURE FAILED - do not launch ***\r\n");
+    } else {
+      /* R3-06 (#220): honest claim. The old unconditional "reconfigured and
+       * saved to flash" banner printed even on failure AND claimed evidence
+       * no one collected - what holds is transmitted + whatever the
+       * receiver-side verification inside GNSS_Configure proved. */
+      SONDE_LOG_STR("*** GNSS config commands transmitted (see receiver-side verification report above) ***\r\n\r\n");
     }
     HAL_Delay(500);   // Let GPS save to flash
     GNSS_PowerOff(&hgnss);
-    SONDE_LOG_STR("*** GPS reconfigured and saved to flash ***\r\n\r\n");
   }
   
   /* Auto-detect provision state: resume any valid saved session.

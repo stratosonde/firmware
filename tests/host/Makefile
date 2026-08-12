@@ -83,7 +83,7 @@ test_timerif$(EXE): $(TIMERIF_SRCS) ../../Core/Src/timer_if.c ../../Core/Inc/tim
 test_review0812$(EXE): $(REVIEW0812_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/main.c ../../Core/Src/usart_if.c ../../Core/Src/atgm336h.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(REVIEW0812_SRCS) -lm
 
-test_deepreview$(EXE): $(DEEP_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/flash_log.c ../../Core/Inc/flash_log.h
+test_deepreview$(EXE): $(DEEP_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/flash_log.c ../../Core/Inc/flash_log.h ../../Core/Src/atgm336h.c
 	$(CC) $(CFLAGS) -o $@ $(DEEP_SRCS)
 
 review0812: test_review0812$(EXE)
