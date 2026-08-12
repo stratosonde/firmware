@@ -265,6 +265,35 @@ static void test_r302_gnss_wake_stale(const char *app)
     CHECK(strstr(wake, "EnvSensors_MarkGnssStale(false)") != NULL);
 }
 
+/* ------------------------------------------------------------------ */
+/* R3-03 — ASCENT must never open the archive-recovery opportunity     */
+/* ------------------------------------------------------------------ */
+static void test_r303_ascent_no_bulk(const char *app)
+{
+    printf("-- R3-03 (P1, #217): ASCENT must inhibit historical archive recovery\n");
+
+    /* The archive opportunity opens in OnTxData (probe-ACK branch). That
+     * decision must consult the mission state (DDR-0005 BR-TX-016/017,
+     * P-TX-008): during ASCENT the backlog keeps until FLOAT. */
+    /* Anchor on DEFINITIONS (") {"), not the prototypes near the file top -
+     * otherwise the span would swallow SendTxData's own MISSION_ASCENT
+     * references and false-pass. */
+    const char *sig = strstr(app, "static void OnTxData(LmHandlerTxParams_t *params) {");
+    CHECK(sig != NULL);
+    if (!sig) return;
+    const char *end = strstr(sig, "static void OnJoinRequest(LmHandlerJoinParams_t *joinParams) {");
+    CHECK(end != NULL);
+    if (!end) return;
+
+    bool gated = occurs_before(sig, end, "MISSION_ASCENT");
+    printf("   archive-opportunity gate consults mission state: %s\n",
+           gated ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(gated, "R3-03");
+
+    /* Guard: the opportunity itself still exists (float recovery intact). */
+    CHECK(occurs_before(sig, end, "TX_STATE_BULK_TRANSFER"));
+}
+
 int main(void)
 {
     char *app = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -274,6 +303,8 @@ int main(void)
     test_r301_bulk_starvation(app);
     printf("\n");
     test_r302_gnss_wake_stale(app);
+    printf("\n");
+    test_r303_ascent_no_bulk(app);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

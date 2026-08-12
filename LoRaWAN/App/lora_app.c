@@ -2344,7 +2344,13 @@ static void OnTxData(LmHandlerTxParams_t *params)
       SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
                         battery_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
-      if (battery_good && has_cache) {
+      /* R3-03 (#217): mission-aware TX policy (DDR-0005 INV-TX-006,
+       * BR-TX-016/017, P-TX-008): during ASCENT the current 10 s
+       * full-resolution observations are far more valuable than historical
+       * recovery - never open the archive opportunity. The climb is short;
+       * the backlog keeps and recovery resumes automatically in FLOAT
+       * (BR-TX-019/020). */
+      if (battery_good && has_cache && MissionState_Get() != MISSION_ASCENT) {
         SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
         /* Finding #8: defer header persistence for the whole burst — one
          * sector erase at flush instead of one per ACKed packet. */
@@ -2353,6 +2359,9 @@ static void OnTxData(LmHandlerTxParams_t *params)
         g_bulk_packets_sent = 0;
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
       } else {
+        if (battery_good && has_cache) {
+          SONDE_LOG_STR("R3-03: ASCENT — archive recovery inhibited (live science prioritized)\r\n");
+        }
         g_tx_state = TX_STATE_COMPLETE;
       }
     } else {
