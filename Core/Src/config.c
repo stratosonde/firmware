@@ -137,6 +137,17 @@ static ConfigStatus_t Config_WriteInternal(void)
     return CONFIG_OK;
 }
 
+/* R14 (#198) IMMUTABILITY ASSUMPTION, documented per the 2026-08-11
+ * stability review's decision point: configuration is WRITE-ONCE AT
+ * COMMISSIONING (on external power) and NEVER written in flight. Today
+ * Config_Save has no callers anywhere in the tree - the only writes are
+ * Config_Init persisting first-boot defaults. The single-slot
+ * erase-then-write in Config_FlashWrite is acceptable ONLY under that
+ * assumption (a brownout mid-write loses the config and boot falls back to
+ * defaults, which is recoverable on the bench, not in flight). ANY future
+ * in-flight caller breaks the assumption and must first implement the
+ * two-slot-with-generation scheme tracked in #78 (A-003) - the host-suite
+ * R14 scan goes red if a caller outside this file ever appears. */
 ConfigStatus_t Config_Save(void)
 {
     if (!g_config_initialized) {

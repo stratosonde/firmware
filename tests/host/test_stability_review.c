@@ -701,6 +701,28 @@ static void test_r12_config_authority(const char *mreg, const char *cfg)
     CHECK_REGRESSION(accessor && validated, "R12");
 }
 
+/* ========================================================================== */
+/* R14 (P2) — config immutability assumption must stay true (ChatGPT review)   */
+/* ========================================================================== */
+/* Config persistence is single-slot erase-then-write; the accepted risk
+ * (documented in config.c per #198) rests on configuration being written
+ * ONLY at commissioning - Config_Save has no callers today. Pin it: no
+ * caller of Config_Save outside config.c itself, and the assumption is
+ * documented at the save site. A future in-flight caller goes red here.
+ */
+static void test_r14_config_immutability(const char *app, const char *mreg, const char *cfg)
+{
+    printf("-- R14 (P2): Config_Save must have no callers outside config.c\n");
+
+    bool caller_in_app  = strstr(app,  "Config_Save(") != NULL;
+    bool caller_in_mreg = strstr(mreg, "Config_Save(") != NULL;
+    bool documented     = strstr(cfg,  "IMMUTABILITY ASSUMPTION") != NULL;
+    printf("   caller in lora_app.c: %s, caller in multiregion_context.c: %s, documented: %s\n",
+           caller_in_app ? "yes (BAD)" : "no", caller_in_mreg ? "yes (BAD)" : "no",
+           documented ? "yes" : "no");
+    CHECK_REGRESSION(!caller_in_app && !caller_in_mreg && documented, "R14");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -757,6 +779,8 @@ int main(void)
     test_r10_adc_transaction_abort(adc);
     printf("\n");
     test_r12_config_authority(mreg, cfg);
+    printf("\n");
+    test_r14_config_immutability(app, mreg, cfg);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
