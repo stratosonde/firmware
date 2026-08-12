@@ -52,6 +52,12 @@ typedef struct {
      * re-runs DecideTransmitPlan up to 20x with the same now_timestamp and
      * must not be able to confirm an upgrade within seconds. */
     uint32_t hyst_last_ts;
+    /* S-E (#214): the upgrade target of the current streak. Without it the
+     * streak counted ANY upgrade proposal, so a mixed
+     * NORMAL->CONSERVATIVE->NORMAL sequence confirmed NORMAL on cycle 3 -
+     * a two-level jump on mixed evidence. A changed target restarts the
+     * streak. */
+    uint8_t  hyst_last_proposal;
 } VoltageSlope_t;
 
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);

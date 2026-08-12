@@ -879,6 +879,74 @@ static void test_f014_capability_flags(const char *mainsrc, const char *sysapp, 
     CHECK_REGRESSION(flash && sensors && gnss, "F-014-marks");
 }
 
+/* ========================================================================== */
+/* S-E (P3) — F8 streak must count a CONSISTENT upgrade proposal (2026-08-12)  */
+/* ========================================================================== */
+/* Previously upgrade_streak advanced on ANY upgrade proposal, so a mixed
+ * NORMAL->CONSERVATIVE->NORMAL sequence confirmed NORMAL on cycle 3 - a
+ * two-level jump on mixed evidence. A changed target must restart the
+ * streak. Behavioral: drive alternating upgrade targets and check the
+ * streak state + committed mode directly.
+ */
+static void test_se_streak_consistency(void)
+{
+    printf("-- S-E (P3): mixed upgrade proposals must not confirm\n");
+
+    VoltageSlope_t vs;
+    memset(&vs, 0, sizeof(vs));
+    /* Seed, then a 700 s discharge: slope ~-514 mV/h -> commits SURVIVAL
+     * (the FW-6 window recomputes at dt >= 600 and rebases each time). */
+    (void)DecideTransmitPlan(&vs, 5200, 25.0f, false, 1000, true, false, false);
+    TransmitPlan_t p0 = DecideTransmitPlan(&vs, 5100, 25.0f, false, 1700, true, false, false);
+    OperatingMode_t committed = p0.power_mode;
+    printf("   committed after discharge: %s\n", GetModeName(committed));
+
+    /* Two DIFFERENT upgrade targets on successive, time-separated cycles.
+     * The baseline rebases only every 7200 s, so both evaluate against the
+     * 5200@1000 seed: 5210@2400 -> slope +25 -> NORMAL; 5210@3100 -> slope
+     * +17 -> CONSERVATIVE. Both are upgrades from SURVIVAL but to DIFFERENT
+     * targets, so the streak must RESTART at 1 (pre-fix it counted 2 -
+     * mixed evidence advancing toward confirm). */
+    TransmitPlan_t p1 = DecideTransmitPlan(&vs, 5210, 25.0f, false, 2400, true, false, false);
+    TransmitPlan_t p2 = DecideTransmitPlan(&vs, 5210, 25.0f, false, 3100, true, false, false);
+    printf("   held modes: %s then %s, streak=%u (want held, streak 1)\n",
+           GetModeName(p1.power_mode), GetModeName(p2.power_mode), vs.upgrade_streak);
+
+    bool held = (p2.power_mode == committed);
+    bool streak_restarted = (vs.upgrade_streak == 1);
+    printf("   committed held: %s, streak restarted to 1: %s\n",
+           held ? "yes" : "no", streak_restarted ? "yes" : "no");
+    CHECK_REGRESSION(held && streak_restarted, "S-E");
+
+    /* A CONSISTENT target still confirms after F8_UPGRADE_CONFIRM cycles:
+     * rising voltage against the fixed seed keeps the slope > +20, so
+     * NORMAL is proposed every cycle and confirms on cycle 3. */
+    VoltageSlope_t vs2;
+    memset(&vs2, 0, sizeof(vs2));
+    (void)DecideTransmitPlan(&vs2, 5200, 25.0f, false, 1000, true, false, false);
+    TransmitPlan_t q0 = DecideTransmitPlan(&vs2, 5100, 25.0f, false, 1700, true, false, false);
+    TransmitPlan_t q = q0;
+    q = DecideTransmitPlan(&vs2, 5210, 25.0f, false, 2400, true, false, false);   /* slope +25 */
+    q = DecideTransmitPlan(&vs2, 5215, 25.0f, false, 3100, true, false, false);   /* slope +25 */
+    q = DecideTransmitPlan(&vs2, 5220, 25.0f, false, 3800, true, false, false);   /* slope +25 */
+    printf("   consistent NORMAL x3: %s -> %s\n",
+           GetModeName(q0.power_mode), GetModeName(q.power_mode));
+    CHECK_REGRESSION(q.power_mode == MODE_NORMAL, "S-E-consistent");
+}
+
+/* ========================================================================== */
+/* S-D (P3) — TTF printf must dereference the pointer (2026-08-12)             */
+/* ========================================================================== */
+static void test_sd_ttf_printf(const char *app)
+{
+    printf("-- S-D (P3): TTF log must print *ttf_ms, not the pointer\n");
+    bool fixed = strstr(app, "(unsigned long)(*ttf_ms)") != NULL;
+    bool buggy = strstr(app, "(unsigned long)ttf_ms)") != NULL;
+    printf("   dereferenced: %s, raw pointer left: %s\n",
+           fixed ? "yes" : "no", buggy ? "yes (BAD)" : "no");
+    CHECK_REGRESSION(fixed && !buggy, "S-D");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -953,6 +1021,10 @@ int main(void)
     test_f011_f012_f013_cleanup(lpm, mainsrc, h3);
     printf("\n");
     test_f014_capability_flags(mainsrc, sysapp, msp);
+    printf("\n");
+    test_se_streak_consistency();
+    printf("\n");
+    test_sd_ttf_printf(app);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

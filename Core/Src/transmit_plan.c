@@ -232,8 +232,23 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
             }
             if (proposed < (OperatingMode_t)slope_state->committed_mode) {
                 /* upgrade requested */
-                if (new_observation &&
-                    ++slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM) {
+                bool confirm = false;
+                if (new_observation) {
+                    /* S-E (#214): the streak must count a CONSISTENT
+                     * proposal - previously any upgrade proposal advanced
+                     * it, so NORMAL->CONSERVATIVE->NORMAL confirmed NORMAL
+                     * on cycle 3 (a two-level jump on mixed evidence). A
+                     * changed target restarts the streak at 1. */
+                    if (slope_state->upgrade_streak == 0 ||
+                        (uint8_t)proposed != slope_state->hyst_last_proposal) {
+                        slope_state->upgrade_streak = 1;
+                    } else {
+                        slope_state->upgrade_streak++;
+                    }
+                    slope_state->hyst_last_proposal = (uint8_t)proposed;
+                    confirm = (slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM);
+                }
+                if (confirm) {
                     slope_state->committed_mode = (uint8_t)proposed;
                     slope_state->upgrade_streak = 0;
                     SONDE_LOG_STR("PREDICT: sustained upgrade confirmed -> mode change\r\n");

@@ -1155,7 +1155,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
                  (long)(alt_int / 10), (long)labs(alt_int % 10),
                  hgnss.data.satellites,
                  (long)(hdop_int / 10), (long)labs(hdop_int % 10),
-                 (unsigned long)ttf_ms);
+                 (unsigned long)(*ttf_ms));  /* S-D (#214): was printing the POINTER */
         break;  /* Exit early - we have what we need */
       }
       

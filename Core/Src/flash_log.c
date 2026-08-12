@@ -167,6 +167,8 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
      * records actually sent, so the watermark lands exactly past every
      * consumed sequence (good + skipped). */
     sequence_to_read = hlog->last_transmitted_sequence;
+    uint32_t retire_through = 0;   /* S-G (#214): single deferred retire point */
+    bool retire_pending = false;
     while ((*actual_count) < max_count &&
            sequence_to_read < hlog->next_sequence &&
            probes < FLASH_LOG_MAX_PROBES_PER_CALL) {
@@ -205,9 +207,17 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
              * the good archive behind it unreachable. Holes past a good record
              * still cannot retire here (the watermark is a scalar) — those
              * wait for the caller's ACK commit as before. CommitThrough clamps
-             * and honors the deferred-header batching (#8). */
+             * and honors the deferred-header batching (#8).
+             *
+             * S-G (#214): retire ONCE after the loop, not per record. With
+             * sync_deferred == 0 the per-record version cost one 4 KB header
+             * sector erase PER corrupt record — the call-site discipline
+             * (defer set by the time BULK runs) made that latent, not safe.
+             * The watermark monotonicity is identical: CommitThrough clamps
+             * and never moves backward. */
             if (*actual_count == 0) {
-                FlashLog_CommitThrough(hlog, sequence_to_read);
+                retire_through = sequence_to_read;
+                retire_pending = true;
             }
             continue;
         }
@@ -216,6 +226,10 @@ FlashLog_StatusTypeDef FlashLog_GetUnsentRecordsFIFO(FlashLog_HandleTypeDef *hlo
         sequence_to_read++;
     }
     (void)i;
+
+    if (retire_pending) {
+        FlashLog_CommitThrough(hlog, retire_through);
+    }
 
     return FLASH_LOG_OK;
 }
