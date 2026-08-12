@@ -9,6 +9,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "flash_log.h"
+#include "sonde_log.h"  /* R3-07 (#221): reconstruction is loud */
 #include <string.h>
 #include <math.h>
 
@@ -588,20 +589,71 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
         hlog->active_header = 1;
         from_v4 = (header_b.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
     } else {
-        /* No valid headers - initialize fresh */
-        hlog->write_addr = FLASH_LOG_DATA_START;
-        hlog->record_count = 0;
-        hlog->oldest_addr = FLASH_LOG_DATA_START;
-        hlog->active_header = 0;
+        /* No valid headers - R3-07 (#221): do NOT immediately treat the
+         * archive as disposable. The data ring may still hold thousands of
+         * valid CRC-protected records; reconstruct the state from them. Only
+         * a demonstrably blank ring falls through to a fresh init. */
+        FlashLog_Record_t probe;
+        uint32_t valid = 0;
+        uint32_t max_seq = 0, min_seq = 0;
+        uint32_t max_slot = 0, min_slot = 0;
+        for (uint32_t slot = 0; slot < FLASH_LOG_MAX_RECORDS; slot++) {
+            uint32_t addr = FLASH_LOG_DATA_START + slot * FLASH_LOG_RECORD_SIZE;
+            if (W25Q_Read(hw25q, addr, (uint8_t *)&probe, sizeof(probe)) != W25Q_OK) {
+                return FLASH_LOG_ERROR_FLASH;
+            }
+            if (!FlashLog_VerifyRecord(&probe)) {
+                continue;  /* blank (0xFF), torn, or corrupt slot */
+            }
+            if (valid == 0 || probe.sequence > max_seq) {
+                max_seq = probe.sequence; max_slot = slot;
+            }
+            if (valid == 0 || probe.sequence < min_seq) {
+                min_seq = probe.sequence; min_slot = slot;
+            }
+            valid++;
+        }
 
-        /* Erase BOTH header sectors to start fresh (T4: separate sectors) */
-        W25Q_EraseSector(hw25q, HEADER_A_ADDR);
-        W25Q_EraseSector(hw25q, HEADER_B_ADDR);
-        
-        /* Write initial header */
-        status = FlashLog_WriteHeader(hlog);
-        if (status != FLASH_LOG_OK) {
-            return status;
+        if (valid > 0) {
+            /* Reconstruct a plausible frontier: identity continues ABOVE the
+             * maximum sequence seen (never reused); the write address resumes
+             * after the newest record's slot (wrap-aware). Both watermarks
+             * restart at 0: the whole recovered ring becomes pending-live and
+             * re-drains once (the backend dedupes by sequence) - recovering
+             * possibly-unsent science beats the risk of silently dropping it. */
+            hlog->record_count = max_seq + 1U;
+            hlog->write_addr = FLASH_LOG_DATA_START +
+                (((max_slot + 1U) % FLASH_LOG_MAX_RECORDS) * FLASH_LOG_RECORD_SIZE);
+            hlog->oldest_addr = FLASH_LOG_DATA_START + min_slot * FLASH_LOG_RECORD_SIZE;
+            hlog->tx_high_water = 0;
+            hlog->recovery_frontier = 0;
+            hlog->active_header = 0;
+            SONDE_LOG_STR("FLASH LOG: both headers invalid - RECONSTRUCTED from data ring\r\n");
+
+            /* Persist the reconstructed header (a reset mid-write simply
+             * triggers reconstruction again - idempotent). */
+            W25Q_EraseSector(hw25q, HEADER_A_ADDR);
+            W25Q_EraseSector(hw25q, HEADER_B_ADDR);
+            status = FlashLog_WriteHeader(hlog);
+            if (status != FLASH_LOG_OK) {
+                return status;
+            }
+        } else {
+            /* Demonstrably blank - initialize fresh */
+            hlog->write_addr = FLASH_LOG_DATA_START;
+            hlog->record_count = 0;
+            hlog->oldest_addr = FLASH_LOG_DATA_START;
+            hlog->active_header = 0;
+
+            /* Erase BOTH header sectors to start fresh (T4: separate sectors) */
+            W25Q_EraseSector(hw25q, HEADER_A_ADDR);
+            W25Q_EraseSector(hw25q, HEADER_B_ADDR);
+
+            /* Write initial header */
+            status = FlashLog_WriteHeader(hlog);
+            if (status != FLASH_LOG_OK) {
+                return status;
+            }
         }
     }
     

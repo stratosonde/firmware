@@ -948,6 +948,69 @@ static void test_r3_04_one_pass_recovery(void)
     fake_w25q_free();
 }
 
+/* ========================================================================== */
+/* R3-07 (#221) — both headers lost must NOT orphan a recoverable data ring   */
+/* ========================================================================== */
+static void test_r3_07_double_header_loss_recovers_ring(void)
+{
+    printf("-- R3-07 (#221): double header loss reconstructs from the data ring\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+
+    /* Populate 10 records and sync a valid header pair. */
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < 10; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 8000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_SyncHeader(&hlog), FLASH_LOG_OK);
+
+    /* Kill BOTH headers (sector 0 and sector 1). */
+    fake_w25q_corrupt(0, W25Q_SECTOR_SIZE);
+    fake_w25q_corrupt(W25Q_SECTOR_SIZE, W25Q_SECTOR_SIZE);
+
+    /* Init must reconstruct from the ring, not start fresh. */
+    FlashLog_HandleTypeDef rec;
+    CHECK_EQ_I(FlashLog_Init(&rec, &hw), FLASH_LOG_OK);
+    CHECK_REGRESSION(rec.record_count == 10, "R3-07");
+    CHECK_REGRESSION(FlashLog_GetAvailableRecords(&rec) == 10, "R3-07");
+
+    /* The archive must be deliverable again (watermarks restart so it
+     * re-drains once; the backend dedupes by sequence). */
+    CHECK(FlashLog_HasUnsentData(&rec));
+    FlashLog_Record_t batch[6];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&rec, batch, 6, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 6);
+
+    /* New writes must continue ABOVE the recovered maximum sequence - never
+     * reusing identity. */
+    sensor_t s = make_sensors(555);
+    CHECK_EQ_I(FlashLog_WriteRecord(&rec, &s, 9000U, 0, 0, 0), FLASH_LOG_OK);
+    FlashLog_Record_t newest;
+    CHECK_EQ_I(FlashLog_ReadRecord(&rec, &newest, 0), FLASH_LOG_OK);
+    CHECK_REGRESSION(newest.sequence == 10, "R3-07-seq");
+
+    fake_w25q_free();
+}
+
+/* R3-07 counterpart: a genuinely BLANK flash must still initialize fresh. */
+static void test_r3_07_blank_flash_still_fresh(void)
+{
+    printf("-- R3-07 (#221): blank flash still initializes fresh\n");
+
+    fake_w25q_init();   /* erased NOR: 0xFF everywhere, no headers, no records */
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.record_count, 0);
+    CHECK(!FlashLog_HasUnsentData(&hlog));
+
+    fake_w25q_free();
+}
+
 int main(void)
 {
     printf("=== Stratosonde flight-readiness regression tests ===\n\n");
@@ -967,6 +1030,8 @@ int main(void)
     test_r2_14_ts_wrap_false_latch();
     test_rv01_all_corrupt_window_wedge();
     test_r3_04_one_pass_recovery();
+    test_r3_07_double_header_loss_recovers_ring();
+    test_r3_07_blank_flash_still_fresh();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {
