@@ -552,6 +552,43 @@ static void test_f11_hemisphere_default(void)
     CHECK_REGRESSION(rc == 0 && g.data.latitude > 0.0 && g.data.longitude > 0.0, "F-11d-guard");
 }
 
+/* ========================================================================== */
+/* R5 (P1) — boot recovery must not anchor on US915 (ChatGPT review)           */
+/* ========================================================================== */
+/* lora_app.c LoRaWAN_Init gated session recovery on
+ * MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) and switched to US915
+ * unconditionally - a valid non-US session bank fell through to RF silence.
+ * Invariant: no hardcoded US915 switch target in lora_app.c.
+ */
+static void test_r5_boot_region_anchor(const char *app)
+{
+    printf("-- R5 (P1): boot session recovery must not be US915-anchored\n");
+
+    bool hardcoded = strstr(app, "MultiRegion_SwitchToRegion(LORAMAC_REGION_US915)") != NULL;
+    bool resume_logic = strstr(app, "MultiRegion_GetActiveRegion()") != NULL &&
+                        strstr(app, "scan_regions") != NULL;
+    printf("   hardcoded US915 switch: %s, resume-active-region logic: %s\n",
+           hardcoded ? "yes (BAD)" : "no", resume_logic ? "yes" : "no");
+    CHECK_REGRESSION(!hardcoded && resume_logic, "R5");
+}
+
+/* ========================================================================== */
+/* R6 (P1) — provisioning must not enter flight (ChatGPT review)               */
+/* ========================================================================== */
+/* The PROVISIONING_BUILD (ABP table) path called MissionState_EnterFlight()
+ * on success while the OTAA path deliberately holds COMMISSIONING (DDR-0002:
+ * flight entry is explicit, never join/provisioning-triggered). Invariant:
+ * lora_app.c never calls MissionState_EnterFlight.
+ */
+static void test_r6_provisioning_no_flight(const char *app)
+{
+    printf("-- R6 (P1): provisioning path must not enter flight\n");
+
+    bool enters_flight = strstr(app, "MissionState_EnterFlight") != NULL;
+    printf("   MissionState_EnterFlight in lora_app.c: %s\n", enters_flight ? "yes (BAD)" : "no");
+    CHECK_REGRESSION(!enters_flight, "R6");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -594,6 +631,10 @@ int main(void)
     test_f10_hhmmss_range_checked();
     printf("\n");
     test_f11_hemisphere_default();
+    printf("\n");
+    test_r5_boot_region_anchor(app);
+    printf("\n");
+    test_r6_provisioning_no_flight(app);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

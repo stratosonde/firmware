@@ -496,16 +496,37 @@ void LoRaWAN_Init(void)
     SONDE_LOG_STR("*** GPS reconfigured and saved to flash ***\r\n\r\n");
   }
   
-  /* Auto-detect provision state: Check if we have valid saved ABP context for US915 */
-  /* Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path */
-  if (MultiRegion_IsRegionJoined(LORAMAC_REGION_US915)) {
-    
+  /* Auto-detect provision state: resume any valid saved session.
+   * Note: ForceRejoin will have cleared contexts above, so this will go to OTAA path */
+  /* R5 (#191): do NOT anchor on US915 - a unit commissioned (or last flown)
+   * on another region has a valid session bank that a US915-only probe
+   * cannot see, and it would fall through to "no session" RF silence (or a
+   * pointless re-provision) despite holding good credentials. Prefer the
+   * persisted active region (restored from the flash bank); fall back to a
+   * scan of every known region. */
+  LoRaMacRegion_t resume_region = MultiRegion_GetActiveRegion();
+  bool have_session = MultiRegion_IsRegionJoined(resume_region);
+  if (!have_session) {
+    static const LoRaMacRegion_t scan_regions[] = {
+      LORAMAC_REGION_US915, LORAMAC_REGION_EU868, LORAMAC_REGION_AS923,
+      LORAMAC_REGION_AU915, LORAMAC_REGION_IN865, LORAMAC_REGION_KR920
+    };
+    for (uint8_t i = 0; i < sizeof(scan_regions)/sizeof(scan_regions[0]); i++) {
+      if (MultiRegion_IsRegionJoined(scan_regions[i])) {
+        resume_region = scan_regions[i];
+        have_session = true;
+        break;
+      }
+    }
+  }
+  if (have_session) {
+
     /* Already provisioned - use saved ABP context from flash */
-    SONDE_LOG_STR("Found valid ABP context - using saved session\r\n");
-    APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP context for US915\r\n");
-    
-    /* Switch to US915 as starting region */
-    MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    SONDE_LOG("Found valid ABP context - using saved session (%s)\r\n", RegionToString(resume_region));
+    APP_LOG(TS_ON, VLEVEL_H, "Using saved ABP context\r\n");
+
+    /* Switch to the resumed region as starting region */
+    MultiRegion_SwitchToRegion(resume_region);
     
     /* Display session keys for Chirpstack verification (F-017: commissioning only) */
     if (MissionState_IsCommissioning()) {
@@ -535,7 +556,12 @@ void LoRaWAN_Init(void)
       }
       SONDE_LOG("PROVISIONING_BUILD: %u region(s) initialized from table\r\n", abp_count);
       if (abp_count > 0) {
-        MissionState_EnterFlight();
+        /* R6 (#192): provisioning is a transport detail - it must NOT enter
+         * flight. DDR-0002: flight entry is explicit (arming button hook /
+         * BR-LIFE-007 launch detection), never join/provisioning-triggered.
+         * The OTAA path below already holds COMMISSIONING; the ABP path now
+         * matches it. */
+        SONDE_LOG_STR("PROVISIONING_BUILD: complete - COMMISSIONING, awaiting arming/launch\r\n");
       } else {
         SONDE_LOG_STR("PROVISIONING FAILED: no regions initialized - staying in COMMISSIONING\r\n");
       }
