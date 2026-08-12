@@ -40,6 +40,7 @@
 #include "payload_format.h"
 #include "config.h"
 #include "reset_cause.h"
+#include "backup_regs.h"  /* F-003 (#203): mission backup-register snapshot list */
 #include "timer_if.h"  /* RV-09 (#165): TIMER_IF_Init in the deferred failover */
 #include "mission_state.h"
 #include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
@@ -446,16 +447,36 @@ void SystemClock_Config(void)
 
 /* F-14 (#70): LSE->LSI failover, shared by the CSS interrupt callback and the
  * RTC liveness check. Changing the RTC clock source resets the backup domain
- * (HAL behaviour) — this DESTROYS: DR3 (mission state), DR4 (fault
- * breadcrumb), DR5 (deadman), DR7 (SysTime-valid marker) and DR8–DR11
- * (last-known position, F-15/#72). Callers must be prepared for that loss;
- * the door anchor in MissionState_Init() survives a DR3 wipe via the Tier-1
- * bank check and is the designed blast-radius limiter. The loss is
- * acceptable: the alternative is a sonde with frozen time. The IWDG
- * (LSI-clocked) and the boot-time fallback are the backstops for anything
- * this path gets wrong. */
+ * (HAL behaviour).
+ *
+ * F-003 (#203): that reset would DESTROY the retained mission record — DR3
+ * (mission state), DR4 (fault breadcrumb), DR5 (deadman), DR6 (boot
+ * attempts), DR8–DR12 (last-known position + fresh-fix epoch), DR13
+ * (timestamp-wrap latch), DR14 (GPS-loss grace) and DR15 (launch reference).
+ * A later MCU reset would then reconstruct ASCENT from commissioned Tier-1
+ * evidence — FLOAT -> ASCENT, violating the forward-only mission invariant.
+ * Fix: snapshot the mission-owned registers to RAM before the switch and
+ * repersist them immediately after MX_RTC_Init.
+ *
+ * Deliberately EXCLUDED from the snapshot: DR0–DR2 and DR7 (timer SysTime
+ * seconds/subseconds/MSB-ticks + validity magic) — the RTC epoch
+ * legitimately restarts on the new clock source and the F-002 (#201)
+ * re-init restamps them. The IWDG (LSI-clocked) and the boot-time fallback
+ * remain the backstops for anything this path gets wrong. */
 static void LSE_FailoverToLSI(void)
 {
+  /* Mission-owned backup registers preserved across the domain reset. */
+  static const uint32_t kMissionBkupRegs[] = {
+    BKP_REG_MISSION_STATE, BKP_REG_RESET_CAUSE_FAULT, BKP_REG_DEADMAN,
+    BKP_REG_BOOT_ATTEMPTS, BKP_REG_LASTPOS_VALID, BKP_REG_LASTPOS_LAT,
+    BKP_REG_LASTPOS_LON, BKP_REG_LASTPOS_ALT, BKP_REG_LASTPOS_EPOCH,
+    BKP_REG_TS_WRAP, BKP_REG_GPS_LOSS_EPOCH, BKP_REG_LAUNCH_REF
+  };
+  uint32_t bkup_snapshot[sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])];
+  for (uint32_t i = 0; i < (sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])); i++) {
+    bkup_snapshot[i] = HAL_RTCEx_BKUPRead(&hrtc, kMissionBkupRegs[i]);
+  }
+
   RCC_PeriphCLKInitTypeDef rtcClk = {0};
   rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
   rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
@@ -470,6 +491,11 @@ static void LSE_FailoverToLSI(void)
     return;   /* stay on the (failing) LSE; liveness will retry/escalate */
   }
   MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
+  /* F-003 (#203): repersist the mission record destroyed by the domain
+   * reset, BEFORE anything else can consume its absence. */
+  for (uint32_t i = 0; i < (sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])); i++) {
+    HAL_RTCEx_BKUPWrite(&hrtc, kMissionBkupRegs[i], bkup_snapshot[i]);
+  }
   /* RV-09 (#165): bare MX_RTC_Init left the timer subsystem inconsistent —
    * Alarm A re-armed with AlarmMask=NONE, RtcTimerContext stale against a
    * restarted counter (alarms scheduled from it might never fire).

@@ -760,6 +760,36 @@ static void test_f001_f007_early_tick(const char *sysapp)
     CHECK_REGRESSION(wrap_ok && back_ok, "F-001-wrap");
 }
 
+/* ========================================================================== */
+/* F-003 (P1) — mission backup registers must survive the RTC failover         */
+/* ========================================================================== */
+/* LSE_FailoverToLSI's clock-source switch resets the backup domain; without
+ * a snapshot/repersist, a later MCU reset reconstructs ASCENT from
+ * commissioned Tier-1 evidence (FLOAT -> ASCENT regression). Invariants:
+ * (a) the failover snapshots a curated mission-register list that includes
+ * mission state AND the last-position/deadman markers; (b) it repersists
+ * after MX_RTC_Init; (c) the timer SysTime registers (DR0-2/DR7) are
+ * excluded - the epoch legitimately restarts (F-002 re-init restamps).
+ */
+static void test_f003_mission_survives_failover(const char *m)
+{
+    printf("-- F-003 (P1): mission backup regs snapshotted across RTC failover\n");
+
+    bool list = strstr(m, "kMissionBkupRegs") != NULL &&
+                strstr(m, "BKP_REG_MISSION_STATE") != NULL &&
+                strstr(m, "BKP_REG_LAUNCH_REF") != NULL &&
+                strstr(m, "BKP_REG_LASTPOS_VALID") != NULL;
+    bool snap = strstr(m, "bkup_snapshot[i] = HAL_RTCEx_BKUPRead") != NULL;
+    bool restore = strstr(m, "HAL_RTCEx_BKUPWrite(&hrtc, kMissionBkupRegs[i], bkup_snapshot[i])") != NULL;
+    /* the timer SysTime regs must NOT be in the preserve list */
+    bool excludes_timer = strstr(m, "Deliberately EXCLUDED") != NULL &&
+                          strstr(m, "BKP_REG_SYSTIME_VALID,") == NULL;
+    printf("   curated list: %s, snapshot: %s, repersist: %s, timer regs excluded: %s\n",
+           list ? "yes" : "no", snap ? "yes" : "no", restore ? "yes" : "no",
+           excludes_timer ? "yes" : "no");
+    CHECK_REGRESSION(list && snap && restore && excludes_timer, "F-003");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -773,6 +803,7 @@ int main(void)
     char *adc = slurp("../../Core/Src/adc_if.c");
     char *mreg = slurp("../../Core/Src/multiregion_context.c");
     char *sysapp = slurp("../../Core/Src/sys_app.c");
+    char *mainsrc = slurp("../../Core/Src/main.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -821,6 +852,8 @@ int main(void)
     test_r14_config_immutability(app, mreg, cfg);
     printf("\n");
     test_f001_f007_early_tick(sysapp);
+    printf("\n");
+    test_f003_mission_survives_failover(mainsrc);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
