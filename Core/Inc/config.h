@@ -84,19 +84,21 @@ typedef struct __attribute__((packed)) {
     uint32_t tx_interval_recovery;     // Recovery interval (ms) - default 1800000 (30 min)
     uint32_t tx_interval_survival;     // Survival interval (ms) - default 3600000 (60 min)
     
-    /* LoRaWAN parameters (8 bytes) */
+    /* LoRaWAN parameters (8 bytes). R12 (#197) class: RESERVED - no in-tree
+     * consumer (the session's radio params persist per-region in the
+     * multiregion Tier-2 bank, R11/#196). Kept for layout/backcompat. */
     uint8_t  lorawan_datarate;         // Default datarate (DR0-DR5) - default DR_0
     uint8_t  lorawan_txpower;          // TX power (dBm) - default TX_POWER_0
     uint8_t  lorawan_adr_enabled;      // ADR enable flag - default 0 (disabled)
     uint8_t  lorawan_confirmed;        // Confirmed messages flag - default 0
     uint32_t lorawan_class_b_timeout;  // Class B/C timeout (ms) - default 8000
-    
+
     /* Power management thresholds (12 bytes) */
-    uint16_t battery_low_threshold;    // Low battery threshold (mV) - default 4500
-    uint16_t battery_critical_threshold; // Critical threshold (mV) - default 4000  
-    uint16_t bulk_battery_min_mv;      // Min battery for bulk transfer (mV) - default 5000
-    int8_t   gps_temperature_lockout;  // GPS lockout temperature (°C) - default -55
-    uint8_t  power_mode_hysteresis;    // Mode change hysteresis (%) - default 10
+    uint16_t battery_low_threshold;    // R12 (#197) RESERVED - no consumer; the live power thresholds are hardcoded in power_model.c
+    uint16_t battery_critical_threshold; // R12 (#197) RESERVED - no consumer; live floors are the R10 raw floor / R2-11 5000 mV in transmit_plan.c
+    uint16_t bulk_battery_min_mv;      // Min battery for bulk transfer (mV) - default 5000. R12: ACTIVE (CfgBulkBattMin)
+    int8_t   gps_temperature_lockout;  // DEPRECATED (RV-08/#164, DDR-0021): never read; kept for layout
+    uint8_t  power_mode_hysteresis;    // R12 (#197) RESERVED - no consumer; the live hysteresis is F8_UPGRADE_CONFIRM=3 (transmit_plan.c, #172/#179)
     /* F19 FIX: solar_charging_threshold deleted. The 6000 mV default could
      * never trip on the real ~1.1 V two-wafer panel, and the field had zero
      * consumers (verified by grep) — a decorative knob. Kept as reserved to
@@ -116,7 +118,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  link_margin_threshold;    // Min demod margin for SF7 (dB) - default 15
     uint8_t  gateway_count_threshold;  // Min gateway count for SF7 - default 2
     uint8_t  max_bulk_packets;         // Max bulk packets per cycle - default 20
-    uint8_t  frame_counter_save_interval; // Frame counter save interval - default 10
+    uint8_t  frame_counter_save_interval; // Frame counter save interval - default 10. R12 (#197): ACTIVE (CfgFrameCounterSaveInterval, multiregion_context.c)
     uint32_t bulk_timeout_ms;          // Bulk transfer timeout (ms) - default 60000
     
     /* Flash logging settings (8 bytes) */

@@ -192,6 +192,11 @@ LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon) { (void)lat; 
 
 int32_t EnvSensors_Read(sensor_t *sensor_data) { sensor_data->temperature = 20.0f; return 0; }
 
+/* R47 precedent: Config_Get stubbed to NULL -> the macro-default fallback,
+ * same as the main suite. The unit under test includes config.h itself. */
+#include "config.h"
+const SystemConfig_t *Config_Get(void) { return NULL; }
+
 uint32_t g_fake_tick = 0;
 uint32_t HAL_GetTick(void) { return g_fake_tick; }
 

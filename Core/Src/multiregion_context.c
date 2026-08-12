@@ -21,7 +21,8 @@
 #include "lora_app.h"
 #include "LmHandler.h"
 #include "LoRaMac.h"
-#include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
+#include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
+#include "config.h"           /* R12 (#197): frame_counter_save_interval is config-authoritative */
 #include "stm32wlxx_hal.h"
 #include "SEGGER_RTT.h"
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */
@@ -29,6 +30,17 @@
 #include <stdio.h>
 #include <stddef.h>  /* FR-18 (#99): offsetof for the CRC span */
 
+/* R12 (#197): the frame-counter cadence is config-authoritative
+ * (SystemConfig_t.frame_counter_save_interval); the macro in
+ * multiregion_context.h is only the fallback before Config_Init (R47 NULL
+ * precedent). ONE accessor so batching, save margin and restore margin
+ * can never disagree. */
+static uint8_t CfgFrameCounterSaveInterval(void)
+{
+    const SystemConfig_t *c = Config_Get();
+    return c ? c->frame_counter_save_interval : FRAME_COUNTER_SAVE_INTERVAL;
+}
+
 /* Private defines -----------------------------------------------------------*/
 /* Two-tier session storage (FW-1 / DDR-0018).
  * Flash map (2KB pages; reserved region is now pages 120-127 = 16KB):
@@ -257,19 +269,19 @@ bool MultiRegion_SaveCurrentContext(void)
     
     // Increment unsaved transmission counter
     g_unsaved_tx_count++;
-    SONDE_LOG("Unsaved TX count: %d/%d\r\n", g_unsaved_tx_count, FRAME_COUNTER_SAVE_INTERVAL);
+    SONDE_LOG("Unsaved TX count: %d/%d\r\n", g_unsaved_tx_count, CfgFrameCounterSaveInterval());
     
     // Check if we should save to flash (every N successful transmissions)
-    if (g_unsaved_tx_count < FRAME_COUNTER_SAVE_INTERVAL) {
+    if (g_unsaved_tx_count < CfgFrameCounterSaveInterval()) {
         SONDE_LOG_STR("Batching: Skipping flash save (interval not reached)\r\n");
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Batched save %d/%d\r\n", 
-                g_unsaved_tx_count, FRAME_COUNTER_SAVE_INTERVAL);
+                g_unsaved_tx_count, CfgFrameCounterSaveInterval());
         return true;  // Return success, just didn't write to flash
     }
     
     // Reset counter and perform actual save
     g_unsaved_tx_count = 0;
-    SONDE_LOG("Batching: Performing flash save (reached %d TXs)\r\n", FRAME_COUNTER_SAVE_INTERVAL);
+    SONDE_LOG("Batching: Performing flash save (reached %d TXs)\r\n", CfgFrameCounterSaveInterval());
     
     return MultiRegion_ForceSaveCurrentContext();
 }
@@ -423,7 +435,7 @@ bool MultiRegion_ForceSaveCurrentContext(void)
      * On restore the frame counter would regress to the last saved value,
      * causing the network server to reject all subsequent uplinks as replays.
      *
-     * Solution: store uplink_counter + FRAME_COUNTER_SAVE_INTERVAL so the
+     * Solution: store uplink_counter + CfgFrameCounterSaveInterval() so the
      * restored value is always ahead of any counter the server has seen.
      * The live MAC counter is NOT modified — only the context copy (which is
      * also the in-RAM working copy in g_storage) is advanced.
@@ -434,10 +446,10 @@ bool MultiRegion_ForceSaveCurrentContext(void)
      * from the first batched save on, and a later switch-back to that region
      * is silently refused (IsRegionJoined CRC check).
      */
-    ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+    ctx->uplink_counter += CfgFrameCounterSaveInterval();
     UpdateContextCRC(ctx);  /* FR-05: restamp — the margin is CRC-covered state */
     SONDE_LOG("Frame counter margin applied: stored FCntUp=%lu (advanced by %d)\r\n",
-                      ctx->uplink_counter, FRAME_COUNTER_SAVE_INTERVAL);
+                      ctx->uplink_counter, CfgFrameCounterSaveInterval());
     
     // Also reset the unsaved TX count since we're doing an actual write
     g_unsaved_tx_count = 0;
@@ -1596,7 +1608,7 @@ static bool FlashReadStorage(void)
             counters_bumped = true;
             MinimalRegionContext_t *ctx = &g_storage.contexts[i];
             /* R3 (#188): resume AHEAD of the persisted uplink counter. Saves
-             * batch every FRAME_COUNTER_SAVE_INTERVAL TXs and persist the
+             * batch every CfgFrameCounterSaveInterval() TXs and persist the
              * true value, so after a mid-batch reset the NS has already seen
              * up to INTERVAL-1 counters beyond the persisted one - resuming
              * at the persisted value replays them (dropped), and a reset loop
@@ -1604,7 +1616,7 @@ static bool FlashReadStorage(void)
              * The margin burns at most one reserved block per reset; the only
              * property the NS requires is strict monotonicity. (The Tier-2-
              * lost degrade path below already bumps by the same margin.) */
-            ctx->uplink_counter = t2.entries[i].uplink_counter + FRAME_COUNTER_SAVE_INTERVAL;
+            ctx->uplink_counter = t2.entries[i].uplink_counter + CfgFrameCounterSaveInterval();
             ctx->downlink_counter = t2.entries[i].downlink_counter;
             ctx->last_rx_mic = t2.entries[i].last_rx_mic;
             ctx->last_used = t2.entries[i].last_used;
@@ -1620,7 +1632,7 @@ static bool FlashReadStorage(void)
         for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
             MinimalRegionContext_t *ctx = &g_storage.contexts[i];
             if (ctx->dev_addr != 0 && ctx->dev_addr != 0xFFFFFFFF) {
-                ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+                ctx->uplink_counter += CfgFrameCounterSaveInterval();
                 counters_bumped = true;
             }
         }

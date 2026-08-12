@@ -680,6 +680,27 @@ static void test_r10_adc_transaction_abort(const char *adc)
     CHECK_REGRESSION(!config_falls_through && !start_falls_through, "R10");
 }
 
+/* ========================================================================== */
+/* R12 (P2) — config authority: frame_counter_save_interval must be consumed   */
+/* ========================================================================== */
+/* The config field existed but multiregion_context.c used the
+ * FRAME_COUNTER_SAVE_INTERVAL macro - an operator edit changed nothing.
+ * Invariant: the consumer reads the config field via the Config_Get
+ * accessor (CfgFrameCounterSaveInterval), and Config_Validate range-checks
+ * the now-live knob.
+ */
+static void test_r12_config_authority(const char *mreg, const char *cfg)
+{
+    printf("-- R12 (P2): frame_counter_save_interval must be config-authoritative\n");
+
+    bool accessor = strstr(mreg, "CfgFrameCounterSaveInterval") != NULL &&
+                    strstr(mreg, "Config_Get()") != NULL;
+    bool validated = strstr(cfg, "frame_counter_save_interval < 1") != NULL;
+    printf("   consumer accessor wired: %s, Config_Validate range check: %s\n",
+           accessor ? "yes" : "no", validated ? "yes" : "no");
+    CHECK_REGRESSION(accessor && validated, "R12");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -691,6 +712,7 @@ int main(void)
     char *cfg = slurp("../../Core/Src/config.c");
     char *sens = slurp("../../Core/Src/sys_sensors.c");
     char *adc = slurp("../../Core/Src/adc_if.c");
+    char *mreg = slurp("../../Core/Src/multiregion_context.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -733,6 +755,8 @@ int main(void)
     test_r9_poweron_transaction();
     printf("\n");
     test_r10_adc_transaction_abort(adc);
+    printf("\n");
+    test_r12_config_authority(mreg, cfg);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

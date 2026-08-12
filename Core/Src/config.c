@@ -216,6 +216,13 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
           config->battery_low_threshold < config->bulk_battery_min_mv)) {
         return CONFIG_ERROR_RANGE;  // critical < low < bulk-min ordering
     }
+    /* R12 (#197): frame_counter_save_interval is now config-authoritative
+     * (CfgFrameCounterSaveInterval in multiregion_context.c) - a 0 would
+     * batch forever and a huge value defeats the R3 margin scheme. */
+    if (config->frame_counter_save_interval < 1 ||
+        config->frame_counter_save_interval > 100) {
+        return CONFIG_ERROR_RANGE;
+    }
 
     return CONFIG_OK;
 }
