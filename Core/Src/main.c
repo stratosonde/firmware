@@ -157,6 +157,15 @@ int main(void)
   /* Increased buffer size and non-blocking mode to prevent watchdog hangs */
   static char rtt_buffer[4096];  // 4KB buffer (up from default 1KB)
   SEGGER_RTT_ConfigUpBuffer(0, "Terminal", rtt_buffer, sizeof(rtt_buffer), SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+  /* F12 (#173): the build marker must be genuinely REFERENCED - the link is
+   * -ffunction-sections -fdata-sections -Wl,--gc-sections, and an
+   * unreferenced volatile const is stripped even with __attribute__((used))
+   * (verified: the symbol reached main.o but not the ELF). The (void) read
+   * is the load-bearing reference; it survives flight builds where the log
+   * is compiled out. */
+  extern volatile const char g_sonde_build_marker[];
+  (void)g_sonde_build_marker[0];
+  SONDE_LOG("Boot: %s\r\n", (const char *)g_sonde_build_marker);
   SONDE_LOG_STR("=== RTT Terminal 0 Configured (4KB, NON-BLOCKING) ===\r\n");
   SONDE_LOG_STR("All output: System, NMEA, APP_LOG\r\n");
 
@@ -346,10 +355,14 @@ uint32_t g_rtc_clock_source = RCC_RTCCLKSOURCE_LSE;
  * anyone with the .bin) can prove which configuration was actually compiled
  * instead of trusting the build script. */
 #ifdef SONDE_FLIGHT_BUILD
-volatile const char g_sonde_build_marker[] = "SONDE_BUILD:flight";
+volatile const char g_sonde_build_marker[] __attribute__((used)) = "SONDE_BUILD:flight";
 #else
-volatile const char g_sonde_build_marker[] = "SONDE_BUILD:debug";
+volatile const char g_sonde_build_marker[] __attribute__((used)) = "SONDE_BUILD:debug";
 #endif
+/* NOTE: __attribute__((used)) is load-bearing — the link is
+ * -ffunction-sections -fdata-sections -Wl,--gc-sections, so an unreferenced
+ * marker (even volatile) is garbage-collected and the CI grep finds nothing.
+ * Verified missing from both debug and flight .bin before this fix. */
 
 /**
   * @brief System Clock Configuration
