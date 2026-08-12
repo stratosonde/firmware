@@ -404,6 +404,8 @@ bool MultiRegion_ForceSaveCurrentContext(void)
             SONDE_LOG_STR("  Set AppSKey from active session (via LmHandler API)\r\n");
         } else {
             SONDE_LOG_STR("  ERROR: Failed to get AppSKey!\r\n");
+            ctx->dev_addr = 0;  /* F-008 (#205): fail CLOSED - missing key material must never persist (DevAddr==0 is the empty-slot marker) */
+            return false;
         }
         
         if (LmHandlerGetKey(NWK_S_KEY, temp_key) == LORAMAC_HANDLER_SUCCESS) {
@@ -411,6 +413,8 @@ bool MultiRegion_ForceSaveCurrentContext(void)
             SONDE_LOG_STR("  Set NwkSKey from active session (via LmHandler API)\r\n");
         } else {
             SONDE_LOG_STR("  ERROR: Failed to get NwkSKey!\r\n");
+            ctx->dev_addr = 0;  /* F-008 (#205): fail CLOSED - missing key material must never persist (DevAddr==0 is the empty-slot marker) */
+            return false;
         }
 
         // FW-1: static credentials changed - Tier-1 bank rewrite required (commissioning-only)

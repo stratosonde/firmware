@@ -59,6 +59,7 @@ static struct {
     bool fail_mib_set_activation;   /* every MIB_NETWORK_ACTIVATION set fails */
     bool corrupt_keys_on_mib_get;   /* NVM readback shows wrong session keys */
     bool null_nvm;                  /* MIB_NVM_CTXS get returns NULL contexts */
+    bool fail_getkey;               /* F-008 (#205): LmHandlerGetKey fails */
 } g_mac;
 
 LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
@@ -148,6 +149,7 @@ LmHandlerErrorStatus_t LmHandlerSetKey(KeyIdentifier_t keyId, uint8_t *key)
 
 LmHandlerErrorStatus_t LmHandlerGetKey(KeyIdentifier_t keyId, uint8_t *key)
 {
+    if (g_mac.fail_getkey) return LORAMAC_HANDLER_ERROR;   /* F-008 injection */
     if (keyId >= KEY_LIST_SIZE || key == NULL) return LORAMAC_HANDLER_ERROR;
     memcpy(key, g_mac.keys[keyId], 16);
     return LORAMAC_HANDLER_SUCCESS;
@@ -283,6 +285,60 @@ static bool commission_two_regions(void)
     if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_US915, 0x26011111, app_key_us, nwk_key_us)) return false;
     if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_EU868, 0x26012222, app_key_eu, nwk_key_eu)) return false;
     return true;
+}
+
+/* ========================================================================== */
+/* F-008 (P2) — required key acquisition failure must fail closed              */
+/* ========================================================================== */
+/* Emulates a fresh OTAA join on a new region: MAC activated, keys live in
+ * the active crypto context, no slot yet. With LmHandlerGetKey failing, the
+ * save must abort, the slot must roll back to empty, and the region must
+ * not become joined - then recover cleanly once the fault clears. */
+static void test_f008_key_acquisition_fail_closed(void)
+{
+    printf("-- F-008 (P2): LmHandlerGetKey failure must abort the save fail-closed\n");
+
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED\n"); exit(2); }
+
+    g_mac.activation = ACTIVATION_TYPE_OTAA;
+    g_mac.dev_addr = 0x26013333;
+    LmHandlerParams.ActiveRegion = LORAMAC_REGION_AS923;
+    memset(g_mac.keys[APP_S_KEY], 0xE0, 16);
+    memset(g_mac.keys[NWK_S_KEY], 0xF0, 16);
+
+    /* Guard: clean acquisition commits a valid bank. */
+    CHECK_REGRESSION(MultiRegion_ForceSaveCurrentContext() == true, "F-008-guard");
+    CHECK_REGRESSION(MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923), "F-008-guard-joined");
+    printf("   guard: clean OTAA-capture save committed AS923\n");
+
+    /* Roll the slot back to fresh (same-TU statics) and inject the fault. */
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_AS923) {
+            g_storage.contexts[i].dev_addr = 0;
+            g_storage.num_valid--;
+        }
+    }
+    g_mac.fail_getkey = true;
+    CHECK_REGRESSION(MultiRegion_ForceSaveCurrentContext() == false, "F-008-save-aborts");
+    g_mac.fail_getkey = false;
+    CHECK_REGRESSION(!MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923), "F-008-not-joined");
+
+    /* The slot must be empty again (DevAddr==0 is the empty marker), so the
+     * next boot cannot select a bank with missing key material. */
+    bool slot_empty = false;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_AS923 &&
+            g_storage.contexts[i].dev_addr == 0) {
+            slot_empty = true;
+        }
+    }
+    CHECK_REGRESSION(slot_empty, "F-008-slot-rolled-back");
+
+    /* Recovery: fault cleared, the same capture now succeeds. */
+    CHECK_REGRESSION(MultiRegion_ForceSaveCurrentContext() == true, "F-008-recovery");
+    CHECK_REGRESSION(MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923), "F-008-recovery-joined");
+    printf("   fail-closed abort verified; recovery after fault clear ok\n");
 }
 
 /* ========================================================================== */
@@ -489,7 +545,9 @@ int main(void)
     printf("=== R15 harness: real multiregion_context.c vs fake LoRaMac ===\n\n");
     memset(g_flash, 0xFF, sizeof(g_flash));
 
-    test_r1_restore_fail_closed();
+    test_f008_key_acquisition_fail_closed();
+printf("\n");
+test_r1_restore_fail_closed();
     printf("\n");
     test_r3_fcnt_reset_margin();
     printf("\n");
