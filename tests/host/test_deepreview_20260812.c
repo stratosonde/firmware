@@ -367,12 +367,29 @@ static void test_r306_gnss_config_verification(const char *app, const char *gnss
     CHECK_REGRESSION(honest, "R3-06-honest");
 }
 
+/* ------------------------------------------------------------------ */
+/* R3-08 — HAL_GetTick must convert RTC ticks to real ms at the boundary */
+/* ------------------------------------------------------------------ */
+static void test_r308_tick_timebase(const char *sysapp)
+{
+    printf("-- R3-08 (P2, #112): HAL_GetTick must return real milliseconds\n");
+
+    /* TIMER_IF_GetTimerValue() is 1024 Hz RTC ticks; the ms contract of
+     * HAL_GetTick holds only if the boundary converts. */
+    bool converted =
+        strstr(sysapp, "TIMER_IF_Convert_Tick2ms(TIMER_IF_GetTimerValue())") != NULL;
+    printf("   HAL_GetTick routes through Tick2ms conversion: %s\n",
+           converted ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(converted, "R3-08");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
     char *flashc = normalize_code(slurp("../../Core/Src/flash_log.c"));
     char *flashh = normalize_code(slurp("../../Core/Inc/flash_log.h"));
     char *gnssc  = normalize_code(slurp("../../Core/Src/atgm336h.c"));
+    char *sysapp = normalize_code(slurp("../../Core/Src/sys_app.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -385,7 +402,10 @@ int main(void)
     test_r304_one_pass_protocol(app, flashc, flashh);
     printf("\n");
     test_r306_gnss_config_verification(app, gnssc);
+    printf("\n");
+    test_r308_tick_timebase(sysapp);
 
+    free(sysapp);
     free(gnssc);
     free(flashh);
     free(flashc);

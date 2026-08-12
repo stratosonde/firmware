@@ -357,7 +357,15 @@ uint32_t HAL_GetTick(void)
   }
   else
   {
-    ret = TIMER_IF_GetTimerValue();
+    /* R3-08 (#112): TIMER_IF_GetTimerValue() returns RTC ticks at 1024 Hz,
+     * NOT milliseconds - every consumer treating HAL_GetTick as ms (GNSS
+     * acquisition timeouts, TTF, generic HAL timeouts, the R3-01 science
+     * deadline) ran ~2.4% short. Convert at the abstraction boundary so the
+     * ms contract actually holds (64-bit intermediate inside; truncation
+     * error < 1 ms per 48.5-day tick era). HAL_Delay inherits the corrected
+     * base; UTIL_TIMER/LoRaWAN timing use TIMER_IF directly and are
+     * untouched. */
+    ret = TIMER_IF_Convert_Tick2ms(TIMER_IF_GetTimerValue());
   }
   /* USER CODE BEGIN HAL_GetTick_2 */
 

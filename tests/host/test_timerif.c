@@ -110,6 +110,19 @@ int main(void)
     uint32_t val = TIMER_IF_GetTimerValue();
     CHECK(val != 0, "tick value live after reinit");
 
+    /* R3-08 (#112): the tick->ms conversion HAL_GetTick must apply at the
+     * abstraction boundary (1024 Hz RTC tick was treated as 1000 Hz ms -
+     * every ms timeout ran ~2.4% short). Exact at the review's probe
+     * points; sane at the 48.5-day tick-era wrap. */
+    printf("\n-- R3-08 (#112): tick->ms boundary conversion\n");
+    CHECK(TIMER_IF_Convert_Tick2ms(1024u) == 1000u, "1 s exact");
+    CHECK(TIMER_IF_Convert_Tick2ms(10240u) == 10000u, "10 s exact");
+    CHECK(TIMER_IF_Convert_Tick2ms(30720u) == 30000u, "30 s exact");
+    CHECK(TIMER_IF_Convert_Tick2ms(614400u) == 600000u, "10 min exact");
+    CHECK(TIMER_IF_Convert_Tick2ms(0xFFFFFFFFu) > 4000000000u,
+          "wrap: last tick of the era does not overflow-wrap small");
+    CHECK(TIMER_IF_Convert_Tick2ms(1u) == 0u, "1 tick truncates to 0 ms");
+
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }
