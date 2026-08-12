@@ -151,11 +151,32 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   
   if (dma_status != HAL_OK)
   {
+    /* R9 (#194): transactional startup - EVERY failure from STARTING routes
+     * through one cleanup that returns all hardware to OFF. Previously this
+     * path left the module electrically powered (~25-30 mA) and STOP mode
+     * disabled while is_powered stayed false, so nothing later cleaned up
+     * and physical/software state disagreed. */
+    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+    HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
+    hgnss->is_powered = false;
+    SONDE_LOG_STR("GNSS_PowerOn: DMA start FAILED - rolled back to OFF (pins LOW, STOP re-enabled)\r\n");
     return GNSS_ERROR;
   }
 
   /* Send wake character to exit standby mode */
-  HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100);
+  if (HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100) != HAL_OK)
+  {
+    /* R9 (#194): same transactional cleanup - DMA was started, so abort it
+     * too on the way back to OFF. */
+    HAL_UART_AbortReceive(hgnss->huart);
+    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+    HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
+    hgnss->is_powered = false;
+    SONDE_LOG_STR("GNSS_PowerOn: wake TX FAILED - rolled back to OFF\r\n");
+    return GNSS_ERROR;
+  }
   HAL_Delay(100);  // GPS takes ~100ms to wake and start NMEA output
   
   hgnss->is_powered = true;

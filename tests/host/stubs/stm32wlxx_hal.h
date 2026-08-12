@@ -20,7 +20,21 @@ typedef enum { GPIO_PIN_RESET = 0, GPIO_PIN_SET } GPIO_PinState;
 #define GPIO_NOPULL         0u
 #define GPIO_SPEED_FREQ_LOW 0u
 static inline void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
-static inline void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s) { (void)p; (void)pin; (void)s; }
+/* R9 (#194) observability: GPIO writes are recorded so transactional-cleanup
+ * tests can assert final pin state. Per-TU statics (unused attribute) -
+ * suites that never read them are unaffected. */
+#define HOST_GPIO_LOG_MAX 32
+typedef struct { const void *port; uint16_t pin; GPIO_PinState state; } HostGpioWrite_t;
+static HostGpioWrite_t g_host_gpio_log[HOST_GPIO_LOG_MAX] __attribute__((unused));
+static int g_host_gpio_log_n __attribute__((unused));
+static inline void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s) {
+    if (g_host_gpio_log_n < HOST_GPIO_LOG_MAX) {
+        g_host_gpio_log[g_host_gpio_log_n].port = p;
+        g_host_gpio_log[g_host_gpio_log_n].pin = pin;
+        g_host_gpio_log[g_host_gpio_log_n].state = s;
+        g_host_gpio_log_n++;
+    }
+}
 static inline GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin) { (void)p; (void)pin; return GPIO_PIN_RESET; }
 
 /* ---- UART / DMA ---- */
@@ -45,7 +59,9 @@ extern uint16_t g_host_dma_cndtr;   /* test-controlled DMA counter (defined in t
 static inline HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static inline HAL_StatusTypeDef HAL_UART_DeInit(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static inline HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n, uint32_t t) { (void)h; (void)d; (void)n; (void)t; return HAL_OK; }
-static inline HAL_StatusTypeDef HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n) { (void)h; (void)d; (void)n; return HAL_OK; }
+/* R9 (#194): DMA-start failure injection (per-TU static, defaults OK). */
+static HAL_StatusTypeDef g_host_uart_dma_rc __attribute__((unused)) = HAL_OK;
+static inline HAL_StatusTypeDef HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n) { (void)h; (void)d; (void)n; return g_host_uart_dma_rc; }
 static inline HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
 
 /* ---- misc ---- */

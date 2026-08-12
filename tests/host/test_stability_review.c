@@ -611,6 +611,51 @@ static void test_r7_region_completeness(const char *app)
     CHECK_REGRESSION(covered == 6, "R7");
 }
 
+/* ========================================================================== */
+/* R9 (P1) — GNSS_PowerOn must be transactional (ChatGPT review)               */
+/* ========================================================================== */
+/* atgm336h.c GNSS_PowerOn asserts PWR/EN, disables STOP mode, then starts the
+ * DMA. On HAL_UART_Receive_DMA failure it returned GNSS_ERROR with NO
+ * rollback: module left powered (~25-30 mA), STOP left disabled, software
+ * is_powered=false so nothing later cleans up. Invariant: any startup
+ * failure returns ALL hardware to OFF (pins LOW, STOP re-enabled, sw OFF).
+ */
+static void test_r9_poweron_transaction(void)
+{
+    printf("-- R9 (P1): failed GNSS power-on must roll back to OFF\n");
+
+    GNSS_HandleTypeDef g;
+    memset(&g, 0, sizeof(g));
+    UART_HandleTypeDef h = {0};
+    GPIO_TypeDef port = {0};
+    g.is_initialized = true;
+    g.huart = &h;
+    g.pwr_port = &port; g.pwr_pin = (1u << 10);
+    g.en_port  = &port; g.en_pin  = (1u << 5);
+
+    g_host_uart_dma_rc = HAL_ERROR;
+    g_host_gpio_log_n = 0;
+    g_host_lpm_stop_state = -1;
+
+    GNSS_StatusTypeDef rc = GNSS_PowerOn(&g);
+    printf("   DMA-start failure: rc=%d, is_powered=%d, lpm_state=%d\n",
+           rc, g.is_powered, g_host_lpm_stop_state);
+    CHECK_REGRESSION(rc == GNSS_ERROR, "R9-rc");
+    CHECK_REGRESSION(!g.is_powered, "R9-sw-off");
+    CHECK_REGRESSION(g_host_lpm_stop_state == UTIL_LPM_ENABLE, "R9-lpm");
+
+    /* The LAST write to each power pin must be RESET (driven back off). */
+    int pwr_final = -1, en_final = -1;
+    for (int i = g_host_gpio_log_n - 1; i >= 0; i--) {
+        if (pwr_final < 0 && g_host_gpio_log[i].pin == g.pwr_pin) pwr_final = g_host_gpio_log[i].state;
+        if (en_final  < 0 && g_host_gpio_log[i].pin == g.en_pin)  en_final  = g_host_gpio_log[i].state;
+    }
+    printf("   final pin states: pwr=%d en=%d (want both RESET=0)\n", pwr_final, en_final);
+    CHECK_REGRESSION(pwr_final == GPIO_PIN_RESET && en_final == GPIO_PIN_RESET, "R9-pins-off");
+
+    g_host_uart_dma_rc = HAL_OK;
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -659,6 +704,8 @@ int main(void)
     test_r6_provisioning_no_flight(app);
     printf("\n");
     test_r7_region_completeness(app);
+    printf("\n");
+    test_r9_poweron_transaction();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

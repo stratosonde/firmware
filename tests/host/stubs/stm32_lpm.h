@@ -4,5 +4,7 @@
 #include <stdint.h>
 #define UTIL_LPM_ENABLE   1
 #define UTIL_LPM_DISABLE  0
-static inline void UTIL_LPM_SetStopMode(uint32_t mask, int state) { (void)mask; (void)state; }
+/* R9 (#194) observability: last STOP-mode state requested (per-TU static). */
+static int g_host_lpm_stop_state __attribute__((unused)) = -1;
+static inline void UTIL_LPM_SetStopMode(uint32_t mask, int state) { (void)mask; g_host_lpm_stop_state = state; }
 #endif
