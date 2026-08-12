@@ -4,17 +4,19 @@
   * @brief   R15 (ChatGPT review 2026-08-11): compile the REAL
   *          Core/Src/multiregion_context.c against a fake LoRaMac/LmHandler
   *          surface with fault injection, and drive the recovery matrix the
-  *          source scans cannot prove.
+  *          source scans cannot prove. Because the unit is #included, its
+  *          statics (g_initialized, g_storage, g_unsaved_tx_count, ...) are
+  *          directly resettable to emulate reboots.
   *
-  *          First finding covered: R1 (P0) — session restore reported success
-  *          after restoration or verification failure. RestoreSessionToMac
-  *          logged MIB-set / DevAddr-verify / key-verify failures and fell
-  *          through to LORAMAC_HANDLER_SUCCESS; MultiRegion_SwitchToRegion
-  *          then marked the region ACTIVE on a dead session -> silent RF
-  *          loss with no recovery path.
+  *          R1 (P0): session restore must fail closed - never report success
+  *          after a failed MIB set / verification, never mark the region
+  *          active on a dead session.
+  *          R3 (P0): FCnt restore must resume AHEAD of the true network
+  *          counter (persisted value + margin), or every mid-batch reset
+  *          reuses uplink counters the NS already saw.
   *
   *          Every check is CHECK_REGRESSION (expected-fail-before-fix):
-  *            make -C tests/host multiregion      (red until the fix lands)
+  *            make -C tests/host multiregion      (red until fixes land)
   *            EXPECT_UNFIXED=1 ./test_multiregion (pre-fix gate)
   ******************************************************************************
   */
@@ -75,6 +77,9 @@ LoRaMacStatus_t LoRaMacMibGetRequestConfirm(MibRequestConfirm_t *mib)
     case MIB_DEV_ADDR:
         mib->Param.DevAddr = g_mac.dev_addr;
         return LORAMAC_STATUS_OK;
+    case MIB_NETWORK_ACTIVATION:
+        mib->Param.NetworkActivation = g_mac.activation;
+        return LORAMAC_STATUS_OK;
     case MIB_NVM_CTXS:
         if (g_mac.corrupt_keys_on_mib_get) {
             /* The real hazard: the secure element silently lost the keys the
@@ -120,6 +125,21 @@ LmHandlerErrorStatus_t LmHandlerGetKey(KeyIdentifier_t keyId, uint8_t *key)
     return LORAMAC_HANDLER_SUCCESS;
 }
 
+void LmHandlerSetDevEUI(uint8_t *devEui) { memcpy(g_mac.dev_eui, devEui, 8); }
+void LmHandlerSetAppEUI(uint8_t *appEui) { (void)appEui; }
+void LmHandlerProcess(void) { }
+void LmHandlerJoin(ActivationType_t mode, bool forceRejoin) { (void)mode; (void)forceRejoin; }
+
+LmHandlerFlagStatus_t LmHandlerJoinStatus(void)
+{
+    return (g_mac.activation == ACTIVATION_TYPE_ABP) ? LORAMAC_HANDLER_SET : LORAMAC_HANDLER_RESET;
+}
+
+LmHandlerErrorStatus_t LmHandlerSend(LmHandlerAppData_t *appData, LmHandlerMsgTypes_t isTxConfirmed, uint32_t nextTxIn)
+{
+    (void)appData; (void)isTxConfirmed; (void)nextTxIn;
+    return LORAMAC_HANDLER_SUCCESS;
+}
 
 /* ------------------------------------------------------------------ */
 /* Fake app/infra surfaces                                              */
@@ -209,8 +229,26 @@ static int g_expected_failures = 0;
     } \
 } while (0)
 
-static void mac_reset(void);
-static bool commission_two_regions(void);
+static void mac_reset(void)
+{
+    /* Clean MAC state AND clear all injection knobs; the banked contexts in
+     * (fake) flash are untouched, as on target. */
+    memset(&g_mac, 0, sizeof(g_mac));
+    g_h3_region = LORAMAC_REGION_US915;
+}
+
+/* Commission two region contexts through the real commissioning entry point
+ * (all fakes succeeding). */
+static bool commission_two_regions(void)
+{
+    static const uint8_t app_key_us[16]  = { 0xA0 };
+    static const uint8_t nwk_key_us[16]  = { 0xB0 };
+    static const uint8_t app_key_eu[16]  = { 0xC0 };
+    static const uint8_t nwk_key_eu[16]  = { 0xD0 };
+    if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_US915, 0x26011111, app_key_us, nwk_key_us)) return false;
+    if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_EU868, 0x26012222, app_key_eu, nwk_key_eu)) return false;
+    return true;
+}
 
 /* ========================================================================== */
 /* R1 (P0) — restore must never report success after a failed step            */
@@ -271,12 +309,91 @@ static void test_r1_restore_fail_closed(void)
     CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_EU868, "R1e-active");
 }
 
+
+/* ========================================================================== */
+/* R3 (P0) — FCnt restore must resume AHEAD of the true network counter       */
+/* ========================================================================== */
+/* Saves batch every FRAME_COUNTER_SAVE_INTERVAL (10) TXs and persist the TRUE
+ * counter; a reset mid-batch resumes from the persisted value with no margin,
+ * so the next uplinks reuse counters the NS already saw (dropped), and a reset
+ * loop that never reaches the next save boundary replays the same band
+ * FOREVER - permanent silent network loss. The +INTERVAL bump exists only on
+ * the Tier-2-LOST degrade path, not the normal restore.
+ */
+static void test_r3_fcnt_reset_margin(void)
+{
+    printf("-- R3 (P0): FCnt restore must resume ahead of the true counter\n");
+
+    /* Fresh commissioning + clean switch to US915. */
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* 10 TXs -> one real Tier-2 save; persisted counter == true counter. */
+    for (int i = 0; i < 10; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        g_mac.nvm.Crypto.FCntList.NFCntDown++;
+        MultiRegion_SaveCurrentContext();
+    }
+    uint32_t persisted = g_storage.contexts[slot].uplink_counter;
+    printf("   after 10 TXs: persisted FCntUp=%lu\n", (unsigned long)persisted);
+
+    /* 7 more TXs (unsaved batch), then a reset. NS last saw persisted+7. */
+    for (int i = 0; i < 7; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        MultiRegion_SaveCurrentContext();
+    }
+    uint32_t true_counter = persisted + 7;
+
+    /* Simulated reset: RAM statics wiped, re-init from flash only. */
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+
+    uint32_t resumed = g_storage.contexts[slot].uplink_counter;
+    printf("   reset mid-batch: NS last saw %lu, device resumed at %lu (want > %lu)\n",
+           (unsigned long)true_counter, (unsigned long)resumed, (unsigned long)true_counter);
+    CHECK_REGRESSION(resumed > true_counter, "R3-margin");
+
+    /* Monotonicity across a SECOND mid-batch reset (the loop case): the
+     * counter must advance again, never replay the same band. */
+    g_mac.nvm.Crypto.FCntList.FCntUp = resumed;   /* MAC adopts the restored value */
+    for (int i = 0; i < 5; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        MultiRegion_SaveCurrentContext();
+    }
+    uint32_t true2 = resumed + 5;
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+    uint32_t resumed2 = g_storage.contexts[slot].uplink_counter;
+    printf("   second reset: NS last saw %lu, resumed at %lu (want > %lu)\n",
+           (unsigned long)true2, (unsigned long)resumed2, (unsigned long)true2);
+    CHECK_REGRESSION(resumed2 > true2, "R3-margin-chain");
+}
+
 int main(void)
 {
     printf("=== R15 harness: real multiregion_context.c vs fake LoRaMac ===\n\n");
     memset(g_flash, 0xFF, sizeof(g_flash));
 
     test_r1_restore_fail_closed();
+    printf("\n");
+    test_r3_fcnt_reset_margin();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
@@ -288,39 +405,3 @@ int main(void)
     return g_failures ? 1 : 0;
 }
 
-static void mac_reset(void)
-{
-    /* Clean MAC state AND clear all injection knobs; the banked contexts in
-     * (fake) flash are untouched, as on target. */
-    memset(&g_mac, 0, sizeof(g_mac));
-    g_h3_region = LORAMAC_REGION_US915;
-}
-
-/* Commission two region contexts through the real commissioning entry point
- * (all fakes succeeding). */
-static bool commission_two_regions(void)
-{
-    static const uint8_t app_key_us[16]  = { 0xA0 };
-    static const uint8_t nwk_key_us[16]  = { 0xB0 };
-    static const uint8_t app_key_eu[16]  = { 0xC0 };
-    static const uint8_t nwk_key_eu[16]  = { 0xD0 };
-    if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_US915, 0x26011111, app_key_us, nwk_key_us)) return false;
-    if (!MultiRegion_InitializeRegionFromNetworkServer(LORAMAC_REGION_EU868, 0x26012222, app_key_eu, nwk_key_eu)) return false;
-    return true;
-}
-
-void LmHandlerSetDevEUI(uint8_t *devEui) { memcpy(g_mac.dev_eui, devEui, 8); }
-void LmHandlerSetAppEUI(uint8_t *appEui) { (void)appEui; }
-void LmHandlerProcess(void) { }
-void LmHandlerJoin(ActivationType_t mode, bool forceRejoin) { (void)mode; (void)forceRejoin; }
-
-LmHandlerFlagStatus_t LmHandlerJoinStatus(void)
-{
-    return (g_mac.activation == ACTIVATION_TYPE_ABP) ? LORAMAC_HANDLER_SET : LORAMAC_HANDLER_RESET;
-}
-
-LmHandlerErrorStatus_t LmHandlerSend(LmHandlerAppData_t *appData, LmHandlerMsgTypes_t isTxConfirmed, uint32_t nextTxIn)
-{
-    (void)appData; (void)isTxConfirmed; (void)nextTxIn;
-    return LORAMAC_HANDLER_SUCCESS;
-}

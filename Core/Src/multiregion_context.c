@@ -1517,6 +1517,7 @@ static bool FlashReadStorage(void)
     g_storage.active_slot = t1.active_slot;
     memcpy(g_storage.contexts, t1.contexts, sizeof(g_storage.contexts));
 
+    bool counters_bumped = false;  /* R3 (#188): any margin applied */
     Tier2Bank_t t2 = {0};  /* F-17 (#67): silence maybe-uninitialized (false positive, but explicit) */
     if (FlashReadTier2(&t2)) {
         g_t2_sequence = t2.sequence;
@@ -1527,8 +1528,18 @@ static bool FlashReadStorage(void)
             if (!t2.entries[i].valid) {
                 continue;
             }
+            counters_bumped = true;
             MinimalRegionContext_t *ctx = &g_storage.contexts[i];
-            ctx->uplink_counter = t2.entries[i].uplink_counter;
+            /* R3 (#188): resume AHEAD of the persisted uplink counter. Saves
+             * batch every FRAME_COUNTER_SAVE_INTERVAL TXs and persist the
+             * true value, so after a mid-batch reset the NS has already seen
+             * up to INTERVAL-1 counters beyond the persisted one - resuming
+             * at the persisted value replays them (dropped), and a reset loop
+             * short of the next save boundary replays the same band forever.
+             * The margin burns at most one reserved block per reset; the only
+             * property the NS requires is strict monotonicity. (The Tier-2-
+             * lost degrade path below already bumps by the same margin.) */
+            ctx->uplink_counter = t2.entries[i].uplink_counter + FRAME_COUNTER_SAVE_INTERVAL;
             ctx->downlink_counter = t2.entries[i].downlink_counter;
             ctx->last_rx_mic = t2.entries[i].last_rx_mic;
             ctx->last_used = t2.entries[i].last_used;
@@ -1545,6 +1556,7 @@ static bool FlashReadStorage(void)
             MinimalRegionContext_t *ctx = &g_storage.contexts[i];
             if (ctx->dev_addr != 0 && ctx->dev_addr != 0xFFFFFFFF) {
                 ctx->uplink_counter += FRAME_COUNTER_SAVE_INTERVAL;
+                counters_bumped = true;
             }
         }
     }
@@ -1553,6 +1565,18 @@ static bool FlashReadStorage(void)
      * ValidateContextCRC() checks (IsRegionJoined / SwitchToRegion) hold. */
     for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
         UpdateContextCRC(&g_storage.contexts[i]);
+    }
+
+    /* R3 (#188): commit the margined counters back to flash NOW. The margin
+     * alone is not reset-loop-safe: restore adds +INTERVAL, but if the unit
+     * resets again before the next batched save, the same reserved band is
+     * replayed (NS drops reused counters; a sustained loop stalls the uplink
+     * counter permanently). Committing the new base makes every boot start a
+     * FRESH reserved block - monotonic under arbitrary reset patterns. Cost:
+     * one ping-ponged Tier-2 write per boot (~20k boots of page endurance),
+     * and boot-time resets are exactly the case FR-23/F-6 escalate on. */
+    if (counters_bumped && !FlashWriteTier2()) {
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: R3 counter commit-back failed (RAM margins still monotonic this boot)\r\n");
     }
 
     return true;
