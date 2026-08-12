@@ -48,6 +48,12 @@ static struct {
     uint8_t dev_eui[8];
     bool busy;
     LoRaMacNvmData_t nvm;
+    /* live radio params (R11 round-trip) */
+    int8_t channels_datarate;
+    int8_t channels_tx_power;
+    bool adr_enable;
+    uint32_t rx2_freq;
+    uint32_t rx2_dr;
     /* fault injection */
     bool fail_mib_set_devaddr;      /* every MIB_DEV_ADDR set fails */
     bool fail_mib_set_activation;   /* every MIB_NETWORK_ACTIVATION set fails */
@@ -65,6 +71,19 @@ LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
     case MIB_NETWORK_ACTIVATION:
         if (g_mac.fail_mib_set_activation) return LORAMAC_STATUS_ERROR;
         g_mac.activation = mib->Param.NetworkActivation;
+        return LORAMAC_STATUS_OK;
+    case MIB_CHANNELS_DATARATE:
+        g_mac.channels_datarate = mib->Param.ChannelsDatarate;
+        return LORAMAC_STATUS_OK;
+    case MIB_CHANNELS_TX_POWER:
+        g_mac.channels_tx_power = mib->Param.ChannelsTxPower;
+        return LORAMAC_STATUS_OK;
+    case MIB_ADR:
+        g_mac.adr_enable = mib->Param.AdrEnable;
+        return LORAMAC_STATUS_OK;
+    case MIB_RX2_CHANNEL:
+        g_mac.rx2_freq = mib->Param.Rx2Channel.Frequency;
+        g_mac.rx2_dr = mib->Param.Rx2Channel.Datarate;
         return LORAMAC_STATUS_OK;
     default:
         return LORAMAC_STATUS_OK;
@@ -89,9 +108,18 @@ LoRaMacStatus_t LoRaMacMibGetRequestConfirm(MibRequestConfirm_t *mib)
         }
         mib->Param.Contexts = g_mac.null_nvm ? NULL : &g_mac.nvm;
         return LORAMAC_STATUS_OK;
+    case MIB_CHANNELS_DATARATE:
+        mib->Param.ChannelsDatarate = g_mac.channels_datarate;
+        return LORAMAC_STATUS_OK;
+    case MIB_CHANNELS_TX_POWER:
+        mib->Param.ChannelsTxPower = g_mac.channels_tx_power;
+        return LORAMAC_STATUS_OK;
+    case MIB_ADR:
+        mib->Param.AdrEnable = g_mac.adr_enable;
+        return LORAMAC_STATUS_OK;
     case MIB_RX2_CHANNEL:
-        mib->Param.Rx2Channel.Frequency = 923300000;
-        mib->Param.Rx2Channel.Datarate = DR_8;
+        mib->Param.Rx2Channel.Frequency = g_mac.rx2_freq;
+        mib->Param.Rx2Channel.Datarate = g_mac.rx2_dr;
         return LORAMAC_STATUS_OK;
     default:
         return LORAMAC_STATUS_OK;
@@ -234,6 +262,8 @@ static void mac_reset(void)
     /* Clean MAC state AND clear all injection knobs; the banked contexts in
      * (fake) flash are untouched, as on target. */
     memset(&g_mac, 0, sizeof(g_mac));
+    g_mac.rx2_freq = 923300000;  /* sane defaults, as the real MAC would have */
+    g_mac.rx2_dr = DR_8;
     g_h3_region = LORAMAC_REGION_US915;
 }
 
@@ -447,6 +477,7 @@ static void test_r2_semantic_validation(void)
 }
 
 static void test_r8_tier1_generation_order(void);
+static void test_r11_capture_restore_symmetry(void);
 
 int main(void)
 {
@@ -460,6 +491,8 @@ int main(void)
     test_r2_semantic_validation();
     printf("\n");
     test_r8_tier1_generation_order();
+    printf("\n");
+    test_r11_capture_restore_symmetry();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
@@ -537,5 +570,91 @@ static void test_r8_tier1_generation_order(void)
     printf("   copy A after repair: DevAddr=0x%08lX (want new)\n",
            (unsigned long)repaired.contexts[slot].dev_addr);
     CHECK_REGRESSION(repaired.contexts[slot].dev_addr == 0x26019999UL, "R8-repair");
+}
+
+/* ========================================================================== */
+/* R11 (P1/P2) — capture and restore must be symmetric (round-trip)            */
+/* ========================================================================== */
+/* CaptureCurrentContext records datarate/tx_power/ADR/RX2 alongside counters
+ * and LastRxMic, but RestoreSessionToMac did NOT restore those radio params
+ * into the MAC - after a switch/reset the session ran on default radio
+ * params. Round-trip: capture -> destroy runtime MAC state -> restore ->
+ * recapture; every persisted field must survive.
+ */
+static void test_r11_capture_restore_symmetry(void)
+{
+    printf("-- R11 (P1/P2): capture -> destroy -> restore -> recapture round-trip\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* Distinctive live session state in the runtime MAC. */
+    g_mac.channels_datarate = DR_3;
+    g_mac.channels_tx_power = 5;
+    g_mac.adr_enable = true;
+    g_mac.rx2_freq = 866550000;
+    g_mac.rx2_dr = DR_2;
+    g_mac.nvm.Crypto.FCntList.FCntUp = 42;
+    g_mac.nvm.Crypto.FCntList.NFCntDown = 7;
+    g_mac.nvm.MacGroup1.LastRxMic = 0x00C0FFEE;
+
+    /* Capture + persist. */
+    if (!MultiRegion_ForceSaveCurrentContext()) { printf("   SETUP FAILED: capture\n"); exit(2); }
+    MinimalRegionContext_t before = g_storage.contexts[slot];
+
+    /* Destroy runtime MAC state (what a reset/reinit does). */
+    g_mac.channels_datarate = 0;
+    g_mac.channels_tx_power = 0;
+    g_mac.adr_enable = false;
+    g_mac.rx2_freq = 0;
+    g_mac.rx2_dr = 0;
+    memset(&g_mac.nvm, 0, sizeof(g_mac.nvm));
+
+    /* Restore via switch away + back. */
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868) != LORAMAC_HANDLER_SUCCESS ||
+        MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: restore switch\n"); exit(2);
+    }
+
+    /* Recapture and compare every persisted field. */
+    if (!MultiRegion_ForceSaveCurrentContext()) { printf("   SETUP FAILED: recapture\n"); exit(2); }
+    const MinimalRegionContext_t *after = &g_storage.contexts[slot];
+
+    printf("   FCntUp %lu->%lu, FCntDown %lu->%lu, MIC %lX->%lX\n",
+           (unsigned long)before.uplink_counter, (unsigned long)after->uplink_counter,
+           (unsigned long)before.downlink_counter, (unsigned long)after->downlink_counter,
+           (unsigned long)before.last_rx_mic, (unsigned long)after->last_rx_mic);
+    printf("   DR %d->%d, TXP %d->%d, ADR %d->%d, RX2 %lu/DR%lu->%lu/DR%lu\n",
+           before.datarate, after->datarate, before.tx_power, after->tx_power,
+           before.adr_enabled, after->adr_enabled,
+           (unsigned long)before.rx2_frequency, (unsigned long)before.rx2_datarate,
+           (unsigned long)after->rx2_frequency, (unsigned long)after->rx2_datarate);
+
+    /* Counters: the save path deliberately advances FCntUp by the save
+     * interval (R3 reserved block), so the invariant is monotonicity, never
+     * regression - exact values belong to the R3 test. */
+    CHECK_REGRESSION(after->uplink_counter >= before.uplink_counter &&
+                     before.uplink_counter != 0, "R11-fcntup");
+    CHECK_REGRESSION(after->downlink_counter == before.downlink_counter, "R11-fcntdown");
+    CHECK_REGRESSION(after->last_rx_mic == 0x00C0FFEE, "R11-mic");
+    CHECK_REGRESSION(after->datarate == DR_3, "R11-datarate");
+    CHECK_REGRESSION(after->tx_power == 5, "R11-txpower");
+    CHECK_REGRESSION(after->adr_enabled == 1, "R11-adr");
+    CHECK_REGRESSION(after->rx2_frequency == 866550000UL, "R11-rx2freq");
+    CHECK_REGRESSION(after->rx2_datarate == DR_2, "R11-rx2dr");
+    (void)before;
 }
 
