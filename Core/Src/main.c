@@ -864,7 +864,27 @@ void MX_USART1_UART_Init(void)
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  /* S-C (#212, 2026-08-12): with DMA RX active the HAL treats ANY UART error
+   * as BLOCKING (stm32wlxx_hal_uart.c: the DMAR test alone is enough - not
+   * just ORE, a single framing or noise glitch qualifies). It then runs
+   * UART_EndRxTransfer() + HAL_DMA_Abort_IT(hdmarx) and the circular GNSS
+   * reception is dead for the rest of the acquisition window. Nothing
+   * restarts it (HAL_UART_ErrorCallback is not overridden) and nothing can
+   * observe it (dma_head just stops advancing, identical to "no bytes").
+   * Reachable at GPS power-on: PB6 is driven LOW and PB7 is analog during
+   * standby, so the first character after wake is easily partial.
+   *   OverrunDisable      - RDR is overwritten instead of asserting ORE.
+   *                         Correct for a circular NMEA sniffer: a lost byte
+   *                         costs one sentence (checksum rejects it), a lost
+   *                         DMA costs the whole fix.
+   *   DMA_ENABLEONRXERROR - reception survives a framing/noise glitch.
+   * NOTE: this block is CubeMX-generated. Mirrored in
+   * Radio_Sonde_E5_HF_EU.ioc (USART1 Advanced Parameters); the S-C
+   * regression scan catches a silent .ioc revert. */
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXOVERRUNDISABLE_INIT
+                                     | UART_ADVFEATURE_DMADISABLEONERROR_INIT;
+  huart1.AdvancedInit.OverrunDisable = UART_ADVFEATURE_OVERRUN_DISABLE;
+  huart1.AdvancedInit.DMADisableonRxError = UART_ADVFEATURE_DMA_ENABLEONRXERROR;
   if (HAL_UART_Init(&huart1) != HAL_OK)
   {
     Error_Handler();

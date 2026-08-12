@@ -312,7 +312,13 @@ SPI2.Mode=SPI_MODE_MASTER
 SPI2.VirtualNSS=VM_NSSHARD
 SPI2.VirtualType=VM_MASTER
 USART1.BaudRate=9600
-USART1.IPParameters=VirtualMode-Asynchronous,BaudRate
+USART1.DMADisableonRxError=UART_ADVFEATURE_DMA_ENABLEONRXERROR
+# S-C (#212): mirror of the main.c USART1 advanced-init fix - OverrunDisable
+# + DMA_ENABLEONRXERROR so a single RX glitch cannot permanently kill the
+# circular GNSS DMA. If CubeMX regen drops these, main.c is the authority
+# and the S-C regression scan goes red.
+USART1.IPParameters=VirtualMode-Asynchronous,BaudRate,OverrunDisable,DMADisableonRxError
+USART1.OverrunDisable=UART_ADVFEATURE_OVERRUN_DISABLE
 USART1.VirtualMode-Asynchronous=VM_ASYNC
 VP_ADC_TempSens_Input.Mode=IN-TempSens
 VP_ADC_TempSens_Input.Signal=ADC_TempSens_Input
