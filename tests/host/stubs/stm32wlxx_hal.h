@@ -53,6 +53,9 @@ typedef struct { int _host_stub; } SPI_HandleTypeDef;
 typedef struct { int _host_stub; } I2C_HandleTypeDef;
 typedef struct { int _host_stub; } ADC_HandleTypeDef;
 typedef struct { int _host_stub; } RTC_HandleTypeDef;
+/* ---- IWDG (multiregion_context.c joins) ---- */
+typedef struct { void *Instance; } IWDG_HandleTypeDef;
+static inline HAL_StatusTypeDef HAL_IWDG_Refresh(IWDG_HandleTypeDef *h) { (void)h; return HAL_OK; }
 static inline void HAL_Delay(uint32_t ms) { (void)ms; }
 uint32_t HAL_GetTick(void);   /* test-defined (test_main.c) */
 #endif

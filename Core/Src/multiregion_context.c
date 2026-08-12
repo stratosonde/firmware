@@ -586,20 +586,35 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key);
     LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key);
 
+    /* R1 (#187): FAIL CLOSED. Every required step is checked; any failure
+     * aborts the restore with LORAMAC_HANDLER_ERROR so the caller never
+     * marks the region active on a dead session (the banked context stays
+     * valid - a later cycle can retry). Previously these failures were log
+     * lines and the function fell through to SUCCESS. */
     // STEP 4: Set DevAddr and activation via MIB before channel mask
     MibRequestConfirm_t mib;
     mib.Type = MIB_DEV_ADDR;
     mib.Param.DevAddr = ctx->dev_addr;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: DevAddr MIB set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     mib.Type = MIB_NETWORK_ACTIVATION;
     mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: activation MIB set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
 
     // STEP 5: Restore frame counters and keys into NVM
     mib.Type = MIB_NVM_CTXS;
     LoRaMacMibGetRequestConfirm(&mib);
     LoRaMacNvmData_t *nvm = (LoRaMacNvmData_t*)mib.Param.Contexts;
-    if (nvm) {
+    if (nvm == NULL) {
+        SONDE_LOG_STR("  ERROR: NVM contexts unavailable - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+    {
         nvm->Crypto.FCntList.FCntUp = ctx->uplink_counter;
         nvm->Crypto.FCntList.NFCntDown = ctx->downlink_counter;
         nvm->MacGroup1.LastRxMic = ctx->last_rx_mic;
@@ -616,7 +631,10 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
 
     mib.Type = MIB_NETWORK_ACTIVATION;
     mib.Param.NetworkActivation = ACTIVATION_TYPE_ABP;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: activation re-set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
 
     // STEP 6: region channel masks, table-driven (F-R2)
     ApplyRegionChannelMask(region);
@@ -629,7 +647,9 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     mib.Type = MIB_DEV_ADDR;
     mib.Param.DevAddr = ctx->dev_addr;
     if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
-        SONDE_LOG_STR("  ERROR: Failed to set DevAddr!\r\n");
+        /* R1 (#187): was a log line, then SUCCESS. Fail closed instead. */
+        SONDE_LOG_STR("  ERROR: Failed to set DevAddr - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
     }
 
     // STEP 9: Process MAC events to complete initialization
@@ -657,20 +677,27 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     verify_mib.Type = MIB_DEV_ADDR;
     LoRaMacMibGetRequestConfirm(&verify_mib);
     if (verify_mib.Param.DevAddr != ctx->dev_addr) {
-        SONDE_LOG("  ERROR: DevAddr mismatch! MAC=0x%08lX, Expected=0x%08lX\r\n",
+        /* R1 (#187): verification failure aborts the restore - never report
+         * success on a session that did not land. */
+        SONDE_LOG("  ERROR: DevAddr mismatch! MAC=0x%08lX, Expected=0x%08lX - restore aborted\r\n",
                   verify_mib.Param.DevAddr, ctx->dev_addr);
+        return LORAMAC_HANDLER_ERROR;
     }
 
     verify_mib.Type = MIB_NVM_CTXS;
     LoRaMacMibGetRequestConfirm(&verify_mib);
     LoRaMacNvmData_t *verify_nvm = (LoRaMacNvmData_t*)verify_mib.Param.Contexts;
-    if (verify_nvm) {
-        if (memcmp(verify_nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16) != 0) {
-            SONDE_LOG_STR("  ERROR: AppSKey mismatch in secure element!\r\n");
-        }
-        if (memcmp(verify_nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16) != 0) {
-            SONDE_LOG_STR("  ERROR: NwkSKey mismatch in secure element!\r\n");
-        }
+    if (verify_nvm == NULL) {
+        SONDE_LOG_STR("  ERROR: NVM verify unavailable - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+    if (memcmp(verify_nvm->SecureElement.KeyList[APP_S_KEY].KeyValue, ctx->app_s_key, 16) != 0) {
+        SONDE_LOG_STR("  ERROR: AppSKey mismatch in secure element - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+    if (memcmp(verify_nvm->SecureElement.KeyList[NWK_S_KEY].KeyValue, ctx->nwk_s_key, 16) != 0) {
+        SONDE_LOG_STR("  ERROR: NwkSKey mismatch in secure element - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
     }
 
     return LORAMAC_HANDLER_SUCCESS;
