@@ -790,6 +790,27 @@ static void test_f003_mission_survives_failover(const char *m)
     CHECK_REGRESSION(list && snap && restore && excludes_timer, "F-003");
 }
 
+/* ========================================================================== */
+/* F-004 (P1) — USART1 RX DMA lifecycle must be symmetric across STOP2         */
+/* ========================================================================== */
+/* MspInit acquires hdma_usart1_rx (circular) + DMA1_Channel1_IRQn; the old
+ * MspDeInit released only hdmatx + the USART1 IRQ while stm32_lpm_if.c
+ * deinits around every STOP2 - the imbalance accumulates over thousands of
+ * sleep cycles. Invariant: the deinit releases hdmarx, disables the DMA IRQ
+ * and clears latched pending flags.
+ */
+static void test_f004_usart1_dma_symmetry(const char *msp)
+{
+    printf("-- F-004 (P1): USART1 RX DMA deinit symmetry\n");
+
+    bool rx_deinit = strstr(msp, "HAL_DMA_DeInit(huart->hdmarx)") != NULL;
+    bool irq_off = strstr(msp, "HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn)") != NULL;
+    bool pending = strstr(msp, "HAL_NVIC_ClearPendingIRQ(DMA1_Channel1_IRQn)") != NULL;
+    printf("   hdmarx deinit: %s, DMA1_Ch1 IRQ disabled: %s, pending cleared: %s\n",
+           rx_deinit ? "yes" : "no", irq_off ? "yes" : "no", pending ? "yes" : "no");
+    CHECK_REGRESSION(rx_deinit && irq_off && pending, "F-004");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -804,6 +825,7 @@ int main(void)
     char *mreg = slurp("../../Core/Src/multiregion_context.c");
     char *sysapp = slurp("../../Core/Src/sys_app.c");
     char *mainsrc = slurp("../../Core/Src/main.c");
+    char *msp = slurp("../../Core/Src/stm32wlxx_hal_msp.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -854,6 +876,8 @@ int main(void)
     test_f001_f007_early_tick(sysapp);
     printf("\n");
     test_f003_mission_survives_failover(mainsrc);
+    printf("\n");
+    test_f004_usart1_dma_symmetry(msp);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

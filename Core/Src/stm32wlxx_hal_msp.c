@@ -532,7 +532,17 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     /* USART1 interrupt DeInit */
     HAL_NVIC_DisableIRQ(USART1_IRQn);
     /* USER CODE BEGIN USART1_MspDeInit 1 */
-
+    /* F-004 (#200): symmetric lifecycle - the init path (USART1_MspInit 1)
+     * also acquires the RX DMA channel (circular, GNSS NMEA) and enables
+     * DMA1_Channel1_IRQn. Releasing only half of it on every STOP2 teardown
+     * leaves stale DMA channel state and a pending/enabled IRQ that
+     * accumulates across thousands of sleep cycles (stuck-busy UART, lost
+     * first NMEA sentence). Release everything the init acquired and clear
+     * any latched DMA interrupt. */
+    HAL_DMA_DeInit(huart->hdmarx);
+    HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn);
+    HAL_NVIC_ClearPendingIRQ(DMA1_Channel1_IRQn);
+    HAL_NVIC_ClearPendingIRQ(USART1_IRQn);
     /* USER CODE END USART1_MspDeInit 1 */
   }
 
