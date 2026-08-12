@@ -926,8 +926,16 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);
 
-  /* NOTE: PB10 and PB5 (GPS power/enable pins) are now managed by GNSS driver */
-  /* Removed conflicting GPIO initialization to prevent pin toggling during sleep */
+  /* F-012 (#210): GPIO OWNERSHIP TABLE - every pin has exactly ONE owner.
+   *   PB6/PB7  USART1 (GNSS NMEA)      -> USART MSP (stm32wlxx_hal_msp.c)
+   *   PB10     GNSS power              -> GNSS driver (atgm336h.c)
+   *   PB5      GNSS enable             -> GNSS driver (atgm336h.c)
+   *   PB9      flash CS                -> board/here (W25Q16JV)
+   *   PB4/PB3  battery/solar ADC       -> board/here (analog, below)
+   *   PA0      diagnostic LED          -> here (commissioning only)
+   *   RF_CTRL1/2 radio RF switch       -> radio driver
+   * A pin configured outside its owner is a defect: double init risks wrong
+   * pull state, power leakage and STOP2 pin-state fights. */
 
   /* F24 FIX: SOS button EXTI3 config removed. PB3 is reconfigured to ANALOG
    * for solar sensing below, so the EXTI was dead code; the associated
@@ -940,12 +948,9 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PB10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  /* F-012 (#210): PB10 is OWNED by the GNSS driver (table above) - the
+   * CubeMX-generated init here contradicted the note above and double-
+   * configured the pin. GNSS_Init configures it and drives it LOW. */
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* Configure PB4 as analog input for battery voltage measurement (ADC_CHANNEL_3) */

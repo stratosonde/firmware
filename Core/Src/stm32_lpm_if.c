@@ -251,7 +251,8 @@ void PWR_EnterStopMode(void)
   /* === IWDG Chunked Sleep (DDR-0020: Watchdog and Progress Supervision) ===
    * Problem: IWDG timeout is ~32.76s, but sleep periods can be 5+ minutes.
    *   Without chunked sleep, IWDG resets the MCU during STOP2.
-   * Solution: Use RTC Wakeup Timer to wake every 25s, refresh IWDG,
+   * Solution: Use RTC Wakeup Timer to wake every IWDG_SAFE_SLEEP_SECONDS
+   *   (20 s, F-011/#210), refresh IWDG,
    *   then re-enter STOP2. LoRaWAN RTC Alarm A also wakes us for real events.
    * Exit conditions: LoRaWAN alarm fires, or any non-wakeup-timer interrupt. */
 
@@ -273,7 +274,8 @@ void PWR_EnterStopMode(void)
 
   while (1)
   {
-    /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz, 25s = 51200 counts */
+    /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz,
+     * IWDG_WAKEUP_COUNTS = IWDG_SAFE_SLEEP_SECONDS x 2048 (F-011/#210) */
     /* 4th param: WakeUpAutoClr = 0 (no auto-clear, we clear manually) */
     /* F-09 (#76): if the WUT fails to arm, entering STOP2 here would sleep
      * with NO scheduled wake. Fall back to a bounded busy-wait (with IWDG
@@ -281,7 +283,9 @@ void PWR_EnterStopMode(void)
     if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, IWDG_WAKEUP_COUNTS,
                                      RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0) != HAL_OK)
     {
-      for (int i = 0; i < 25; i++)
+      /* Bounded busy-wait fallback: one chunk's worth of 1 s IWDG-refreshed
+       * delays (F-011/#210: was a hardcoded 25 s vs the 20 s chunk). */
+      for (int i = 0; i < IWDG_SAFE_SLEEP_SECONDS; i++)
       {
         HAL_Delay(1000);
         HAL_IWDG_Refresh(&hiwdg);
@@ -352,7 +356,8 @@ void PWR_ExitStopMode(void)
   /* USER CODE BEGIN ExitStopMode_1 */
   
   /* === DIAGNOSTIC: LED ON while awake — COMMISSIONING only (R09/DDR-0002) ===
-   * In FLIGHT the LED costs power on every 25 s wake for zero benefit. */
+   * In FLIGHT the LED costs power on every IWDG_SAFE_SLEEP_SECONDS (20 s)
+   * wake for zero benefit. (F-011/#210) */
   if (MissionState_IsCommissioning()) {
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
   }

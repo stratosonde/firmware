@@ -829,6 +829,28 @@ static void test_f006_unknown_policy_documented(const char *app)
     CHECK_REGRESSION(doc, "F-006");
 }
 
+/* ========================================================================== */
+/* F-011/F-012/F-013 (P3 batch) — chunk constant, GPIO ownership, h3 self-check */
+/* ========================================================================== */
+static void test_f011_f012_f013_cleanup(const char *lpm, const char *mainsrc, const char *h3)
+{
+    printf("-- F-011/12/13 (P3): single chunk constant, GPIO ownership, h3liteInit self-check\n");
+
+    /* F-011: the busy-wait fallback must use the authoritative constant, and
+     * no "25 s" chunk comment may survive. */
+    bool f011 = strstr(lpm, "i < IWDG_SAFE_SLEEP_SECONDS") != NULL &&
+                strstr(lpm, "every 25s") == NULL &&
+                strstr(lpm, "25s = 51200 counts") == NULL;
+    /* F-012: ownership table present, and main.c no longer configures PB10. */
+    bool f012 = strstr(mainsrc, "GPIO OWNERSHIP TABLE") != NULL &&
+                strstr(mainsrc, "Configure GPIO pin : PB10") == NULL;
+    /* F-013: h3liteInit performs a real integrity self-check. */
+    bool f013 = strstr(h3, "48.8566") != NULL && strstr(h3, "EU868") != NULL;
+    printf("   F-011 chunk constant: %s, F-012 ownership: %s, F-013 self-check: %s\n",
+           f011 ? "yes" : "no", f012 ? "yes" : "no", f013 ? "yes" : "no");
+    CHECK_REGRESSION(f011 && f012 && f013, "F-011-13");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -844,6 +866,7 @@ int main(void)
     char *sysapp = slurp("../../Core/Src/sys_app.c");
     char *mainsrc = slurp("../../Core/Src/main.c");
     char *msp = slurp("../../Core/Src/stm32wlxx_hal_msp.c");
+    char *h3 = slurp("../../Middlewares/Third_Party/h3lite/src/h3lite.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -898,6 +921,8 @@ int main(void)
     test_f004_usart1_dma_symmetry(msp);
     printf("\n");
     test_f006_unknown_policy_documented(app_raw);  /* disposition lives in a comment - need the raw source */
+    printf("\n");
+    test_f011_f012_f013_cleanup(lpm, mainsrc, h3);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
