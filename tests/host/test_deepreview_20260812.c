@@ -457,6 +457,23 @@ static void test_s09_i2c_filter_reapply(const char *sensc, const char *lpm)
     CHECK_REGRESSION(wk_ok, "S-09-stop2");
 }
 
+/* ------------------------------------------------------------------ */
+/* S-10 — Tier-1/Tier-2 generation compares must be wrap-safe           */
+/* ------------------------------------------------------------------ */
+static void test_s10_wrap_safe_compares(const char *mreg)
+{
+    printf("-- S-10 (P3, #234): generation compares must be wrap-safe\n");
+
+    bool plain_gen = strstr(mreg, "tmp.generation > best_gen") != NULL;
+    bool plain_seq = strstr(mreg, "tmp.sequence > best_seq") != NULL;
+    bool safe_gen  = strstr(mreg, "(int32_t)(tmp.generation - best_gen) > 0") != NULL;
+    bool safe_seq  = strstr(mreg, "(int32_t)(tmp.sequence - best_seq) > 0") != NULL;
+    printf("   plain compares: gen=%s seq=%s | wrap-safe: gen=%s seq=%s\n",
+           plain_gen ? "YES (defect)" : "no", plain_seq ? "YES (defect)" : "no",
+           safe_gen ? "yes" : "NO", safe_seq ? "yes" : "NO");
+    CHECK_REGRESSION(!plain_gen && !plain_seq && safe_gen && safe_seq, "S-10");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -467,6 +484,7 @@ int main(void)
     char *adcc   = normalize_code(slurp("../../Core/Src/adc_if.c"));
     char *sensc  = normalize_code(slurp("../../Core/Src/sys_sensors.c"));
     char *lpm    = normalize_code(slurp("../../Core/Src/stm32_lpm_if.c"));
+    char *mreg   = normalize_code(slurp("../../Core/Src/multiregion_context.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -487,7 +505,10 @@ int main(void)
     test_s06_vdda_invalidation(app, adcc);
     printf("\n");
     test_s09_i2c_filter_reapply(sensc, lpm);
+    printf("\n");
+    test_s10_wrap_safe_compares(mreg);
 
+    free(mreg);
     free(lpm);
     free(sensc);
     free(adcc);

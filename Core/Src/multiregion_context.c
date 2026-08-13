@@ -1431,7 +1431,10 @@ static bool FlashReadTier1(Tier1Bank_t *out)
         /* R8 (#190): NEWEST CRC-valid copy wins, not first-valid. Without a
          * generation a torn re-commission resurrects a stale credential bank
          * (and the old repair path then propagated it over the good copies). */
-        if (good < 0 || tmp.generation > best_gen) {
+        /* S-10 (#234): wrap-safe compare, consistent with flash_log.c and
+         * the LoRaWAN NVM slot picker. good < 0 stays first - it is what
+         * makes the first valid copy win regardless of counter value. */
+        if (good < 0 || (int32_t)(tmp.generation - best_gen) > 0) {
             memcpy(out, &tmp, sizeof(Tier1Bank_t));
             best_gen = tmp.generation;
             good = (int8_t)i;
@@ -1524,7 +1527,8 @@ static bool FlashReadTier2(Tier2Bank_t *out)
             continue;
         }
         tmp.crc32 = stored_crc;
-        if (!found || tmp.sequence > best_seq) {
+        /* S-10 (#234): wrap-safe compare (see the Tier-1 site above). */
+        if (!found || (int32_t)(tmp.sequence - best_seq) > 0) {
             memcpy(out, &tmp, sizeof(Tier2Bank_t));
             best_seq = tmp.sequence;
             g_t2_last_slot = (int8_t)i;
