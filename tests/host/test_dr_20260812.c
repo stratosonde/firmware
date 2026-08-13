@@ -336,6 +336,57 @@ static void test_stab_p3_queue_peek_before_send(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* DR P3 hygiene batch (DR-09..DR-16, DR-18) — structural scans                */
+/* ========================================================================== */
+static void test_dr_p3_hygiene(void)
+{
+    /* DR-10: vertical-speed state must not survive a GNSS power cycle -
+     * both power-on paths clear has_prev_altitude. */
+    char *gnss = slurp("../../Core/Src/atgm336h.c");
+    CHECK_REGRESSION(count_occurrences(gnss, "has_prev_altitude = false") >= 2, "DR-10");
+    free(gnss);
+
+    char *app = slurp("../../LoRaWAN/App/lora_app.c");
+    /* DR-13: SysTimeSyncFromGnss called exactly twice in AcquireGnssFix
+     * (once per fix branch) - the unconditional third call is gone. */
+    CHECK_REGRESSION(count_occurrences(app, "SysTimeSyncFromGnss();") == 2, "DR-13");
+    /* DR-15: the GPS-skip memset is paired with a stale mark. */
+    CHECK_REGRESSION(strstr(app, "sizeof(hgnss.data));\n    EnvSensors_MarkGnssStale(true);") != NULL, "DR-15");
+    /* DR-18: BULK_V6_MAX_RECORDS, not a magic 6. */
+    CHECK_REGRESSION(strstr(app, "highres_records[BULK_V6_MAX_RECORDS]") != NULL, "DR-18-array");
+    CHECK_REGRESSION(strstr(app, "i < BULK_V6_MAX_RECORDS") != NULL, "DR-18-loop");
+    CHECK_REGRESSION(strstr(app, "highres_records[6]") == NULL, "DR-18-magic-gone");
+    free(app);
+
+    /* DR-14: the no-fix branch sets gnss_stale explicitly. */
+    char *ss = slurp("../../Core/Src/sys_sensors.c");
+    CHECK_REGRESSION(strstr(ss, "sensor_data->gnss_stale = 1;") != NULL, "DR-14");
+    free(ss);
+
+    /* DR-11: the unreachable pinned fast path is deleted. The 4 remaining
+     * references are Reset/SetRef and the reseed + aging guards (F1/#167). */
+    char *ml = slurp("../../Core/Src/mission_logic.c");
+    CHECK_REGRESSION(count_occurrences(ml, "d->pinned") == 4, "DR-11");
+    free(ml);
+
+    /* DR-12: explicit detector resets in MissionState_Init. */
+    char *ms = slurp("../../Core/Src/mission_state.c");
+    CHECK_REGRESSION(strstr(ms, "LaunchDetector_Reset(&s_launch_det)") != NULL, "DR-12-launch");
+    CHECK_REGRESSION(strstr(ms, "FloatDetector_Reset(&s_float_det)") != NULL, "DR-12-float");
+    free(ms);
+
+    /* DR-16: the indirect TxCpltCallback call is NULL-guarded. */
+    char *ui = slurp("../../Core/Src/usart_if.c");
+    CHECK_REGRESSION(strstr(ui, "if (TxCpltCallback != NULL)") != NULL, "DR-16");
+    free(ui);
+
+    /* DR-09: HAL_GetTick's non-mod-2^32 wrap documented at the R3-08 site. */
+    char *sa = slurp("../../Core/Src/sys_app.c");
+    CHECK_REGRESSION(strstr(sa, "DR-09") != NULL, "DR-09-doc");
+    free(sa);
+}
+
 int main(void)
 {
     test_dr01_rejected_gga_is_transactional();
@@ -346,6 +397,7 @@ int main(void)
     test_dr06_silence_records_why();
     test_dr17_hrtc_instance_early();
     test_stab_p3_queue_peek_before_send();
+    test_dr_p3_hygiene();
 
     printf("\n%d checks, %d failures (%d expected-unfixed)\n",
            g_checks, g_failures, g_expected_failures);

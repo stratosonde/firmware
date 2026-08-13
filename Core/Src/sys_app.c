@@ -366,6 +366,15 @@ uint32_t HAL_GetTick(void)
      * base; UTIL_TIMER/LoRaWAN timing use TIMER_IF directly and are
      * untouched. */
     ret = TIMER_IF_Convert_Tick2ms(TIMER_IF_GetTimerValue());
+    /* DR-09 (2026-08-12): HAL_GetTick is NOT a modulo-2^32 millisecond
+     * counter. GetTimerTicks() wraps at 2^32 ticks, so the ms value wraps at
+     * 4,194,304,000 - not 4,294,967,296. The unsigned (now - start)
+     * wrap-safe idiom assumes the latter, so once per 48.5-day tick era
+     * every HAL_GetTick-based delta jumps by ~+28 h. Audited consumers
+     * (RescheduleScienceTimer re-base guard, AcquireGnssFix timeout, HAL
+     * peripheral timeouts, GNSS_UpdateVerticalSpeed) all absorb one bad
+     * delta benignly - documented here because the invariant is
+     * load-bearing in ScienceIsDue/RescheduleScienceTimer and NOT true. */
   }
   /* USER CODE BEGIN HAL_GetTick_2 */
 

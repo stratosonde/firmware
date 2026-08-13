@@ -1276,7 +1276,10 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         have_previous_fix = true;
       }
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
-      SysTimeSyncFromGnss();            /* F12 (DDR-0013): epoch seconds */
+      /* DR-13: the duplicate SysTimeSyncFromGnss() here is deleted - the F-1
+       * (#176) ordering discipline ("discipline the clock FIRST, then stamp
+       * in UTC") lives inside the GNSS_HasPosition block above; the second
+       * call ran even when the position gate had just rejected the fix. */
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
     }
     
@@ -1712,10 +1715,13 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
            * Previously the loop logged a warning and still packed the record
            * (zero-filled) — fabricated data transmitted as science.
            * A gap is honest; fabricated data is not. */
-          HighResTelemetryRecord_t highres_records[6];
-          uint32_t highres_seqs[6];   /* FR-07 (#87): per-record explicit identity */
+          /* DR-18: BULK_V6_MAX_RECORDS, not a magic 6 - flash_records[] is
+           * sized by the constant, so a raise otherwise made THESE arrays
+           * the overflow. */
+          HighResTelemetryRecord_t highres_records[BULK_V6_MAX_RECORDS];
+          uint32_t highres_seqs[BULK_V6_MAX_RECORDS];   /* FR-07 (#87): per-record explicit identity */
           uint8_t packed_count = 0;
-          for (uint32_t i = 0; i < record_count && i < 6; i++) {
+          for (uint32_t i = 0; i < record_count && i < BULK_V6_MAX_RECORDS; i++) {
             if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count])) {
               SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
               continue;  /* Skip bad record, keep packing the rest */
@@ -2144,6 +2150,7 @@ static void SendTxData(void)
      * The GGA parser skips empty tokens, so a partial sentence must never meet
      * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
     memset(&hgnss.data, 0, sizeof(hgnss.data));
+    EnvSensors_MarkGnssStale(true);  /* DR-15: GPS skipped - s_gnss_stale must not keep the last acquisition's false across REDUCED/RECOVERY/SURVIVAL runs (same class as R3-02/#216) */
     ttf_ms = 0;  // No GPS acquisition performed
 
     /* BURST-03 (#141): the geofence must still run when GPS is skipped —

@@ -79,11 +79,11 @@ bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
     /* R3-10 (#222): two-evidence latch - the cumulative drop below the
      * bounded reference must ALSO hold continuously for
      * MISSION_LAUNCH_CONFIRM_S. A single downward sample (glitch, handling
-     * bump, brief elevator ride) arms a candidate but never fires. A pinned
-     * (restored) reference is the actual launch pressure: fire immediately. */
-    if (d->pinned) {
-        return true;
-    }
+     * bump, brief elevator ride) arms a candidate but never fires.
+     * DR-11: the "pinned ref fires immediately" fast path is DELETED - it was
+     * unreachable (pinned is set only by the ASCENT restore in
+     * MissionState_Init; Update runs only in COMMISSIONING) yet read as live
+     * policy. Pinning still suppresses reseed/aging above (F1/#167). */
     if (!d->candidate) {
         d->candidate = true;
         d->cand_since_s = now_s;

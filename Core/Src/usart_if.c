@@ -220,7 +220,13 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   /* buffer transmission complete*/
   if (huart->Instance == USART1)
   {
-    TxCpltCallback(NULL);
+    /* DR-16: guard the indirect call - TxCpltCallback is assigned only inside
+     * vcom_Init, and this is a raw function-pointer call on the GPS UART's
+     * completion path (the RxCpltCallback below is already guarded). */
+    if (TxCpltCallback != NULL)
+    {
+      TxCpltCallback(NULL);
+    }
   }
   /* USER CODE BEGIN HAL_UART_TxCpltCallback_2 */
 

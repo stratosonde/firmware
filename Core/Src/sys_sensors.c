@@ -362,6 +362,11 @@ void EnvSensors_MergeGnss(sensor_t *sensor_data)
     sensor_data->gnss_fix_quality = 0;
     sensor_data->gnss_hdop = 99.9f;
     sensor_data->gnss_valid = false;
+    /* DR-14: set gnss_stale explicitly - the one field in this block that
+     * otherwise depended on caller convention (EnvSensors_Read pre-sets 1;
+     * the direct SendTxData call zero-init'd it to "fresh"). No fix is
+     * definitionally stale; never inherit the caller's default (#35 class). */
+    sensor_data->gnss_stale = 1;
 
     SONDE_LOG("GNSS: No fix | Sats visible:%d | Position zeroed\r\n",
                       hgnss.data.satellites_in_view);

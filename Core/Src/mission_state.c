@@ -55,6 +55,13 @@ void MissionState_Init(void)
     }
     s_inited = true;
 
+    /* DR-12: explicit resets - the stated rationale for caller-owned
+     * detector state ("reset semantics explicit at the call site",
+     * mission_logic.h) - instead of relying on static zero-init, which is
+     * only coincidentally equivalent. */
+    LaunchDetector_Reset(&s_launch_det);
+    FloatDetector_Reset(&s_float_det);
+
     uint32_t raw = HAL_RTCEx_BKUPRead(&hrtc, MISSION_STATE_BKP_REG);
     bool bkp_valid = ((raw & MISSION_STATE_MASK) == MISSION_STATE_MAGIC) &&
                      ((raw & 0xFFFFUL) <= (uint32_t)MISSION_FLOAT);

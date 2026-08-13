@@ -146,6 +146,11 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   hgnss->nmea_length = 0;
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
 
+  /* DR-10: vertical-speed state must not survive the power cycle - the first
+   * GGA of the new acquisition would otherwise compute dalt over the whole
+   * sleep interval and publish it as an instantaneous vertical speed. */
+  hgnss->extended.has_prev_altitude = false;
+
   /* Start DMA circular buffer reception */
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
   
@@ -1481,6 +1486,8 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   hgnss->nmea_length = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
+  /* DR-10: drop the cross-sleep vertical-speed reference too (see GNSS_PowerOn). */
+  hgnss->extended.has_prev_altitude = false;
   SONDE_LOG_STR("[GPS WAKE] Software buffers cleared\r\n");
   
   /* STEP 3: Start DMA reception (UART is ready and listening) */
