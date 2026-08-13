@@ -495,7 +495,11 @@ bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss)
     return false;
   }
 
-  return (hgnss->data.valid && hgnss->data.position_present);
+  /* DR-02 (#237): the persistence trust gate must be at least as strict as
+   * the quality gate - range-check too, so an out-of-range coordinate with
+   * presence+valid can never become last-known-good. */
+  return (hgnss->data.valid && hgnss->data.position_present &&
+          GNSS_ValidateCoordinates(hgnss->data.latitude, hgnss->data.longitude));
 }
 
 /**
@@ -511,7 +515,13 @@ bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss)
     return false;
   }
 
+  /* STAB-P1#1 (#237): position_present is part of the good-quality invariant.
+   * Coordinate ABSENCE is represented by position_present, not by an invalid
+   * coordinate sentinel - ValidateCoordinates deliberately accepts (0,0)
+   * (R32/#57), so a position-less GGA (valid fix metrics, empty lat/lon) plus
+   * an RMC 'A' otherwise passed as a fresh good fix at Null Island. */
   return (hgnss->data.valid &&
+          hgnss->data.position_present &&
           hgnss->data.fix_quality != GNSS_FIX_INVALID &&
           hgnss->data.satellites >= 4 &&
           hgnss->data.hdop <= 5.0f &&
@@ -1076,6 +1086,16 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
   /* F-11 (#186): no N/E default - the hemisphere letter gives the coordinate
    * its meaning; a missing/garbled direction REJECTS the fix below. */
   char lat_dir = '\0', lon_dir = '\0';
+  /* DR-01 (#236): parse into LOCALS ONLY. hgnss->data is committed in one
+   * block after the last guard, so a rejected sentence leaves the shared
+   * state byte-for-byte unchanged - the caller discards the return value,
+   * so a pre-guard write (even one later rejected by F-11 or the range
+   * check) would otherwise stand and be consumed as a real position. */
+  uint32_t timestamp = 0;       bool have_timestamp = false;
+  GNSS_FixQuality_t fix_quality = GNSS_FIX_INVALID; bool have_fix_quality = false;
+  uint8_t satellites = 0;       bool have_satellites = false;
+  float hdop = 0.0f;            bool have_hdop = false;
+  float altitude = 0.0f;        bool have_altitude = false;
 
   for (field = 1; field < 15; field++)
   {
@@ -1092,7 +1112,7 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
            * 60 s permits a leap second. */
           uint32_t hhmmss = strtoul(token, NULL, 10);
           uint32_t hh = hhmmss / 10000u, mm = (hhmmss / 100u) % 100u, ss = hhmmss % 100u;
-          if (hh <= 23u && mm <= 59u && ss <= 60u) hgnss->data.timestamp = hhmmss;
+          if (hh <= 23u && mm <= 59u && ss <= 60u) { timestamp = hhmmss; have_timestamp = true; }
         }
         break;
 
@@ -1113,39 +1133,21 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
         break;
 
       case 6: /* Fix quality */
-        if (strlen(token) > 0) hgnss->data.fix_quality = (GNSS_FixQuality_t)atoi(token);
+        if (strlen(token) > 0) { fix_quality = (GNSS_FixQuality_t)atoi(token); have_fix_quality = true; }
         break;
 
       case 7: /* Number of satellites */
-        if (strlen(token) > 0) hgnss->data.satellites = atoi(token);
+        if (strlen(token) > 0) { satellites = (uint8_t)atoi(token); have_satellites = true; }
         break;
 
       case 8: /* HDOP */
-        if (strlen(token) > 0) hgnss->data.hdop = atof(token);
+        if (strlen(token) > 0) { hdop = (float)atof(token); have_hdop = true; }
         break;
 
       case 9: /* Altitude */
-        if (strlen(token) > 0) hgnss->data.altitude = atof(token);
+        if (strlen(token) > 0) { altitude = (float)atof(token); have_altitude = true; }
         break;
     }
-  }
-
-  /* R2-16 (#120): export field presence so storage sites can refuse a
-   * partial sentence's (0,0) — see GNSS_HasPosition. */
-  hgnss->data.position_present = (have_lat && have_lon);
-
-  /* Convert coordinates to decimal degrees (R32/#57: presence-tracked — a real
-   * 0.0 coordinate on the equator / prime meridian is valid data, not absence) */
-  if (have_lat)
-  {
-    hgnss->data.latitude = GNSS_ConvertToDecimalDegrees(lat_raw);
-    if (lat_dir == 'S') hgnss->data.latitude = -hgnss->data.latitude;
-  }
-
-  if (have_lon)
-  {
-    hgnss->data.longitude = GNSS_ConvertToDecimalDegrees(lon_raw);
-    if (lon_dir == 'W') hgnss->data.longitude = -hgnss->data.longitude;
   }
 
   /* Validate coordinates */
@@ -1160,12 +1162,31 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
   {
     return -1;
   }
-  
-  if (!GNSS_ValidateCoordinates(hgnss->data.latitude, hgnss->data.longitude))
+
+  /* Convert coordinates to decimal degrees (R32/#57: presence-tracked — a real
+   * 0.0 coordinate on the equator / prime meridian is valid data, not absence) */
+  double latitude = GNSS_ConvertToDecimalDegrees(lat_raw);
+  if (lat_dir == 'S') latitude = -latitude;
+  double longitude = GNSS_ConvertToDecimalDegrees(lon_raw);
+  if (lon_dir == 'W') longitude = -longitude;
+
+  if (!GNSS_ValidateCoordinates((float)latitude, (float)longitude))
   {
     /* Invalid coordinates */
     return -1;
   }
+
+  /* DR-01 (#236): every guard has passed - commit the whole sentence in one
+   * block. R2-16 (#120): position_present=true is only ever committed here,
+   * from a sentence that carried real lat/lon tokens AND passed validation. */
+  if (have_timestamp)    hgnss->data.timestamp = timestamp;
+  if (have_fix_quality)  hgnss->data.fix_quality = fix_quality;
+  if (have_satellites)   hgnss->data.satellites = satellites;
+  if (have_hdop)         hgnss->data.hdop = hdop;
+  if (have_altitude)     hgnss->data.altitude = altitude;
+  hgnss->data.latitude = latitude;
+  hgnss->data.longitude = longitude;
+  hgnss->data.position_present = true;
 
   /* Mark data as valid if we have a fix and coordinates are valid */
   if (hgnss->data.fix_quality != GNSS_FIX_INVALID && hgnss->data.satellites > 0)

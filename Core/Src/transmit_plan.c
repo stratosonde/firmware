@@ -218,6 +218,20 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
             slope_state->upgrade_streak = 0;
             slope_state->hyst_last_ts = now_timestamp;
         } else {
+            /* DR-03: RV-06 (#162) re-seed, the consumer that was missed. The
+             * LSE->LSI failover re-inits the RTC and restarts the boot-relative
+             * counter near zero (F-002/#201) while this state survives in RAM.
+             * Without the re-seed, new_observation is false for the whole
+             * elapsed-uptime window: upgrades can never confirm while
+             * downgrades still apply immediately - a one-way ratchet toward
+             * SURVIVAL triggered by exactly the event the failover machinery
+             * was built to survive. A backward step is a new clock domain:
+             * re-seed the epoch, drop the streak (its time base is gone), and
+             * treat this call as the same observation. */
+            if (now_timestamp < slope_state->hyst_last_ts) {
+                slope_state->hyst_last_ts = now_timestamp;
+                slope_state->upgrade_streak = 0;
+            }
             /* F-4 (#179): a streak advance requires REAL elapsed time since
              * the last evaluation. OnTxData re-arms SendTxData once per bulk
              * burst packet (up to 20) with the same now_timestamp; without

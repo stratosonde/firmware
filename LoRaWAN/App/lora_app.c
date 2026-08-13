@@ -1304,12 +1304,24 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
  * SAME restricted-region test as the live-fix path. Pure computation (h3lite),
  * no hardware. Inhibit only — callers on a stale position must NOT auto-switch
  * regions (switching on a days-old fix may be worse than holding). */
-static bool GeofenceRestricted(float lat, float lon)
+/* DR-02 (#237): tri-state, not boolean. An implausible last-known position is
+ * UNKNOWN, not "permitted" - the old `return false` let a validation failure
+ * silently read as permission on the one policy with regulatory consequences.
+ * Callers map UNKNOWN to the documented "no fix ever -> transmit" policy
+ * EXPLICITLY (same outcome, different reasoning - F10/#175, DDR-0015). */
+typedef enum {
+  GEO_PERMISSION_PERMITTED = 0,
+  GEO_PERMISSION_RESTRICTED,
+  GEO_PERMISSION_UNKNOWN
+} GeoPermission_t;
+
+static GeoPermission_t GeofenceRestricted(float lat, float lon)
 {
   if (!GNSS_ValidateCoordinates(lat, lon)) {
-    return false;
+    return GEO_PERMISSION_UNKNOWN;
   }
-  return latLngToRegion(lat, lon) == REGION_RESTRICTED;
+  return (latLngToRegion(lat, lon) == REGION_RESTRICTED)
+         ? GEO_PERMISSION_RESTRICTED : GEO_PERMISSION_PERMITTED;
 }
 
 static void SelectRegionAndSession(bool *rf_silence)
@@ -2130,7 +2142,11 @@ static void SendTxData(void)
      * cannot be known to be restricted, and going dark forever is worse. */
     if (g_tx_state != TX_STATE_BULK_TRANSFER) {
       float la, lo, al;
-      if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo)) {
+      /* DR-02 (#237): only an explicit RESTRICTED silences. UNKNOWN (no fix
+       * ever, or an implausible stored position) maps to the documented
+       * "cannot be known restricted -> transmit" policy by choice, not by
+       * inheriting the outcome of a failed validation. */
+      if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
         rf_silence = true;
         SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GPS off): RF silence\r\n");
       }
@@ -2167,7 +2183,9 @@ static void SendTxData(void)
      * (cold boot) -> transmit: a never-fixed sonde cannot be known
      * restricted, and going dark forever is worse. */
     float la, lo, al;
-    if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo)) {
+    /* DR-02 (#237): explicit RESTRICTED only; UNKNOWN -> transmit (same
+     * policy as the GPS-skip path above). */
+    if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
       rf_silence = true;
       SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
     }

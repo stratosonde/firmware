@@ -244,7 +244,7 @@ static void test_gnss_parser(void)
     CHECK(g.data.latitude < -48.11729 && g.data.latitude > -48.11731);
     CHECK(g.data.longitude < -11.5166 && g.data.longitude > -11.5167);
 
-    /* R2-16 (#120): Null-Island poison. A PARTIAL GGA sets fix_quality/sats/
+    /* R2-16 (#120): Null-Island poison. A PARTIAL GGA carries fix_quality/sats/
      * hdop but leaves lat/lon empty; a following RMC 'A' then sets data.valid.
      * The combination passed GNSS_IsFixValid with (0,0) coordinates — and
      * AcquireGnssFix stored (0,0) into the backup regs as last-known-good,
@@ -253,8 +253,11 @@ static void test_gnss_parser(void)
     memset(&g, 0, sizeof(g));
     rc = GNSS_ParseGGA(&g, "$GNGGA,120000,,,,,1,06,1.0,,M,,M,,*51");
     CHECK_EQ_I(rc, -1);                        /* no lat/lon -> parse fails */
-    CHECK_EQ_I(g.data.fix_quality, 1);         /* ...but fix fields WERE set */
-    CHECK_EQ_I(g.data.satellites, 6);
+    /* DR-01 (#236): a rejected sentence commits NOTHING - the fix fields stay
+     * at their pre-parse values (the old commit-before-validate behaviour
+     * this asserted was the bug). */
+    CHECK_EQ_I(g.data.fix_quality, 0);
+    CHECK_EQ_I(g.data.satellites, 0);
     GNSS_ParseRMC(&g, "$GNRMC,120000,A,,,,,,,060825,,,N*00");
     CHECK(g.data.valid);                       /* RMC 'A' latches valid */
     CHECK_REGRESSION(!GNSS_HasPosition(&g), "R2-16");  /* but no position fields */
