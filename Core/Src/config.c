@@ -250,6 +250,13 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
     if (config->gps_temperature_lockout < -80 || config->gps_temperature_lockout > 0) {
         return CONFIG_ERROR_RANGE;
     }
+    /* S-07 (#229): the GPS acquisition bounds were never validated - a 0 or
+     * tiny value (corrupt write, bad provisioning) silently means 'GPS never
+     * attempted'. >= 10 s is the shortest sane bound; the uint8 type caps
+     * the top end at 255 s inherently. */
+    if (config->gps_timeout_normal < 10 || config->gps_timeout_conservative < 10) {
+        return CONFIG_ERROR_RANGE;
+    }
     if (!(config->battery_critical_threshold < config->battery_low_threshold &&
           config->battery_low_threshold < config->bulk_battery_min_mv)) {
         return CONFIG_ERROR_RANGE;  // critical < low < bulk-min ordering
