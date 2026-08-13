@@ -435,6 +435,28 @@ static void test_s06_vdda_invalidation(const char *app, const char *adcc)
     CHECK_REGRESSION(called_first, "S-06");
 }
 
+/* ------------------------------------------------------------------ */
+/* S-09 — I2C re-init paths must re-apply the MX filter configuration   */
+/* ------------------------------------------------------------------ */
+static void test_s09_i2c_filter_reapply(const char *sensc, const char *lpm)
+{
+    printf("-- S-09 (P3, #233): I2C re-init must re-apply MX filter config\n");
+
+    /* I2C_BusRecover (sys_sensors.c): ConfigAnalogFilter after HAL_I2C_Init. */
+    const char *rec = strstr(sensc, "HAL_I2C_Init(&hi2c2);");
+    bool rec_ok = rec != NULL &&
+                  strstr(rec, "HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE)") != NULL;
+    printf("   I2C_BusRecover re-applies analog filter: %s\n", rec_ok ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(rec_ok, "S-09-recover");
+
+    /* PWR_ExitStopMode (stm32_lpm_if.c): same after its HAL_I2C_Init. */
+    const char *wk = strstr(lpm, "HAL_I2C_Init(&hi2c2)");
+    bool wk_ok = wk != NULL &&
+                 strstr(wk, "HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE)") != NULL;
+    printf("   PWR_ExitStopMode re-applies analog filter: %s\n", wk_ok ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(wk_ok, "S-09-stop2");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -443,6 +465,8 @@ int main(void)
     char *gnssc  = normalize_code(slurp("../../Core/Src/atgm336h.c"));
     char *sysapp = normalize_code(slurp("../../Core/Src/sys_app.c"));
     char *adcc   = normalize_code(slurp("../../Core/Src/adc_if.c"));
+    char *sensc  = normalize_code(slurp("../../Core/Src/sys_sensors.c"));
+    char *lpm    = normalize_code(slurp("../../Core/Src/stm32_lpm_if.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -461,7 +485,11 @@ int main(void)
     test_s02_wakefail_geofence(app);
     printf("\n");
     test_s06_vdda_invalidation(app, adcc);
+    printf("\n");
+    test_s09_i2c_filter_reapply(sensc, lpm);
 
+    free(lpm);
+    free(sensc);
     free(adcc);
     free(sysapp);
     free(gnssc);

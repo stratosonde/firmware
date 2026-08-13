@@ -389,6 +389,11 @@ void PWR_ExitStopMode(void)
   if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
     SONDE_LOG_STR("STOP2 REINIT FAIL: I2C2\r\n");
     reinit_failed = true;
+  } else {
+    /* S-09 (#233): re-apply the filter config from MX_I2C2_Init (same calls
+     * as the bus-recovery path in sys_sensors.c). */
+    HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE);
+    HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0);
   }
 
   /* Re-initialize SPI2 - external flash needs this */

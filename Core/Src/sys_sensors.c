@@ -481,6 +481,11 @@ static void I2C_BusRecover(void)
 
   /* Re-init peripheral (MspInit restores PA15/PB15 to AF open-drain) */
   HAL_I2C_Init(&hi2c2);
+  /* S-09 (#233): re-apply the filter config from MX_I2C2_Init. It currently
+   * matches the peripheral reset defaults, so omitting it was harmless by
+   * accident - this makes it harmless by construction. */
+  HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE);
+  HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0);
   SONDE_LOG_STR("I2C2 bus recovery: 9-clock + STOP, re-init done\r\n");
 }
 
