@@ -250,6 +250,51 @@ static void test_dr03_hysteresis_backward_step(void)
     CHECK_REGRESSION(p.power_mode == MODE_NORMAL, "DR-03");
 }
 
+/* Count non-overlapping occurrences of needle. */
+static int count_occurrences(const char *hay, const char *needle)
+{
+    int c = 0;
+    size_t nl = strlen(needle);
+    const char *p = hay;
+    while ((p = strstr(p, needle)) != NULL) { c++; p += nl; }
+    return c;
+}
+
+/* ========================================================================== */
+/* DR-06 (#241) — every RF-silence path must record WHY in plan.veto           */
+/* ========================================================================== */
+/* ArchiveSample packs plan.veto into record.flags bits 5-7 (DDR-0003 §6a),
+ * but only DecideTransmitPlan's no-session veto ever reached it; the other
+ * four silence causes set the local rf_silence and archived as VETO_NONE.
+ * Fix: one Silence() helper at every site, first veto wins. */
+static void test_dr06_silence_records_why(void)
+{
+    printf("-- DR-06 (#241): all RF-silence sites record the veto reason\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+
+    /* No BARE `rf_silence = true` outside the helper (the helper's own
+     * `*rf_silence = true` is the one allowed instance). */
+    int total = count_occurrences(src, "rf_silence = true");
+    int in_helper = count_occurrences(src, "*rf_silence = true");
+    printf("   bare rf_silence=true sites: %d (helper instances: %d)\n",
+           total - in_helper, in_helper);
+    CHECK_REGRESSION(total - in_helper == 0, "DR-06-no-bare-sites");
+
+    /* The previously-unrecorded causes must name their veto at the site. */
+    CHECK_REGRESSION(strstr(src, "VETO_GPS_LOSS") != NULL, "DR-06-gps-loss");
+    CHECK_REGRESSION(strstr(src, "VETO_PRELAUNCH_QUIET") != NULL, "DR-06-prelaunch");
+    CHECK_REGRESSION(count_occurrences(src, "VETO_RESTRICTED_REGION") >= 3, "DR-06-restricted");
+
+    free(src);
+
+    /* The enum must fit the 3-bit flags field (bits 5-7: max value 7). */
+    char *tp = slurp("../../Core/Inc/transmit_plan.h");
+    CHECK(strstr(tp, "VETO_GPS_LOSS") != NULL);
+    CHECK(strstr(tp, "VETO_PRELAUNCH_QUIET") != NULL);
+    free(tp);
+}
+
 int main(void)
 {
     test_dr01_rejected_gga_is_transactional();
@@ -257,6 +302,7 @@ int main(void)
     test_dr02_has_position_range_checks();
     test_dr02_geofence_not_fail_open();
     test_dr03_hysteresis_backward_step();
+    test_dr06_silence_records_why();
 
     printf("\n%d checks, %d failures (%d expected-unfixed)\n",
            g_checks, g_failures, g_expected_failures);

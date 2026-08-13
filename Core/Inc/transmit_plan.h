@@ -30,7 +30,10 @@ typedef enum {
     VETO_TEMP_STALE,        /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
     VETO_TEMP_LOCKOUT,      /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
     VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0018) */
-    VETO_RESTRICTED_REGION  /**< regulatory RF prohibition (set by executor) */
+    VETO_RESTRICTED_REGION, /**< regulatory RF prohibition (set by executor) */
+    VETO_GPS_LOSS,          /**< DR-06 (#241): GPS-loss silence (#141, GPS_LOSS_SILENCE_S) */
+    VETO_PRELAUNCH_QUIET    /**< DR-06 (#241): commissioned-but-not-launched quiet watch */
+    /* NOTE: archived in flash record flags bits 5-7 (3 bits) - max value 7. */
 } TransmitVeto_t;
 
 /** @brief Pure-data output of the decide half */

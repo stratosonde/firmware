@@ -1324,7 +1324,21 @@ static GeoPermission_t GeofenceRestricted(float lat, float lon)
          ? GEO_PERMISSION_RESTRICTED : GEO_PERMISSION_PERMITTED;
 }
 
-static void SelectRegionAndSession(bool *rf_silence)
+/* DR-06 (#241): ONE silence helper for every RF-silence path, so the archive
+ * always records WHY a cycle went dark (DDR-0003 §6a), not just THAT. First
+ * veto wins (the existing DecideTransmitPlan rule). Previously only the
+ * no-session veto reached plan.veto; the restricted-region, GPS-loss and
+ * pre-launch quiet-watch paths archived as VETO_NONE - indistinguishable
+ * from a normal cycle on recovery. */
+static void Silence(TransmitPlan_t *plan, bool *rf_silence, TransmitVeto_t why)
+{
+  *rf_silence = true;
+  if (plan->veto == VETO_NONE) {
+    plan->veto = why;
+  }
+}
+
+static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
 {    /* Perform H3lite region lookup if we have a valid fix */
     if (GNSS_IsFixValid(&hgnss) && 
         GNSS_ValidateCoordinates(hgnss.data.latitude, hgnss.data.longitude))
@@ -1365,7 +1379,7 @@ static void SelectRegionAndSession(bool *rf_silence)
          * use the rf_silence pattern (DDR-0018) — GPS + re-read + flash write
          * proceed below; only the TX state machine is skipped. */
         SONDE_LOG_STR("RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
-        *rf_silence = true;
+        Silence(plan, rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
@@ -2015,7 +2029,7 @@ static void SendTxData(void)
       LmHandlerJoin(ActivationType, true);
       return; /* Exit - will send data after join succeeds */
     }
-    rf_silence = true;
+    Silence(&plan, &rf_silence, VETO_RF_SILENCE);  /* DR-06 (#241): same veto DecideTransmitPlan set; first wins */
     SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
 
@@ -2025,7 +2039,7 @@ static void SendTxData(void)
    * flash. Entry to ASCENT is by arming (button hook) or launch detection.
    * Unjoined commissioning is untouched above (join retry path). */
   if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
-    rf_silence = true;
+    Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
     gps_enabled_by_power_mgmt = false;
   }
 
@@ -2077,7 +2091,7 @@ static void SendTxData(void)
     }
     if (!MissionState_IsCommissioning() &&
         (utc_now_s - ref_s) > GPS_LOSS_SILENCE_S) {
-      rf_silence = true;
+      Silence(&plan, &rf_silence, VETO_GPS_LOSS);  /* DR-06 (#241) */
       /* STAB-03 (#150): keep trying GPS until a fresh fix clears the
        * silence - urgency overrides the power-mode PREFERENCE, never the
        * hard electrical floor. In MODE_SURVIVAL (raw V below the 4300 mV
@@ -2147,7 +2161,7 @@ static void SendTxData(void)
        * "cannot be known restricted -> transmit" policy by choice, not by
        * inheriting the outcome of a failed validation. */
       if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
-        rf_silence = true;
+        Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
         SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GPS off): RF silence\r\n");
       }
     }
@@ -2174,7 +2188,7 @@ static void SendTxData(void)
   #else  
   /* F-R1 (#74): acquisition and region selection are extracted phases. */
   if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {
-    SelectRegionAndSession(&rf_silence);
+    SelectRegionAndSession(&rf_silence, &plan);
   } else {
     /* S-02 (#226): a failed GNSS wake still leaves the restricted-region
      * duty — the last-known position is exactly what the geofence consumes
@@ -2186,7 +2200,7 @@ static void SendTxData(void)
     /* DR-02 (#237): explicit RESTRICTED only; UNKNOWN -> transmit (same
      * policy as the GPS-skip path above). */
     if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
-      rf_silence = true;
+      Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
       SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
     }
   }
