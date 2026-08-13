@@ -316,11 +316,22 @@ bool EncodeBulkPacketV6(uint8_t *buf,
 
     /* Whole records only; budget = min(buf_cap, max_payload) */
     uint16_t budget = (max_payload < buf_cap) ? max_payload : buf_cap;
+    /* STAB-P3#8 (#243): defend the budget invariant explicitly and zero BOTH
+     * outputs on refusal. Today int promotion saves the (budget - OVERHEAD)
+     * subtraction from unsigned underflow, but a future type change would
+     * turn it into a record count far past the buffer, and the old n==0
+     * refusal left *out_len unwritten - caller-visible garbage. */
+    if (budget < (uint16_t)(BULK_V6_OVERHEAD + BULK_V6_RECORD_WIRE)) {
+        *packed_count = 0;
+        *out_len = 0;
+        return false;
+    }
     uint8_t n = (uint8_t)((budget - BULK_V6_OVERHEAD) / BULK_V6_RECORD_WIRE);
     if (n > record_count) n = record_count;
     if (n > BULK_V6_MAX_RECORDS) n = BULK_V6_MAX_RECORDS;
     if (n == 0) {
         *packed_count = 0;
+        *out_len = 0;
         return false;
     }
 

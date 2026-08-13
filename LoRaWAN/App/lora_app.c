@@ -266,6 +266,7 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size);
 static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port);
 #endif
 static void PacketQueue_Init(PacketQueue_t *queue);
+static bool PacketQueue_Peek(PacketQueue_t *queue, PacketQueueEntry_t *entry);
 static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry);
 static bool PacketQueue_IsEmpty(PacketQueue_t *queue);
 /* USER CODE END PFP */
@@ -2418,15 +2419,20 @@ static void OnTxData(LmHandlerTxParams_t *params)
   if (!PacketQueue_IsEmpty(&g_packet_queue))
   {
     PacketQueueEntry_t entry;
-    if (PacketQueue_Pop(&g_packet_queue, &entry))
+    /* STAB-P3#7 (#243): peek-before-send, pop on acceptance - the old
+     * pop-then-send lost the queued packet on a busy/errored LmHandlerSend. */
+    if (PacketQueue_Peek(&g_packet_queue, &entry))
     {
       LmHandlerAppData_t queuedData;
       queuedData.Port = entry.port;
       queuedData.BufferSize = entry.size;
       queuedData.Buffer = entry.buffer;
-      
+
       LmHandlerErrorStatus_t queue_status = LmHandlerSend(&queuedData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-      (void)queue_status;  /* FR-19: log-only in flight; the call has the side effect */
+      if (queue_status == LORAMAC_HANDLER_SUCCESS)
+      {
+        PacketQueue_Pop(&g_packet_queue, &entry);  /* accepted: consume it */
+      }
       SONDE_LOG("OnTxData: Queued packet (port %d, %d bytes) send status: %d (queue remaining: %d)\r\n",
                         entry.port, entry.size, queue_status, g_packet_queue.count);
     }
@@ -2807,6 +2813,21 @@ static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t
   return true;
 }
 #endif  /* ENABLE_GNSS_DETAIL_PACKET */
+
+/**
+  * @brief  Peek at the head packet WITHOUT removing it (STAB-P3#7, #243)
+  * @param  queue: Pointer to queue structure
+  * @param  entry: Destination for peeked entry
+  * @retval true if successful, false if queue empty
+  */
+static bool PacketQueue_Peek(PacketQueue_t *queue, PacketQueueEntry_t *entry)
+{
+  if (queue->count == 0)
+    return false;
+
+  *entry = queue->entries[queue->tail];
+  return true;
+}
 
 /**
   * @brief  Pop packet from queue

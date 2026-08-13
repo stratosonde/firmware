@@ -341,6 +341,15 @@ static void test_bulk_v3(void)
     CHECK(!EncodeBulkPacketV6(buf, sizeof(buf), 43, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 0);
 
+    /* STAB-P3#8 (#243): budget BELOW the overhead - the unsigned subtraction
+     * underflowed and "packed" records past the buffer. Must fail cleanly
+     * with zeroed outputs. */
+    packed = 99; len = 999;
+    CHECK_REGRESSION(!EncodeBulkPacketV6(buf, sizeof(buf), 4, recs, seqs, 3, &packed, &len), "STAB-P3-8");
+    CHECK_REGRESSION(packed == 0 && len == 0, "STAB-P3-8-zeroed");
+    packed = 99; len = 999;
+    CHECK_REGRESSION(!EncodeBulkPacketV6(buf, 2, 198, recs, seqs, 3, &packed, &len), "STAB-P3-8-bufcap");
+
     /* Buffer cap smaller than budget: buf_cap wins */
     CHECK(EncodeBulkPacketV6(buf, 82, 198, recs, seqs, 3, &packed, &len));
     CHECK_EQ_I(packed, 2);

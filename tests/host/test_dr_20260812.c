@@ -295,6 +295,47 @@ static void test_dr06_silence_records_why(void)
     free(tp);
 }
 
+/* ========================================================================== */
+/* DR-17 (#242) — hrtc.Instance must be valid before the first fatal site      */
+/* ========================================================================== */
+/* hrtc.Instance is assigned in MX_RTC_Init, deep inside MX_LoRaWAN_Init, but
+ * MX_IWDG_Init() and SystemClock_Config() can call Error_Handler_Fatal long
+ * before that - writing the breadcrumb through a NULL Instance (bus fault,
+ * nested fault, lockup signature instead of RESET_CAUSE_FAULT). Fix: assign
+ * it as the first statement of main() after HAL_Init (idempotent). */
+static void test_dr17_hrtc_instance_early(void)
+{
+    printf("-- DR-17 (#242): hrtc.Instance = RTC before MX_IWDG_Init in main\n");
+
+    char *src = slurp("../../Core/Src/main.c");
+    const char *m = strstr(src, "int main(void)");
+    CHECK(m != NULL);
+    const char *assign = strstr(m, "hrtc.Instance = RTC");
+    const char *iwdg = strstr(m, "MX_IWDG_Init();");  /* the CALL, not prose */
+    CHECK(iwdg != NULL);
+    CHECK_REGRESSION(assign != NULL && assign < iwdg, "DR-17");
+    free(src);
+}
+
+/* ========================================================================== */
+/* STAB-P3#7 (#243) — queue drain must peek-before-send, pop on acceptance     */
+/* ========================================================================== */
+/* OnTxData popped the queued (debug/aux) packet BEFORE LmHandlerSend; a busy
+ * or errored send lost the item. Peek -> send -> pop on acceptance. */
+static void test_stab_p3_queue_peek_before_send(void)
+{
+    printf("-- STAB-P3#7 (#243): queue drain pops only after send acceptance\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    const char *peek  = strstr(src, "PacketQueue_Peek(&g_packet_queue");
+    const char *send  = strstr(src, "LmHandlerSend(&queuedData");
+    const char *pop   = strstr(src, "PacketQueue_Pop(&g_packet_queue");
+    CHECK_REGRESSION(peek != NULL, "STAB-P3-7-peek-exists");
+    CHECK_REGRESSION(peek != NULL && send != NULL && pop != NULL &&
+                     peek < send && send < pop, "STAB-P3-7-order");
+    free(src);
+}
+
 int main(void)
 {
     test_dr01_rejected_gga_is_transactional();
@@ -303,6 +344,8 @@ int main(void)
     test_dr02_geofence_not_fail_open();
     test_dr03_hysteresis_backward_step();
     test_dr06_silence_records_why();
+    test_dr17_hrtc_instance_early();
+    test_stab_p3_queue_peek_before_send();
 
     printf("\n%d checks, %d failures (%d expected-unfixed)\n",
            g_checks, g_failures, g_expected_failures);

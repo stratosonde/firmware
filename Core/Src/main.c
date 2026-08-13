@@ -178,6 +178,15 @@ int main(void)
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
+  /* DR-17 (#242): hrtc.Instance is otherwise assigned in MX_RTC_Init, deep
+   * inside MX_LoRaWAN_Init - but MX_IWDG_Init() and SystemClock_Config()
+   * below can call Error_Handler_Fatal BEFORE that, and the fatal path
+   * (ResetCause_GetBootAttempts / HAL_RTCEx_BKUPWrite breadcrumb) would
+   * dereference a NULL Instance: bus fault -> HardFault -> Fault_Reset ->
+   * same NULL write -> lockup signature instead of RESET_CAUSE_FAULT, and
+   * the boot-time breadcrumb lost. Idempotent; MX_RTC_Init sets it again. */
+  hrtc.Instance = RTC;
+
   /* FW-5 / FR-01 (#83): arm the IWDG BEFORE clock config. HAL_RCC_OscConfig()
    * waits for the LSE with an HAL_GetTick()-based timeout, but the tick
    * override (sys_app.c) returns a constant 0 until SYS_TimerInitialisedFlag
