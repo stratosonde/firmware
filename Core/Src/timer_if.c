@@ -435,8 +435,21 @@ uint32_t TIMER_IF_GetTime(uint16_t *mSeconds)
 
   /* USER CODE END TIMER_IF_GetTime */
   uint64_t ticks;
-  uint32_t timerValueLsb = GetTimerTicks();
+  /* S-05 (#230): MSB/LSB read race. The RTC tick (LSB) and the backup
+   * MSB-ticks are two separate loads; if the 32-bit counter wraps between
+   * them, the SSRU callback bumps MSB after LSB was sampled and the
+   * composed time jumps ~48.5 days FORWARD (once per epoch, into every
+   * science record's timestamp). Lock-free read-twice: MSB -> LSB -> MSB;
+   * a changed MSB means the wrap fired mid-read, so re-read LSB under the
+   * stable MSB. (The review's single-expression alternative relies on the
+   * compiler fusing the loads; this is correct regardless of codegen.) */
   uint32_t timerValueMSB = TIMER_IF_BkUp_Read_MSBticks();
+  uint32_t timerValueLsb = GetTimerTicks();
+  uint32_t timerValueMSB2 = TIMER_IF_BkUp_Read_MSBticks();
+  if (timerValueMSB2 != timerValueMSB) {
+    timerValueLsb = GetTimerTicks();
+    timerValueMSB = timerValueMSB2;
+  }
 
   ticks = (((uint64_t) timerValueMSB) << 32) + timerValueLsb;
 

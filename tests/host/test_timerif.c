@@ -44,8 +44,24 @@ HAL_StatusTypeDef HAL_RTCEx_EnableBypassShadow(RTC_HandleTypeDef *h)
 void HAL_RTCEx_BKUPWrite(RTC_HandleTypeDef *h, uint32_t reg, uint32_t data)
 { (void)h; if (reg < HOST_BKP_MAX) g_bkup[reg] = data; }
 
+/* S-05 (#230): race injection - after g_bkupread_bump_after reads of the
+ * MSB-ticks register, the MSB value increments by g_bkupread_bump_delta
+ * (simulating the SSRU wrap firing between two reads). 0 = disabled. */
+static uint32_t g_bkupread_count = 0;
+static uint32_t g_bkupread_bump_after = 0;
+static uint32_t g_bkupread_bump_delta = 0;
+
 uint32_t HAL_RTCEx_BKUPRead(RTC_HandleTypeDef *h, uint32_t reg)
-{ (void)h; return (reg < HOST_BKP_MAX) ? g_bkup[reg] : 0; }
+{
+    (void)h;
+    if (reg >= HOST_BKP_MAX) return 0;
+    uint32_t v = g_bkup[reg];
+    if (reg == RTC_BKP_DR2 /* RTC_BKP_MSBTICKS */ && g_bkupread_bump_after != 0) {
+        g_bkupread_count++;
+        if (g_bkupread_count > g_bkupread_bump_after) v += g_bkupread_bump_delta;
+    }
+    return v;
+}
 
 /* ---- the unit under test (same-TU statics: RTC_Initialized etc.) ---- */
 #include "../../Core/Src/timer_if.c"
@@ -122,6 +138,28 @@ int main(void)
     CHECK(TIMER_IF_Convert_Tick2ms(0xFFFFFFFFu) > 4000000000u,
           "wrap: last tick of the era does not overflow-wrap small");
     CHECK(TIMER_IF_Convert_Tick2ms(1u) == 0u, "1 tick truncates to 0 ms");
+
+    /* S-05 (#230): MSB/LSB read race in TIMER_IF_GetTime. Inject an MSB
+     * increment between the loads (the SSRU wrap firing mid-read): the
+     * composed time must use the NEW MSB with a re-read LSB, never the
+     * stale pair (a ~48.5-day forward jump). */
+    printf("\n-- S-05 (#230): TIMER_IF_GetTime MSB/LSB race\n");
+    {
+        g_bkup[RTC_BKP_DR2] = 5;   /* RTC_BKP_MSBTICKS */
+        g_host_rtc_regs.SSR = 0xFFFFFF00u;   /* lsb = 0xFF = 255 ticks */
+        g_bkupread_count = 0;
+        g_bkupread_bump_after = 1;           /* 1st MSB read stale, later reads new */
+        g_bkupread_bump_delta = 1;
+
+        uint16_t ms = 0;
+        uint32_t sec = TIMER_IF_GetTime(&ms);
+
+        g_bkupread_bump_after = 0;           /* disarm */
+        /* correct: ticks = (6<<32)|255 -> sec = 6<<22 = 25165824, ms = 249 */
+        printf("   mid-read wrap: sec=%lu ms=%u (want 25165824, 249)\n",
+               (unsigned long)sec, ms);
+        CHECK(sec == 25165824u && ms == 249u, "S-05: new MSB + re-read LSB");
+    }
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
