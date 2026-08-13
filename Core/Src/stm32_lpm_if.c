@@ -175,13 +175,15 @@ void PWR_EnterStopMode(void)
   
   /* === SPI2 Power Optimization: DeInit and set pins to ANALOG === */
   /* Extra safety measure - flash already in deep power-down via W25Q_PowerDown() */
-  /* SPI pins: PB13=SCK, PB14=MISO, PB15=MOSI, PC8=NSS */
+  /* SPI2 pins: PB13=SCK, PB14=MISO, PA10=MOSI (AF5), PB9=CS (GPIO, driven
+   * high below). PB15 is I2C2_SCL, NOT MOSI - see stm32wlxx_hal_msp.c.
+   * PA10 is set to analog separately below. (S-11, 2026-08-12 review.) */
   //HAL_SPI_DeInit(&hspi2);
-  
-  GPIO_InitStruct.Pin = GPIO_PIN_13 | GPIO_PIN_14;  // SCK, MISO (PB15 already set above)
+
+  GPIO_InitStruct.Pin = GPIO_PIN_13 | GPIO_PIN_14;  // SCK, MISO
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
-  GPIO_InitStruct.Pin = GPIO_PIN_8;  // NSS
+
+  GPIO_InitStruct.Pin = GPIO_PIN_8;  // PC8: not an SPI pin (legacy comment said NSS); analog anyway
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   
   /* === UART1 Power Optimization === */
