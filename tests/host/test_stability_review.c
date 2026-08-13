@@ -947,6 +947,95 @@ static void test_sd_ttf_printf(const char *app)
     CHECK_REGRESSION(fixed && !buggy, "S-D");
 }
 
+/* ========================================================================== */
+/* S-01 (P1, #225) — GNSS DMA overrun detector: quanta-consistent + inversion-safe */
+/* ========================================================================== */
+static void test_s01_dma_overrun_detector(void)
+{
+    printf("-- S-01 (P1, #225): DMA overrun detector must not false-fire or invert\n");
+
+    UART_HandleTypeDef u;
+    DMA_HandleTypeDef d;
+    memset(&u, 0, sizeof(u));
+    memset(&d, 0, sizeof(d));
+    u.hdmarx = &d;
+
+    /* Real checksum: GNSS_ParseNMEA gates on it (the F-10/R2-30 tests call
+     * the sub-parsers directly precisely to bypass this gate). */
+    const char *body = "GNRMC,120000,A,4807.038,N,01131.000,E,0.5,180.0,060825,,,A";
+    char nmea[80];
+    snprintf(nmea, sizeof(nmea), "$%s*%02X\r\n", body, GNSS_CalculateChecksum(body));
+    const size_t nlen = strlen(nmea);
+
+    /* A. STARTUP BURST: the receiver dumped 7 sentences (~462 B) at wake;
+     *    produced=512 (two quanta), consumer not started. Everything is
+     *    still buffered - no overrun may fire and every byte must parse. */
+    {
+        GNSS_HandleTypeDef g;
+        memset(&g, 0, sizeof(g));
+        g.is_powered = true;
+        g.huart = &u;
+        size_t filled = 0;
+        for (int i = 0; i < 7 && filled + nlen <= sizeof(g.dma_buffer); i++) {
+            memcpy(g.dma_buffer + filled, nmea, nlen);
+            filled += nlen;
+        }
+        g.dma_produced_total = 512;
+        g.dma_consumed_total = 0;
+        g.dma_tail = 0;
+        g_host_dma_cndtr = (uint16_t)(GNSS_DMA_BUFFER_SIZE - filled);  /* head = filled */
+
+        GNSS_ProcessDMABuffer(&g);
+        printf("   startup burst: overruns=%lu consumed=%lu (want 0, %u)\n",
+               (unsigned long)g.dma_overrun_count, (unsigned long)g.dma_consumed_total,
+               (unsigned)filled);
+        CHECK_REGRESSION(g.dma_overrun_count == 0, "S-01a");
+        CHECK_REGRESSION(g.dma_consumed_total == filled, "S-01a-parse");
+        CHECK_REGRESSION(g.data.timestamp == 120000u, "S-01a-fix");
+    }
+
+    /* B. STEADY-STATE: the byte-exact consumer ran 100 B past the 256-quantum
+     *    producer counter - counter lag, not loss. Must not fire. */
+    {
+        GNSS_HandleTypeDef g;
+        memset(&g, 0, sizeof(g));
+        g.is_powered = true;
+        g.huart = &u;
+        g.dma_produced_total = 256;
+        g.dma_consumed_total = 356;
+        g.dma_tail = 100;
+        g_host_dma_cndtr = GNSS_DMA_BUFFER_SIZE - 100;   /* head = 100 = tail */
+
+        GNSS_ProcessDMABuffer(&g);
+        printf("   consumer ahead by 100: overruns=%lu (want 0)\n",
+               (unsigned long)g.dma_overrun_count);
+        CHECK_REGRESSION(g.dma_overrun_count == 0, "S-01b");
+    }
+
+    /* C. REAL OVERRUN: producer is a full buffer + one quantum past the
+     *    consumer - bytes provably destroyed. Exactly one resync, detector
+     *    stays armed (a quiet second call adds nothing). */
+    {
+        GNSS_HandleTypeDef g;
+        memset(&g, 0, sizeof(g));
+        g.is_powered = true;
+        g.huart = &u;
+        g.dma_produced_total = GNSS_DMA_BUFFER_SIZE + 256;
+        g.dma_consumed_total = 0;
+        g.dma_tail = 0;
+        g_host_dma_cndtr = GNSS_DMA_BUFFER_SIZE - 256;   /* head = 256 */
+
+        GNSS_ProcessDMABuffer(&g);
+        GNSS_ProcessDMABuffer(&g);
+        printf("   real overrun: overruns=%lu consumed=%lu (want 1, %u)\n",
+               (unsigned long)g.dma_overrun_count, (unsigned long)g.dma_consumed_total,
+               (unsigned)(GNSS_DMA_BUFFER_SIZE + 256));
+        CHECK_REGRESSION(g.dma_overrun_count == 1, "S-01c");
+        CHECK_REGRESSION(g.dma_consumed_total == GNSS_DMA_BUFFER_SIZE + 256,
+                         "S-01c-resync");
+    }
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -995,6 +1084,7 @@ int main(void)
     test_f10_hhmmss_range_checked();
     printf("\n");
     test_f11_hemisphere_default();
+    test_s01_dma_overrun_detector();
     printf("\n");
     test_r5_boot_region_anchor(app);
     printf("\n");

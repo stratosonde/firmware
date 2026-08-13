@@ -670,14 +670,31 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
    * unparsed bytes are already destroyed — count it, drop to the head, and
    * resync: the parser restarts cleanly at the next '$' (DDR-0003: the gap
    * is surfaced, never silent). */
-  /* R2-19 (#123): dma_produced_total only advances in 256-byte callback
-   * quanta, so up to 255 REAL bytes past the counter can already have been
-   * produced (and lost) unaccounted. Comparing against the full buffer size
-   * left a 256-byte blind spot: a backlog of exactly one buffer-full means
-   * the producer has already lapped the consumer. Compare against
-   * SIZE - 256 (one quantum): worst case is a resync one quantum early;
-   * the "no silent loss" invariant actually holds. */
-  if ((hgnss->dma_produced_total - hgnss->dma_consumed_total) > (GNSS_DMA_BUFFER_SIZE - 256U))
+  /* S-01 (#225): the R2-19 (#123) compare was quanta-INCONSISTENT.
+   * dma_produced_total advances in 256-byte callback quanta while
+   * dma_consumed_total advances one byte at a time, so the raw unsigned
+   * difference mismeasures the true backlog both ways:
+   *  - STARTUP BURST: at wake the receiver dumps its buffered output while
+   *    the parser has not drained; (produced - consumed) legitimately
+   *    exceeded SIZE - 256 with every byte still buffered -> false overrun,
+   *    resync shredded the first ~270 ms of every acquisition.
+   *  - STEADY-STATE INVERSION: the byte-exact consumer routinely runs up to
+   *    255 bytes AHEAD of the 256-quantum producer counter; the unsigned
+   *    subtraction then wraps to ~2^32 and the compare misfires.
+   * Quanta-consistent form: fire only when a byte is PROVABLY destroyed -
+   * the producer counter is more than a FULL buffer ahead of the consumer
+   * (hardware must have lapped). A full buffer of slack makes the detector
+   * immune to startup bursts by construction; clamping the inverted case
+   * (consumer ahead = counter lag, not loss) kills the wrap misfire. */
+  uint32_t dma_backlog = (hgnss->dma_produced_total >= hgnss->dma_consumed_total)
+                         ? (hgnss->dma_produced_total - hgnss->dma_consumed_total)
+                         : 0U;
+  /* R2-19 (#123) survives in narrowed form: at EXACTLY one buffer-full the
+   * data is not yet destroyed (loss begins at SIZE + 1 written) - but when
+   * head == tail the F-011 wrap makes the full buffer positionally
+   * unreachable, so the resync is still the only way forward. */
+  if (dma_backlog > GNSS_DMA_BUFFER_SIZE ||
+      (dma_backlog == GNSS_DMA_BUFFER_SIZE && hgnss->dma_tail == hgnss->dma_head))
   {
     hgnss->dma_overrun_count++;
     SONDE_LOG("[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
