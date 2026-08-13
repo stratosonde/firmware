@@ -436,26 +436,21 @@ bool MultiRegion_ForceSaveCurrentContext(void)
     g_storage.active_slot = slot;
     
     /*
-     * FRAME COUNTER MARGIN (C6 fix):
-     * When using batched saves, the device may reset between save points.
-     * On restore the frame counter would regress to the last saved value,
-     * causing the network server to reject all subsequent uplinks as replays.
+     * FRAME COUNTER MARGIN (C6 fix) — DR-07 (#239): the margin lives on the
+     * RESTORE side only. It used to be applied here too, persisting an
+     * already-margined value that the restore then margined AGAIN: every
+     * reset burned INTERVAL of FCntUp gap whether or not an uplink occurred,
+     * and DDR-0006 forbids the in-flight rejoin that could re-sync. The save
+     * persists the TRUE counter; the restore (and the Tier-2-lost degrade
+     * path) adds exactly one INTERVAL — the reset creates the exposure, not
+     * the save. The live MAC counter is never modified.
      *
-     * Solution: store uplink_counter + CfgFrameCounterSaveInterval() so the
-     * restored value is always ahead of any counter the server has seen.
-     * The live MAC counter is NOT modified — only the context copy (which is
-     * also the in-RAM working copy in g_storage) is advanced.
-     *
-     * FR-05 (#82): the margin mutates a CRC-covered field, so the CRC MUST
-     * be restamped. ctx points into g_storage.contexts[] — without the
-     * restamp the active region's in-RAM context fails ValidateContextCRC()
-     * from the first batched save on, and a later switch-back to that region
-     * is silently refused (IsRegionJoined CRC check).
+     * FR-05 (#82): ctx points into g_storage.contexts[] and the capture above
+     * rewrote CRC-covered fields, so restamp before the write — a stale CRC
+     * fails ValidateContextCRC() and a later switch-back to that region is
+     * silently refused (IsRegionJoined CRC check).
      */
-    ctx->uplink_counter += CfgFrameCounterSaveInterval();
-    UpdateContextCRC(ctx);  /* FR-05: restamp — the margin is CRC-covered state */
-    SONDE_LOG("Frame counter margin applied: stored FCntUp=%lu (advanced by %d)\r\n",
-                      ctx->uplink_counter, CfgFrameCounterSaveInterval());
+    UpdateContextCRC(ctx);
     
     // Also reset the unsaved TX count since we're doing an actual write
     g_unsaved_tx_count = 0;

@@ -91,6 +91,28 @@ int main(void)
     g_config.tx_interval_survival = 3600000U;   /* restore */
     restamp();
 
+    /* -- DR-04 (#240): the 2 h ceiling must be REAL, not phantom ------------ */
+    printf("\n-- DR-04 (#240): survival ceiling enforced above the deadman rule\n");
+
+    /* S-04's deadman-derived 3/4 rule is always-true above the 3 h floor, so
+     * a 5 h survival cadence validated cleanly while stm32_lpm_if.c's
+     * MAX_SLEEP_CHUNKS only covers ~7220 s - chunked sleep aborted every
+     * cycle in the mode that exists to save power. The explicit
+     * CONFIG_MAX_TX_INTERVAL_MS ceiling must reject it. */
+    g_config.tx_interval_survival = 18000000U;  /* 5 h */
+    restamp();
+    CHECK_REGRESSION(Config_Validate(&g_config) == CONFIG_ERROR_RANGE, "DR-04-5h");
+
+    /* Guards: the ceiling itself is accepted, one ms past it is not. */
+    g_config.tx_interval_survival = 7200000U;   /* == CONFIG_MAX_TX_INTERVAL_MS */
+    restamp();
+    CHECK(Config_Validate(&g_config) == CONFIG_OK);
+    g_config.tx_interval_survival = 7200001U;
+    restamp();
+    CHECK_REGRESSION(Config_Validate(&g_config) == CONFIG_ERROR_RANGE, "DR-04-plus1ms");
+    g_config.tx_interval_survival = 3600000U;   /* restore */
+    restamp();
+
     /* -- S-07 (#229): gps_timeout range validation ------------------------- */
     printf("\n-- S-07 (P3, #229): gps_timeout_normal/_conservative validated\n");
 

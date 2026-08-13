@@ -484,6 +484,63 @@ static void test_r3_fcnt_reset_margin(void)
 }
 
 /* ========================================================================== */
+/* DR-07 (#239) — the C6/R3 margin must be applied EXACTLY ONCE               */
+/* ========================================================================== */
+/* MultiRegion_SaveCurrentContext advanced ctx->uplink_counter by INTERVAL and
+ * persisted the MARGINED value; the restore path then added INTERVAL again on
+ * top of it (the R3 comment claiming "saves persist the TRUE value" was
+ * false). Every reset therefore burned INTERVAL of FCntUp gap whether or not
+ * an uplink occurred; DDR-0006 forbids in-flight rejoin, so ~16384/INTERVAL
+ * silent resets is a permanently dead session. The margin belongs on the
+ * restore side only: the reset creates the exposure, not the save. */
+static void test_dr07_single_margin(void)
+{
+    printf("-- DR-07 (#239): margin applied exactly once (restore side only)\n");
+
+    /* Fresh commissioning + clean switch to US915 (same setup as R3). */
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* 10 TXs -> one real Tier-2 save. The persisted value must be the TRUE
+     * counter - no save-side margin. */
+    for (int i = 0; i < 10; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        g_mac.nvm.Crypto.FCntList.NFCntDown++;
+        MultiRegion_SaveCurrentContext();
+    }
+    uint32_t true_at_save = g_mac.nvm.Crypto.FCntList.FCntUp;
+    uint32_t persisted = g_storage.contexts[slot].uplink_counter;
+    printf("   after 10 TXs: true=%lu persisted=%lu (want equal)\n",
+           (unsigned long)true_at_save, (unsigned long)persisted);
+    CHECK_REGRESSION(persisted == true_at_save, "DR-07-save-persists-true");
+
+    /* Reset: the restore must add EXACTLY one INTERVAL to the persisted
+     * (true) value - not two. */
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+    uint32_t resumed = g_storage.contexts[slot].uplink_counter;
+    uint32_t want = persisted + CfgFrameCounterSaveInterval();
+    printf("   resumed=%lu want=%lu (persisted + one INTERVAL)\n",
+           (unsigned long)resumed, (unsigned long)want);
+    CHECK_REGRESSION(resumed == want, "DR-07-single-margin");
+}
+
+/* ========================================================================== */
 /* S-03 (P2, #227) — Tier-2 commit-back must be bounded in a reset loop       */
 /* ========================================================================== */
 static void test_s03_tier2_commit_back_bounded(void)
@@ -603,6 +660,7 @@ printf("\n");
 test_r1_restore_fail_closed();
     printf("\n");
     test_r3_fcnt_reset_margin();
+    test_dr07_single_margin();
     test_s03_tier2_commit_back_bounded();
     printf("\n");
     test_r2_semantic_validation();

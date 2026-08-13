@@ -233,6 +233,15 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
           config->tx_interval_recovery <= config->tx_interval_survival)) {
         return CONFIG_ERROR_RANGE;  // mode hierarchy must be monotonic
     }
+    /* DR-04 (#240): the explicit survival ceiling. The S-04 3/4 rule below is
+     * structurally always-true above the 3 h floor (tmo = 3s -> s <= 2.25s),
+     * so without this check the only live ceiling was the 24 h one and a 5 h
+     * cadence validated while stm32_lpm_if.c's MAX_SLEEP_CHUNKS covered ~2 h -
+     * chunked sleep aborted every cycle in the mode that exists to save power.
+     * stm32_lpm_if.c derives its chunk bound from the SAME constant. */
+    if (config->tx_interval_survival > CONFIG_MAX_TX_INTERVAL_MS) {
+        return CONFIG_ERROR_RANGE;  // survival cadence exceeds the 2 h ceiling
+    }
     /* S-04 (#228): the deadman timeout is DERIVED as 3x the survival cadence
      * (ConfigGetDeadmanTimeoutS), so the margin can no longer collapse at the
      * old fixed 3 h timeout. Keep a sanity ceiling anyway: a survival cadence

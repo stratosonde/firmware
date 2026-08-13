@@ -209,6 +209,13 @@ uint32_t ConfigGetDeadmanTimeoutS(void);
 /** @brief Floor for the derived deadman timeout (default survival = 1 h). */
 #define CONFIG_DEADMAN_FLOOR_S   (3U * 3600U)
 
+/** @brief DR-04 (#240): THE survival-cadence ceiling (2 h), enforced by
+  *        Config_Validate and consumed by stm32_lpm_if.c's MAX_SLEEP_CHUNKS
+  *        derivation. ONE constant so the sleep-chunk bound can never drift
+  *        from the validated range again (S-04's deadman-derived 3/4 rule is
+  *        always-true above the 3 h floor and cannot serve as the ceiling). */
+#define CONFIG_MAX_TX_INTERVAL_MS   7200000UL
+
 /**
  * @brief Reset to factory defaults
  * @retval ConfigStatus_t: Reset status

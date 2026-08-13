@@ -103,8 +103,19 @@ static void test_chunk_bound_covers_survival_interval(void)
     int seconds = 0;
     CHECK(parse_define(src, "IWDG_SAFE_SLEEP_SECONDS", &seconds));
 
+    /* DR-04 (#240): the ceiling must be ONE constant Config_Validate actually
+     * enforces - defined in config.h, referenced by stm32_lpm_if.c, checked
+     * by config.c. (Was: a local 7200000 in lpm_if mirroring a ceiling S-04
+     * had removed - two constants in one file, both wrong together.) */
+    char *cfgh = slurp("../../Core/Inc/config.h");
     int max_interval_ms = 0;
-    CHECK(parse_define(src, "MAX_TX_INTERVAL_MS", &max_interval_ms));
+    CHECK(parse_define(cfgh, "CONFIG_MAX_TX_INTERVAL_MS", &max_interval_ms));
+    CHECK_REGRESSION(strstr(src, "CONFIG_MAX_TX_INTERVAL_MS") != NULL, "DR-04-lpm-uses-shared");
+    free(cfgh);
+    char *cfgc = slurp("../../Core/Src/config.c");
+    CHECK_REGRESSION(strstr(cfgc, "tx_interval_survival > CONFIG_MAX_TX_INTERVAL_MS") != NULL,
+                     "DR-04-validator-enforces");
+    free(cfgc);
 
     /* derived bound: (max_s / seconds) + 1 chunks */
     long bound = (max_interval_ms / 1000L) / seconds + 1L;

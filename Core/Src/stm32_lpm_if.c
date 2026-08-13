@@ -32,6 +32,7 @@
 #include "w25q16jv.h"  // For external flash deep power-down
 #include "stm32wlxx_ll_pwr.h"  // For LL_PWR_ClearFlag_C1STOP_C1STB
 #include "mission_state.h"  // R09: LED gating
+#include "config.h"  // DR-04 (#240): CONFIG_MAX_TX_INTERVAL_MS for MAX_SLEEP_CHUNKS
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -84,14 +85,14 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
 #define IWDG_SAFE_SLEEP_SECONDS   20     /* Must be < ~31 s worst-case IWDG timeout */
 #define IWDG_WAKEUP_COUNTS        (IWDG_SAFE_SLEEP_SECONDS * 2048)  /* 40960 */
 /* F-7 (#182): the chunk ceiling is DERIVED, not a literal. It must cover the
- * largest interval Config_Validate accepts (tx_interval_survival <=
- * 7200000 ms, config.c) in IWDG_SAFE_SLEEP_SECONDS chunks, plus one - the
- * hardcoded 180 (181 x 20 s = 3620 s) aborted chunked sleep every cycle for
- * any validated survival interval above ~1 h and spun the main loop at full
- * power in the mode that exists to save power (#134 recurring). Keep
- * MAX_TX_INTERVAL_MS in step with the config ceiling: the _Static_assert
- * below makes drift a build error. */
-#define MAX_TX_INTERVAL_MS        7200000UL
+ * largest interval Config_Validate accepts in IWDG_SAFE_SLEEP_SECONDS chunks,
+ * plus one - the hardcoded 180 (181 x 20 s = 3620 s) aborted chunked sleep
+ * every cycle for any validated survival interval above ~1 h and spun the
+ * main loop at full power in the mode that exists to save power (#134
+ * recurring). DR-04 (#240): the ceiling is CONFIG_MAX_TX_INTERVAL_MS from
+ * config.h - the SAME constant Config_Validate enforces, so the assert below
+ * references a real enforced limit, not a local mirror that can drift. */
+#define MAX_TX_INTERVAL_MS        CONFIG_MAX_TX_INTERVAL_MS
 #define MAX_SLEEP_CHUNKS          ((MAX_TX_INTERVAL_MS / 1000UL / IWDG_SAFE_SLEEP_SECONDS) + 1UL)
 _Static_assert(MAX_SLEEP_CHUNKS * IWDG_SAFE_SLEEP_SECONDS >= MAX_TX_INTERVAL_MS / 1000UL,
                "chunk ceiling must cover the maximum validated TX interval");
