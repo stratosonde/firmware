@@ -919,7 +919,9 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
  * Allocation map lives in backup_regs.h. */
 #include "backup_regs.h"
 #define DEADMAN_BKP_REG     BKP_REG_DEADMAN
-#define DEADMAN_TIMEOUT_S   (3U * 3600U)   /* 3x worst-case cycle (SURVIVAL=1h) */
+/* S-04 (#228): the timeout is DERIVED from the configured survival cadence
+ * (ConfigGetDeadmanTimeoutS: max(3 h, 3x survival)) - a fixed 3 h constant
+ * gave a 1.5x margin at the validator's 2 h ceiling. */
 
 static void Deadman_MarkProgress(void)
 {
@@ -992,8 +994,9 @@ void Deadman_Check(void)
     HAL_RTCEx_BKUPWrite(&hrtc, DEADMAN_BKP_REG, now);
     return;
   }
-  if ((now - last) > DEADMAN_TIMEOUT_S) {
-    SONDE_LOG_STR("DEADMAN: no work cycle for 3h - breadcrumb + reset\r\n");
+  if ((now - last) > ConfigGetDeadmanTimeoutS()) {
+    SONDE_LOG("DEADMAN: no work cycle for %lus - breadcrumb + reset\r\n",
+                      (unsigned long)ConfigGetDeadmanTimeoutS());
     HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                         RESET_CAUSE_FAULT_MAGIC | 6U);  /* 6 = deadman */
     /* F-05 (#63): re-seed BEFORE resetting — otherwise the post-reset boot

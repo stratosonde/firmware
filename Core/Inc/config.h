@@ -200,6 +200,15 @@ ConfigStatus_t Config_Save(void);
  */
 ConfigStatus_t Config_Validate(const SystemConfig_t *config);
 
+/** @brief S-04 (#228): deadman watchdog timeout, DERIVED from the configured
+  *        survival cadence: max(CONFIG_DEADMAN_FLOOR_S, 3 x survival).
+  *        Was fixed at 3 h while the validator accepted a 2 h survival
+  *        cadence - a 1.5x margin where 3x was intended. */
+uint32_t ConfigGetDeadmanTimeoutS(void);
+
+/** @brief Floor for the derived deadman timeout (default survival = 1 h). */
+#define CONFIG_DEADMAN_FLOOR_S   (3U * 3600U)
+
 /**
  * @brief Reset to factory defaults
  * @retval ConfigStatus_t: Reset status

@@ -163,6 +163,22 @@ ConfigStatus_t Config_Save(void)
     return status;
 }
 
+/* S-04 (#228): deadman timeout derived from a survival cadence - see
+ * ConfigGetDeadmanTimeoutS. */
+static uint32_t DeadmanTimeoutForSurvival(uint32_t survival_ms)
+{
+    uint32_t survival_s = survival_ms / 1000U;
+    uint32_t t = survival_s * 3U;
+    return (t < CONFIG_DEADMAN_FLOOR_S) ? CONFIG_DEADMAN_FLOOR_S : t;
+}
+
+uint32_t ConfigGetDeadmanTimeoutS(void)
+{
+    const SystemConfig_t *c = Config_Get();
+    return DeadmanTimeoutForSurvival((c != NULL) ? c->tx_interval_survival
+                                                 : 3600000UL);
+}
+
 ConfigStatus_t Config_Validate(const SystemConfig_t *config)
 {
     if (config == NULL) {
@@ -217,8 +233,19 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
           config->tx_interval_recovery <= config->tx_interval_survival)) {
         return CONFIG_ERROR_RANGE;  // mode hierarchy must be monotonic
     }
-    if (config->tx_interval_survival > 7200000) {
-        return CONFIG_ERROR_RANGE;  // >2h breaks the deadman assumption
+    /* S-04 (#228): the deadman timeout is DERIVED as 3x the survival cadence
+     * (ConfigGetDeadmanTimeoutS), so the margin can no longer collapse at the
+     * old fixed 3 h timeout. Keep a sanity ceiling anyway: a survival cadence
+     * beyond 3/4 of the derived timeout means the integrator set the cadence
+     * where the timeout belongs - set it equal to timeout/3 instead. (24 h
+     * and up is rejected outright: the sonde would be unreachable for a day.)
+     * Computed in 64-bit: the fields are milliseconds up to uint32 range. */
+    {
+        uint64_t tmo_ms = (uint64_t)DeadmanTimeoutForSurvival(config->tx_interval_survival) * 1000ULL;
+        if (config->tx_interval_survival >= 86400000UL ||
+            (uint64_t)config->tx_interval_survival > (tmo_ms * 3ULL) / 4ULL) {
+            return CONFIG_ERROR_RANGE;  // survival cadence must stay <= 3/4 of the deadman timeout; set it equal to timeout/3 instead
+        }
     }
     if (config->gps_temperature_lockout < -80 || config->gps_temperature_lockout > 0) {
         return CONFIG_ERROR_RANGE;
