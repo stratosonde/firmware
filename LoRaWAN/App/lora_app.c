@@ -2152,8 +2152,20 @@ static void SendTxData(void)
   /* F-R1 (#74): acquisition and region selection are extracted phases. */
   if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {
     SelectRegionAndSession(&rf_silence);
+  } else {
+    /* S-02 (#226): a failed GNSS wake still leaves the restricted-region
+     * duty — the last-known position is exactly what the geofence consumes
+     * on every other stale path (BURST-03 GPS-skip path above). INHIBIT
+     * ONLY — never switch regions on a stale fix (F10/#175). No fix EVER
+     * (cold boot) -> transmit: a never-fixed sonde cannot be known
+     * restricted, and going dark forever is worse. */
+    float la, lo, al;
+    if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo)) {
+      rf_silence = true;
+      SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
+    }
   }
-  
+
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
   /* Add separator before continuing to telemetry */

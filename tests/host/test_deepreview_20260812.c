@@ -383,6 +383,32 @@ static void test_r308_tick_timebase(const char *sysapp)
     CHECK_REGRESSION(converted, "R3-08");
 }
 
+/* ------------------------------------------------------------------ */
+/* S-02 — geofence must also run on the GNSS wake-failure path          */
+/* ------------------------------------------------------------------ */
+static void test_s02_wakefail_geofence(const char *app)
+{
+    printf("-- S-02 (P2, #226): GNSS wake failure must still run the geofence\n");
+
+    /* The wake-fail path is the else of the AcquireGnssFix success branch in
+     * SendTxData. It must consult the same GeofenceRestricted policy point
+     * the BURST-03 GPS-skip path uses (inhibit only, on last-known pos). */
+    const char *call = strstr(app, "if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {");
+    CHECK(call != NULL);
+    if (!call) return;
+    /* Bounded window: the success branch + the else path, up to the first
+     * post-branch statement (comments are stripped by normalize_code, so
+     * anchor on the code line that follows the if/else). */
+    const char *end = strstr(call, "SONDE_LOG_STR(\"\\r\\n\");");
+    CHECK(end != NULL);
+    if (!end) return;
+    bool else_geofence = occurs_before(call, end, "} else {") &&
+                         occurs_before(call, end, "GeofenceRestricted(la, lo)");
+    printf("   wake-fail path evaluates GeofenceRestricted on last-known pos: %s\n",
+           else_geofence ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(else_geofence, "S-02");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -404,6 +430,8 @@ int main(void)
     test_r306_gnss_config_verification(app, gnssc);
     printf("\n");
     test_r308_tick_timebase(sysapp);
+    printf("\n");
+    test_s02_wakefail_geofence(app);
 
     free(sysapp);
     free(gnssc);
