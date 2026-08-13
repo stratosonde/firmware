@@ -22,7 +22,9 @@
 #include "LmHandler.h"
 #include "LoRaMac.h"
 #include "se-identity-select.h" /* F6: real keys gitignored; zeroed template fallback for CI */
-#include "config.h"           /* R12 (#197): frame_counter_save_interval is config-authoritative */
+#include "config.h"           /* R12 (#197): frame_counter_save_interval is config-authoritative */
+
+#include "reset_cause.h"      /* S-03 (#227): boot-attempt gate for the commit-back */
 #include "stm32wlxx_hal.h"
 #include "SEGGER_RTT.h"
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */
@@ -1656,7 +1658,25 @@ static bool FlashReadStorage(void)
      * FRESH reserved block - monotonic under arbitrary reset patterns. Cost:
      * one ping-ponged Tier-2 write per boot (~20k boots of page endurance),
      * and boot-time resets are exactly the case FR-23/F-6 escalate on. */
-    if (counters_bumped && !FlashWriteTier2()) {
+    /* S-03 (#227): bound the per-boot Tier-2 rewrite. counters_bumped is
+     * true whenever ANY valid Tier-2 entry restored - i.e. EVERY normal
+     * boot - so the unconditional commit-back rewrote the page once per
+     * boot; a sustained reset loop would exhaust page endurance in days.
+     * Gate: in a detected reset loop (boot attempts > 4, the STAB-02
+     * escalation point) skip the commit-back. It is not load-bearing there:
+     * a crash-looping boot consumes zero counters, and the restore margin
+     * (+CfgFrameCounterSaveInterval) alone keeps the NS-visible sequence
+     * monotonic - replay requires consuming > INTERVAL unsaved counters in
+     * one boot. Normal boots (a single reset in a real flight) keep the
+     * full R3 (#188) protection; loop episodes cost a bounded number of
+     * writes instead of one per reset. */
+    bool s03_in_reset_loop = (ResetCause_GetBootAttempts() > 4U);
+
+    if (counters_bumped && s03_in_reset_loop) {
+
+        APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: reset loop - Tier-2 commit-back skipped (flash wear bound, S-03)\r\n");
+
+    } else if (counters_bumped && !FlashWriteTier2()) {
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: R3 counter commit-back failed (RAM margins still monotonic this boot)\r\n");
     }
 

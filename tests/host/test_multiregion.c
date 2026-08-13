@@ -234,9 +234,14 @@ FLASH_IF_StatusTypedef FLASH_IF_Read(void *dst, const void *src, uint32_t len)
     return FLASH_IF_OK;
 }
 
+/* S-03 (#227): spies for the commit-back bound. */
+uint32_t g_host_boot_attempts = 1;
+static uint32_t g_flash_erase_count = 0;
+
 FLASH_IF_StatusTypedef FLASH_IF_Erase(void *start, uint32_t len)
 {
     if (!flash_addr_ok(start, len)) return FLASH_IF_ERROR;
+    g_flash_erase_count++;
     memset(&g_flash[(uint32_t)(uintptr_t)start - FAKE_FLASH_BASE], 0xFF, len);
     return FLASH_IF_OK;
 }
@@ -479,6 +484,54 @@ static void test_r3_fcnt_reset_margin(void)
 }
 
 /* ========================================================================== */
+/* S-03 (P2, #227) — Tier-2 commit-back must be bounded in a reset loop       */
+/* ========================================================================== */
+static void test_s03_tier2_commit_back_bounded(void)
+{
+    printf("-- S-03 (P2, #227): Tier-2 commit-back bounded in a reset loop\n");
+
+    /* Fresh commissioning + clean switch + 10 TXs (one real Tier-2 save). */
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    g_host_boot_attempts = 1;
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    for (int i = 0; i < 10; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        MultiRegion_SaveCurrentContext();
+    }
+
+    /* A. Normal boot (single reset): the R3 commit-back must STILL fire. */
+    uint32_t e0 = g_flash_erase_count;
+    g_host_boot_attempts = 1;
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+    printf("   normal boot: erase count %lu -> %lu (want advanced)\n",
+           (unsigned long)e0, (unsigned long)g_flash_erase_count);
+    CHECK_REGRESSION(g_flash_erase_count > e0, "S-03-normal");
+
+    /* B. Sustained reset loop (boot attempts > 4): commit-back skipped -
+     *    the flash page must not be touched. */
+    g_host_boot_attempts = 5;
+    e0 = g_flash_erase_count;
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+    printf("   reset loop (attempts=5): erase count %lu -> %lu (want unchanged)\n",
+           (unsigned long)e0, (unsigned long)g_flash_erase_count);
+    CHECK_REGRESSION(g_flash_erase_count == e0, "S-03-loop");
+    g_host_boot_attempts = 1;
+}
+
+/* ========================================================================== */
 /* R2 (P1-high) — CRC-valid but semantically dead contexts must be rejected   */
 /* ========================================================================== */
 /* ValidateContextCRC proves only that the bytes survived. Zero the session
@@ -550,6 +603,7 @@ printf("\n");
 test_r1_restore_fail_closed();
     printf("\n");
     test_r3_fcnt_reset_margin();
+    test_s03_tier2_commit_back_bounded();
     printf("\n");
     test_r2_semantic_validation();
     printf("\n");
