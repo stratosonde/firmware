@@ -1871,6 +1871,10 @@ static void SendTxData(void)
   /* USER CODE BEGIN SendTxData_1 */
   Deadman_MarkProgress();  /* F13a: a work cycle provably started */
 
+  /* S-06 (#231): every battery/solar conversion this cycle must reference a
+   * VDDA sampled NOW, not before a burst/ascent run that never saw STOP2. */
+  SYS_ADC_InvalidateVdda();
+
   /* R3-01 (#215): a SendTxData invocation is not necessarily a science cycle -
    * bulk continuation re-arms THIS task. If the science deadline has arrived,
    * the burst yields NOW so this run takes the science path (GPS + current

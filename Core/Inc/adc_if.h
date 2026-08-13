@@ -78,6 +78,11 @@ void SYS_InitMeasurement(void);
   */
 void SYS_DeInitMeasurement(void);
 
+/* S-06 (#231): invalidate the per-cycle VDDA cache at the top of each work
+ * cycle (a burst/ascent may never reach STOP2, where the old invalidation
+ * lived). Does NOT force re-init/recalibration. */
+void SYS_ADC_InvalidateVdda(void);
+
 /**
   * @brief  Get the current temperature
   * @return value temperature in degree Celsius( q7.8 )

@@ -83,6 +83,18 @@ static uint16_t s_vdda_mv = 0;
 #define ADC_POLL_TIMEOUT_MS  10U   /* F-014: bounded poll — a faulted ADC must
                                     * never wedge the work cycle (was HAL_MAX_DELAY) */
 
+/* S-06 (#231): VDDA is cached per wake cycle, but the cache was only
+ * invalidated on STOP2 entry - and a bulk burst or ASCENT back-to-back
+ * cycles need not enter STOP2 (LmHandler holds stop mode off across TX/RX
+ * windows). Every battery/solar conversion then referenced a VDDA sample
+ * taken before the burst, i.e. before the TX load that sags the rail.
+ * Invalidate at the top of each work cycle; keeps s_adc_ready, so this
+ * costs one VREFINT conversion, not a re-init + recalibration. */
+void SYS_ADC_InvalidateVdda(void)
+{
+  s_vdda_mv = 0;
+}
+
 /* Called by the LPM pre-sleep path after HAL_ADC_DeInit (stm32_lpm_if.c). */
 void SYS_ADC_NoteDeinit(void)
 {

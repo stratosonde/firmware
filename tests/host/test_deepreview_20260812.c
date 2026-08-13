@@ -409,6 +409,32 @@ static void test_s02_wakefail_geofence(const char *app)
     CHECK_REGRESSION(else_geofence, "S-02");
 }
 
+/* ------------------------------------------------------------------ */
+/* S-06 — VDDA cache must be invalidated at the top of each work cycle  */
+/* ------------------------------------------------------------------ */
+static void test_s06_vdda_invalidation(const char *app, const char *adcc)
+{
+    printf("-- S-06 (P3, #231): VDDA cache invalidated per work cycle\n");
+
+    bool has_invalidator = strstr(adcc, "SYS_ADC_InvalidateVdda") != NULL;
+    printf("   adc_if.c provides SYS_ADC_InvalidateVdda: %s\n",
+           has_invalidator ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(has_invalidator, "S-06-api");
+
+    /* SendTxData must call it BEFORE EnvSensors_Read (anchor on the
+     * definition, not the prototype). */
+    const char *sig = strstr(app, "static void SendTxData(void) {");
+    CHECK(sig != NULL);
+    if (!sig) return;
+    const char *read = strstr(sig, "EnvSensors_Read(&sensor_data)");
+    CHECK(read != NULL);
+    if (!read) return;
+    bool called_first = occurs_before(sig, read, "SYS_ADC_InvalidateVdda()");
+    printf("   SendTxData invalidates VDDA before EnvSensors_Read: %s\n",
+           called_first ? "yes" : "NO (defect)");
+    CHECK_REGRESSION(called_first, "S-06");
+}
+
 int main(void)
 {
     char *app    = normalize_code(slurp("../../LoRaWAN/App/lora_app.c"));
@@ -416,6 +442,7 @@ int main(void)
     char *flashh = normalize_code(slurp("../../Core/Inc/flash_log.h"));
     char *gnssc  = normalize_code(slurp("../../Core/Src/atgm336h.c"));
     char *sysapp = normalize_code(slurp("../../Core/Src/sys_app.c"));
+    char *adcc   = normalize_code(slurp("../../Core/Src/adc_if.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
@@ -432,7 +459,10 @@ int main(void)
     test_r308_tick_timebase(sysapp);
     printf("\n");
     test_s02_wakefail_geofence(app);
+    printf("\n");
+    test_s06_vdda_invalidation(app, adcc);
 
+    free(adcc);
     free(sysapp);
     free(gnssc);
     free(flashh);
