@@ -65,6 +65,11 @@ encoded_value = (unix_seconds / 60) & 0xFFFF
 ```
 Wraps every 65,535 minutes (~45.5 days). Use context from previous packets to handle wraparound.
 
+Stamped only via `Payload_TimestampMinutesNow()` (SysTime UTC epoch, GNSS-disciplined).
+SP-11/SP-12 (#250): previously the TX path stamped RTC-tick uptime minutes and the encoder's
+`timestamp_min == 0` sentinel substituted epoch minutes - one field, two clock domains. RTC
+uptime never reaches the wire now; 0 is simply a legal value at the wrap boundary.
+
 #### Latitude / Longitude (int16 LE, full-range scale)
 ```python
 # Encoding (firmware):

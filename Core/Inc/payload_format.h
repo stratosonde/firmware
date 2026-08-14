@@ -199,6 +199,14 @@ typedef struct __attribute__((packed)) {
  *        the encode path first reports wrapped.
  */
 void Payload_SetTimestampWrapped(bool wrapped);
+
+/**
+  * @brief  Current UTC timestamp in wire units (minutes since Unix epoch,
+  *         wrap-truncated to 16 bits - 45.5-day range, status bit 5 marks it).
+  *         SP-11/SP-12 (#250): the ONLY path allowed to stamp the compact
+  *         packet's timestamp; RTC-uptime seconds must not reach the wire.
+  */
+uint16_t Payload_TimestampMinutesNow(void);
 bool Payload_IsTimestampWrapped(void);
 
 /**

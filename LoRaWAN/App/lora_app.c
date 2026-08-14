@@ -1658,7 +1658,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
         }
       }
       CompactTelemetryPacket_t compact_packet;
-      uint16_t timestamp_min = (uint16_t)(now_timestamp / 60);  // Convert to minutes
+      /* SP-11/SP-12 (#250): the wire field is minutes since UTC EPOCH
+       * (docs/PayloadFormats.md). now_timestamp/60 was RTC-UPTIME minutes -
+       * nothing ever sets the RTC calendar, so it never carries UTC. */
+      uint16_t timestamp_min = Payload_TimestampMinutesNow();
       
       if (EncodeCompactBinaryPacket(&compact_packet, sensor_data, timestamp_min, 
                                    slope_mv_per_hour, current_mode)) {

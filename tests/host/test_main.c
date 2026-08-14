@@ -154,11 +154,17 @@ static void test_compact_packet(void)
     CHECK_EQ_I(pkt.longitude_100m, 0);
     CHECK(!(pkt.status & STATUS_TIME_GNSS_MASK));
 
-    /* Timestamp fallback uses SysTime (R45), not boot-relative RTC */
+    /* SP-11 (#250): 0 is a LEGAL wire value - the 0->fetch-now sentinel is
+     * gone. (s is undisciplined here - gnss_valid false - so this never
+     * touches the wrap baseline.) */
     g_fake_rtc_seconds = 123;
     g_fake_epoch = 1754500000U;
-    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 0, 0, MODE_NORMAL));
-    CHECK_EQ_I(pkt.timestamp_min, (uint16_t)((g_fake_epoch / 60) & 0xFFFF));
+    CHECK_REGRESSION(EncodeCompactBinaryPacket(&pkt, &s, 0, 0, MODE_NORMAL) &&
+                     pkt.timestamp_min == 0, "SP-11");
+    /* SP-12 (#250): the wire basis is UTC epoch via ONE public accessor -
+     * callers must never stamp TIMER_IF (undisciplined RTC uptime) seconds. */
+    CHECK_REGRESSION(Payload_TimestampMinutesNow() ==
+                     (uint16_t)((g_fake_epoch / 60) & 0xFFFF), "SP-12");
 
     /* Golden vector (D9/§13): dump exact LE bytes for backend cross-check.
      * Must precede the wrap test — the wrap flag is sticky. ts=13000 keeps the

@@ -41,7 +41,7 @@
 #define HUMIDITY_SCALE_FACTOR       5     // 5% resolution
 
 /* Private function prototypes -----------------------------------------------*/
-static uint16_t GetTimestampMinutes(void);
+uint16_t Payload_TimestampMinutesNow(void);
 static int16_t ConvertLatitudeToCompact(int32_t binary_latitude);
 static int16_t ConvertLongitudeToCompact(int32_t binary_longitude);
 static int8_t ConvertTemperatureToCompact(float temperature_c);
@@ -81,10 +81,12 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
     // Clear packet structure
     memset(packet, 0, sizeof(CompactTelemetryPacket_t));
     
-    // If timestamp not provided, get current timestamp
-    if (timestamp_min == 0) {
-        timestamp_min = GetTimestampMinutes();
-    }
+    /* SP-11/SP-12 (#250): timestamp_min is DATA, verbatim - 0 is a legal wire
+     * value (wrap boundary; status bit 5 carries the wrap story). The old
+     * 0->fetch-now sentinel silently mixed clock domains: callers passing
+     * now_timestamp/60 stamped RTC-uptime (nothing ever sets the RTC
+     * calendar), this branch stamped SysTime UTC-epoch. One basis everywhere:
+     * callers stamp with Payload_TimestampMinutesNow(). */
     packet->timestamp_min = timestamp_min;
     
     // Convert GPS coordinates (handle invalid GPS gracefully)
@@ -468,17 +470,16 @@ bool PayloadFormat_ValidateSizes(void)
 /**
  * @brief Get current timestamp in minutes since Unix epoch
  */
-static uint16_t GetTimestampMinutes(void)
+uint16_t Payload_TimestampMinutesNow(void)
 {
     /* R45: UTC epoch via SysTime (GPS-disciplined), not the boot-relative
      * RTC calendar — same doctrine as the flash write site (#42). */
     uint32_t seconds = SysTimeGet().Seconds;
 
-    // Convert to minutes (with overflow handling)
-    // uint16_t gives us ~45 days of range (65535 minutes = 1092 hours = 45.5 days)
+    /* SP-12 (#250): TIMER_IF seconds are free-running RTC uptime (nothing
+     * ever sets the calendar), never UTC - they must not reach the wire.
+     * 45.5-day wrap: status bit 5 carries the story. */
     uint32_t minutes = seconds / 60;
-
-    // Handle overflow by wrapping (simple modulo)
     return (uint16_t)(minutes & 0xFFFF);
 }
 
