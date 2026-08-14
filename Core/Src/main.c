@@ -270,6 +270,13 @@ int main(void)
      * API guards !hlog->initialized, so downstream code is safe. */
     SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
     SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — flying WITHOUT archive\r\n", w25q_status);
+    /* SP-07 (#247): route through the FR-23 (#104) fatal path. Attempts 1-4
+     * breadcrumb + reset - a transient dead flash (cold power ramp, contact
+     * glitch) gets retried; on the 5th consecutive failed boot the escape
+     * early-returns and we continue in the designed degraded mode above
+     * (capability already marked). This is the call FatalIsDegradable() was
+     * written for and, until now, never received. */
+    Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);  /* may return: degrade path */
   }
   
   // Initialize flash logging system
@@ -291,6 +298,11 @@ int main(void)
       SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — flying WITHOUT archive\r\n", flashlog_status);
       /* F-03 (#65): degrade, not reset. hflashlog.initialized stays false;
        * all FlashLog_* APIs guard on it, so the TX path runs normally. */
+      /* SP-07 (#247): live W25Q + failed log init is likely systematic (header
+       * corruption). FR-23 (#104): breadcrumb + reset x4 lets FlashLog_Init's
+       * own reconstruction healing (R3-07 #221) try again across boots; on the
+       * 5th failure the escape returns and the degraded mode above continues. */
+      Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);  /* may return: degrade path */
     }
   }
   /* F-014 (#207): boot-visible capability summary (0 = all available). */
@@ -1040,7 +1052,10 @@ void Error_Handler(void)
  * PAYLOAD_FORMAT do not: continuing would run the mission on a broken clock
  * tree or a malformed wire format — that is accidental continuation, not a
  * degraded mode. Keep this list explicit; adding a code requires a designed
- * degraded path at its call site. */
+ * degraded path at its call site.
+ * SP-07 (#247): FLASH_INIT is wired at both boot flash sites (W25Q_Init and
+ * FlashLog_Init failure) - before that, this escape was unreachable dead
+ * code because nothing passed FAULT_CODE_FLASH_INIT at all. */
 static bool FatalIsDegradable(uint16_t code)
 {
   return code == FAULT_CODE_FLASH_INIT;

@@ -364,6 +364,27 @@ static void test_sp05_structural(const char *conf, const char *app, const char *
                      "SP-05-door-ru864");
 }
 
+/* ========================================================================== */
+/* SP-07 (#247) - structural: the FR-23 escape must be REACHABLE                */
+/* ========================================================================== */
+static void test_sp07_fatal_escape_wired(const char *mainc)
+{
+    printf("-- SP-07 (#247) structural: deterministic-fatal escape reachable\n");
+
+    /* The escape gates on code >= 16 && Attempts>=5 && FatalIsDegradable().
+     * FatalIsDegradable accepts ONLY FAULT_CODE_FLASH_INIT - so the escape is
+     * dead code unless that code is actually passed to Error_Handler_Fatal.
+     * Pre-fix: zero call sites (a dead W25Q / FlashLog init degraded inline
+     * with no breadcrumb, and the documented escape never ran). */
+    CHECK_REGRESSION(count_occurrences(mainc,
+                     "Error_Handler_Fatal(FAULT_CODE_FLASH_INIT)") >= 2, "SP-07-sites");
+    /* Sanity pins: the gate and the policy table still exist as designed. */
+    CHECK_REGRESSION(in_function(mainc, "static bool FatalIsDegradable(uint16_t code)",
+                                 "FAULT_CODE_FLASH_INIT"), "SP-07-policy");
+    CHECK_REGRESSION(in_function(mainc, "void Error_Handler_Fatal(uint16_t code)",
+                                 "ResetCause_GetBootAttempts()"), "SP-07-gate");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
@@ -375,7 +396,9 @@ int main(void)
     char *conf  = strip_comments(slurp("../../LoRaWAN/Target/lorawan_conf.h"));
     char *mregh = strip_comments(slurp("../../Core/Inc/multiregion_context.h"));
     char *msstate = strip_comments(slurp("../../Core/Src/mission_state.c"));
-    char *seid  = strip_comments(slurp("../../LoRaWAN/App/se-identity.h"));
+    /* se-identity.h is gitignored (real credentials) - scan the committed
+     * TEMPLATE so CI/non-flashed checkouts pass too. */
+    char *seid  = strip_comments(slurp("../../LoRaWAN/App/se-identity-template.h"));
 
     printf("=== SP-series review regressions (2026-08-13) ===\n\n");
 
@@ -390,6 +413,8 @@ int main(void)
     test_f01_structural(app, apph, mreg);
     printf("\n");
     test_sp05_structural(conf, app, mreg, mregh, msstate, seid);
+    printf("\n");
+    test_sp07_fatal_escape_wired(mainc);
 
     free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg);
     free(conf); free(mregh); free(msstate); free(seid);
