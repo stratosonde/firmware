@@ -1454,11 +1454,21 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
       if (EnvSensors_GnssIsStale()) {
         SONDE_LOG_STR("MultiRegion: position STALE - auto-switch inhibited (never switch on stale)\r\n");
       } else {
-      /* Production: Auto-switch region based on H3lite lookup */
+      /* Production: Auto-switch region based on H3lite lookup.
+       * SP-16 (#254): SUCCESS covers switched / same-region / not-joined-stay
+       * / disabled-build outcomes; the old banner claimed success for all of
+       * them. Compare before/after and say what actually happened. */
+      LoRaMacRegion_t before_region = MultiRegion_GetActiveRegion();
       LmHandlerErrorStatus_t switch_status = MultiRegion_AutoSwitchToRegion(detected_region);
 
       if (switch_status == LORAMAC_HANDLER_SUCCESS) {
-        SONDE_LOG_STR("MultiRegion: Auto-switch completed successfully\r\n");
+        if (MultiRegion_GetActiveRegion() != before_region) {
+          SONDE_LOG("MultiRegion: Auto-switch: now on %s\r\n",
+                    RegionToString(MultiRegion_GetActiveRegion()));
+        } else {
+          /* Same region, target not joined, or feature compiled out. */
+          SONDE_LOG_STR("MultiRegion: Auto-switch: no change (same region/not joined/disabled)\r\n");
+        }
       } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
         SONDE_LOG_STR("MultiRegion: Switch deferred (MAC busy)\r\n");
       } else {

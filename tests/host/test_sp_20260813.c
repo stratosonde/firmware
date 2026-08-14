@@ -440,6 +440,21 @@ static void test_sp15_unreachable_case_gone(const char *app)
     CHECK_REGRESSION(strstr(app, "Resetting stale TX state") != NULL, "SP-15-reset-kept");
 }
 
+/* ========================================================================== */
+/* SP-16 (#254) - structural: auto-switch logs distinguish switch vs no-op     */
+/* ========================================================================== */
+static void test_sp16_honest_switch_log(const char *app)
+{
+    printf("-- SP-16 (#254) structural: honest auto-switch logging\n");
+    /* The old banner claimed success for genuinely-switched, same-region,
+     * not-joined-stay, and disabled-build outcomes alike. */
+    CHECK_REGRESSION(strstr(app, "Auto-switch completed successfully") == NULL,
+                     "SP-16-banner-gone");
+    CHECK_REGRESSION(strstr(app, "Auto-switch: no change") != NULL, "SP-16-nochange-log");
+    CHECK_REGRESSION(count_occurrences(app, "MultiRegion_GetActiveRegion()") >= 2,
+                     "SP-16-before-after");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
@@ -478,6 +493,8 @@ int main(void)
     test_sp14_nan_guards(pend);
     printf("\n");
     test_sp15_unreachable_case_gone(app);
+    printf("\n");
+    test_sp16_honest_switch_log(app);
 
     free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm); free(pend);
     free(conf); free(mregh); free(msstate); free(seid);
