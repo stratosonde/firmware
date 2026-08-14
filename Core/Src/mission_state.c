@@ -75,7 +75,10 @@ void MissionState_Init(void)
         MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ||
         MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868) ||
         MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923) ||
-        MultiRegion_IsRegionJoined(LORAMAC_REGION_AU915);
+        MultiRegion_IsRegionJoined(LORAMAC_REGION_AU915) ||
+        MultiRegion_IsRegionJoined(LORAMAC_REGION_IN865) ||
+        MultiRegion_IsRegionJoined(LORAMAC_REGION_KR920) ||
+        MultiRegion_IsRegionJoined(LORAMAC_REGION_RU864);  /* SP-05 (#246) */
 
     /* MISSION-01 (#142, DDR-0002 amendment): the persisted DR3 record now wins
      * outright — including COMMISSIONING. Previously a commissioned bank

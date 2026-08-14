@@ -91,14 +91,14 @@ extern "C" {
 /* the application (on sys_conf.h) shall just configure one region at the time */
 #define REGION_AS923   /* Multi-region: Asia-Pacific */
 #define REGION_AU915   /* Multi-region: Australia */
-/*#define REGION_CN470*/
-/*#define REGION_CN779*/
-/*#define REGION_EU433*/
+/*#define REGION_CN470*/   /* SP-05 (#246): 470 MHz - outside radio band (850-950) */
+/*#define REGION_CN779*/   /* SP-05 (#246): 779 MHz - outside radio band */
+/*#define REGION_EU433*/   /* SP-05 (#246): 433 MHz - outside radio band */
 #define REGION_EU868   /* Multi-region: Europe */
-/*#define REGION_KR920*/
-/*#define REGION_IN865*/
+#define REGION_KR920   /* SP-05 (#246): Korea */
+#define REGION_IN865   /* SP-05 (#246): India */
 #define REGION_US915   /* Multi-region: North America (primary) */
-/*#define REGION_RU864*/
+#define REGION_RU864   /* SP-05 (#246): Russia */
 
 /*!
  * @brief Default channel plan for region AS923

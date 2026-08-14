@@ -60,6 +60,7 @@
 #include "RegionAU915.h"
 #include "RegionIN865.h"      /* R7 (#193): all six advertised regions need a complete SF mapping */
 #include "RegionKR920.h"
+#include "RegionRU864.h"      /* SP-05 (#246): seventh compiled region needs its Datarates table too */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -553,7 +554,8 @@ void LoRaWAN_Init(void)
   if (!have_session) {
     static const LoRaMacRegion_t scan_regions[] = {
       LORAMAC_REGION_US915, LORAMAC_REGION_EU868, LORAMAC_REGION_AS923,
-      LORAMAC_REGION_AU915, LORAMAC_REGION_IN865, LORAMAC_REGION_KR920
+      LORAMAC_REGION_AU915, LORAMAC_REGION_IN865, LORAMAC_REGION_KR920,
+      LORAMAC_REGION_RU864   /* SP-05 (#246): seventh bank */
     };
     for (uint8_t i = 0; i < sizeof(scan_regions)/sizeof(scan_regions[0]); i++) {
       if (MultiRegion_IsRegionJoined(scan_regions[i])) {
@@ -700,14 +702,16 @@ static int8_t DatarateFromSF(uint8_t sf)
       table = DataratesAS923; table_len = sizeof(DataratesAS923); break;
     case LORAMAC_REGION_AU915:
       table = DataratesAU915; table_len = sizeof(DataratesAU915); break;
-    /* R7 (#193): the firmware advertises six regions - the resolver must not
-     * drop IN865/KR920 into the default fallback (LORAWAN_DEFAULT_DATA_RATE
-     * is not necessarily valid for the active region; the MAC rejects the
-     * uplink). Six advertised, six mapped. */
+    /* R7 (#193) + SP-05 (#246): the firmware advertises SEVEN regions - the
+     * resolver must not drop IN865/KR920/RU864 into the default fallback
+     * (LORAWAN_DEFAULT_DATA_RATE is not necessarily valid for the active
+     * region; the MAC rejects the uplink). Seven advertised, seven mapped. */
     case LORAMAC_REGION_IN865:
       table = DataratesIN865; table_len = sizeof(DataratesIN865); break;
     case LORAMAC_REGION_KR920:
       table = DataratesKR920; table_len = sizeof(DataratesKR920); break;
+    case LORAMAC_REGION_RU864:
+      table = DataratesRU864; table_len = sizeof(DataratesRU864); break;
     default:
       return LORAWAN_DEFAULT_DATA_RATE;
   }

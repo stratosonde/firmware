@@ -53,14 +53,18 @@ extern "C" {
 #define FRAME_COUNTER_SAVE_INTERVAL      10  // Save every 10 transmissions
 #endif
 
-#define MAX_REGION_CONTEXTS              6  // US915, EU868, AS923, AU915, IN865, KR920
+#define MAX_REGION_CONTEXTS              7  // US915, EU868, AS923, AU915, IN865, KR920, RU864 (SP-05 #246)
 
 /* Magic number for flash storage validation */
 #define MULTIREGION_MAGIC                0xDEADBEEF
 /* v2 = two-tier storage (FW-1/DDR-0018); v3 = Tier-1 banks carry a monotonic
  * generation (R8/#190). No deployed fleet: older banks read as virgin and the
  * device falls back to COMMISSIONING, same precedent as FR-18. */
-#define MULTIREGION_VERSION              3
+/* SP-05 (#246): v4 adds the RU864 slot (MAX_REGION_CONTEXTS 6->7). Tier-1/2
+ * banks mismatch-reject (FlashLoadStorage/FlashLoadTier2) and the unit
+ * re-commissions on the bench - acceptable pre-first-flight, no in-field
+ * migration. */
+#define MULTIREGION_VERSION              4
 
 /* Exported types ------------------------------------------------------------*/
 

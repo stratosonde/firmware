@@ -326,6 +326,44 @@ static void test_f01_structural(const char *app, const char *apph, const char *m
                      "F-01-reinit-callers");
 }
 
+/* ========================================================================== */
+/* SP-05 (#246) - structural: IN865/KR920/RU864 are compiled AND reachable     */
+/* ========================================================================== */
+static void test_sp05_structural(const char *conf, const char *app, const char *mreg,
+                                 const char *mregh, const char *msstate, const char *seid)
+{
+    printf("-- SP-05 (#246) structural: three more regions wired end to end\n");
+
+    /* lorawan_conf.h: macros actively defined (comment-stripped text). */
+    CHECK_REGRESSION(strstr(conf, "#define REGION_KR920") != NULL, "SP-05-conf-kr920");
+    CHECK_REGRESSION(strstr(conf, "#define REGION_IN865") != NULL, "SP-05-conf-in865");
+    CHECK_REGRESSION(strstr(conf, "#define REGION_RU864") != NULL, "SP-05-conf-ru864");
+
+    /* Identity table row for RU864 (IN865/KR920 already existed). */
+    CHECK_REGRESSION(strstr(mreg, "LORAMAC_REGION_RU864, {LORAWAN_DEVICE_EUI_RU864}") != NULL,
+                     "SP-05-identity-ru864");
+    CHECK_REGRESSION(strstr(seid, "LORAWAN_DEVICE_EUI_RU864") != NULL, "SP-05-deveui-ru864");
+
+    /* Bank holds 7 slots; persisted format bumped so old banks re-commission. */
+    CHECK_REGRESSION(strstr(mregh, "#define MAX_REGION_CONTEXTS              7") != NULL,
+                     "SP-05-slots-7");
+    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              4") != NULL,
+                     "SP-05-version-4");
+
+    /* Ground-join-all and boot resume-scan cover the new regions. */
+    CHECK_REGRESSION(in_function(mreg, "kPreJoinRegions[] =", "LORAMAC_REGION_IN865"), "SP-05-prejoin-in865");
+    CHECK_REGRESSION(in_function(mreg, "kPreJoinRegions[] =", "LORAMAC_REGION_KR920"), "SP-05-prejoin-kr920");
+    CHECK_REGRESSION(in_function(mreg, "kPreJoinRegions[] =", "LORAMAC_REGION_RU864"), "SP-05-prejoin-ru864");
+    CHECK_REGRESSION(strstr(app, "LORAMAC_REGION_RU864") != NULL, "SP-05-loraapp-ru864");
+    CHECK_REGRESSION(strstr(app, "DataratesRU864") != NULL, "SP-05-datarates-ru864");
+
+    /* Commissioning door anchor covers all joined regions. */
+    CHECK_REGRESSION(strstr(msstate, "MultiRegion_IsRegionJoined(LORAMAC_REGION_IN865)") != NULL,
+                     "SP-05-door-in865");
+    CHECK_REGRESSION(strstr(msstate, "MultiRegion_IsRegionJoined(LORAMAC_REGION_RU864)") != NULL,
+                     "SP-05-door-ru864");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
@@ -334,6 +372,10 @@ int main(void)
     char *app   = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
     char *apph  = strip_comments(slurp("../../LoRaWAN/App/lora_app.h"));
     char *mreg  = strip_comments(slurp("../../Core/Src/multiregion_context.c"));
+    char *conf  = strip_comments(slurp("../../LoRaWAN/Target/lorawan_conf.h"));
+    char *mregh = strip_comments(slurp("../../Core/Inc/multiregion_context.h"));
+    char *msstate = strip_comments(slurp("../../Core/Src/mission_state.c"));
+    char *seid  = strip_comments(slurp("../../LoRaWAN/App/se-identity.h"));
 
     printf("=== SP-series review regressions (2026-08-13) ===\n\n");
 
@@ -346,8 +388,11 @@ int main(void)
     test_sp01_structural(usart, gnss, mainc);
     printf("\n");
     test_f01_structural(app, apph, mreg);
+    printf("\n");
+    test_sp05_structural(conf, app, mreg, mregh, msstate, seid);
 
     free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg);
+    free(conf); free(mregh); free(msstate); free(seid);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

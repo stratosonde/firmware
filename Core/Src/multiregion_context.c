@@ -557,6 +557,9 @@ static const RegionIdentity_t kRegionIdentities[] = {
     { LORAMAC_REGION_AU915, {LORAWAN_DEVICE_EUI_AU915}, DR_2, 923300000, DR_8 },
     { LORAMAC_REGION_IN865, {LORAWAN_DEVICE_EUI_IN865}, DR_0, 866550000, DR_2 },
     { LORAMAC_REGION_KR920, {LORAWAN_DEVICE_EUI_KR920}, DR_0, 921900000, DR_0 },
+    /* SP-05 (#246): RU864 in-band (864-868 MHz). EU433/CN470 stay unmapped -
+     * outside the radio's 850-950 MHz band (lorawan_conf.h keeps them out). */
+    { LORAMAC_REGION_RU864, {LORAWAN_DEVICE_EUI_RU864}, DR_0, 869100000, DR_0 },
 };
 
 static const RegionIdentity_t *FindRegionIdentity(LoRaMacRegion_t region)
@@ -1166,11 +1169,13 @@ bool MultiRegion_PreJoinAllRegions(void)
     bool all_success = true;
     uint8_t join_success_count = 0;  /* R30/D6: flight entry requires >= 1 */
 
-    /* F-R3 (#73): the four copy-pasted join blocks are one loop over a table.
-     * EU868/AS923/AU915 stay enabled (F4: global floater needs all 4 banks). */
+    /* F-R3 (#73): one loop over the region table. SP-05 (#246): seven banks -
+     * IN865/KR920/RU864 join on the bench too (DDR-0018 INV-COMM-001: join
+     * every configured region on the ground; the geofence maps all three). */
     static const LoRaMacRegion_t kPreJoinRegions[] = {
         LORAMAC_REGION_US915, LORAMAC_REGION_EU868,
         LORAMAC_REGION_AS923, LORAMAC_REGION_AU915,
+        LORAMAC_REGION_IN865, LORAMAC_REGION_KR920, LORAMAC_REGION_RU864,
     };
     const uint8_t num_regions = (uint8_t)(sizeof(kPreJoinRegions) / sizeof(kPreJoinRegions[0]));
 
@@ -1195,7 +1200,8 @@ bool MultiRegion_PreJoinAllRegions(void)
     if (all_success) {
         APP_LOG(TS_ON, VLEVEL_H, "=== ALL PRE-JOINS SUCCESSFUL ===\r\n");
     } else {
-        APP_LOG(TS_ON, VLEVEL_H, "=== SOME PRE-JOINS FAILED (%d/4 joined) ===\r\n", join_success_count);
+        /* SP-05 (#246): seven regions now - report the real denominator */
+        APP_LOG(TS_ON, VLEVEL_H, "=== SOME PRE-JOINS FAILED (%d/%d joined) ===\r\n", join_success_count, num_regions);
     }
     APP_LOG(TS_ON, VLEVEL_H, "========================================\r\n\r\n");
 

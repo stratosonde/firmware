@@ -484,6 +484,46 @@ static void test_f01_restore_steps123_fail_closed(void)
 }
 
 /* ========================================================================== */
+/* SP-05 (#246) — all seven compiled regions are bankable and enterable        */
+/* ========================================================================== */
+/* IN865/KR920 had identity rows but sat under never-compiled REGION_* macros;
+ * RU864 had no DevEUI/identity/bank-slot at all. Behavioural proof that the
+ * full seven-region set commissions and switches through the REAL restore
+ * ritual (identity lookup, DevEUI programming, bank slot allocation). */
+static void test_sp05_all_seven_regions_supported(void)
+{
+    printf("-- SP-05 (P1, #246): all seven regions commission + switch\n");
+
+    static const struct { LoRaMacRegion_t region; uint8_t key0; } kAll[] = {
+        { LORAMAC_REGION_US915, 0xA0 }, { LORAMAC_REGION_EU868, 0xB0 },
+        { LORAMAC_REGION_AS923, 0xC0 }, { LORAMAC_REGION_AU915, 0xD0 },
+        { LORAMAC_REGION_IN865, 0xE0 }, { LORAMAC_REGION_KR920, 0xF0 },
+        { LORAMAC_REGION_RU864, 0x20 },
+    };
+
+    MultiRegion_Init();
+    for (uint32_t i = 0; i < sizeof(kAll)/sizeof(kAll[0]); i++) {
+        uint8_t app_key[16], nwk_key[16];
+        memset(app_key, kAll[i].key0, sizeof(app_key));
+        memset(nwk_key, kAll[i].key0 + 1, sizeof(nwk_key));
+        bool ok = MultiRegion_InitializeRegionFromNetworkServer(
+                      kAll[i].region, 0x26010000u + i, app_key, nwk_key);
+        printf("   commission %-6s: %s\n", RegionToString(kAll[i].region), ok ? "ok" : "FAILED");
+        CHECK_REGRESSION(ok, "SP-05-commission");
+    }
+
+    for (uint32_t i = 0; i < sizeof(kAll)/sizeof(kAll[0]); i++) {
+        mac_reset();
+        LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(kAll[i].region);
+        printf("   switch to %-6s: rc=%d, active=%s\n",
+               RegionToString(kAll[i].region), st,
+               RegionToString(MultiRegion_GetActiveRegion()));
+        CHECK_REGRESSION(st == LORAMAC_HANDLER_SUCCESS, "SP-05-switch");
+        CHECK_REGRESSION(MultiRegion_GetActiveRegion() == kAll[i].region, "SP-05-active");
+    }
+}
+
+/* ========================================================================== */
 /* R3 (P0) — FCnt restore must resume AHEAD of the true network counter       */
 /* ========================================================================== */
 
@@ -737,6 +777,7 @@ int main(void)
 printf("\n");
 test_r1_restore_fail_closed();
 test_f01_restore_steps123_fail_closed();
+test_sp05_all_seven_regions_supported();
     printf("\n");
     test_r3_fcnt_reset_margin();
     test_dr07_single_margin();
