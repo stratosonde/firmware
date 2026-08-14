@@ -1461,25 +1461,9 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
     HAL_UART_DeInit(hgnss->huart);
     SONDE_LOG_STR("[GPS STANDBY] UART deinitialized\r\n");
 
-    /* CRITICAL PIN CONFIGURATION FOR HOT-START MODE */
-    /* PB6 (MCU TX -> GPS RX): OUTPUT-LOW to prevent parasitic power to GPS */
-    /* PB7 (GPS TX -> MCU RX): ANALOG/Hi-Z - NEVER drive this low (it's GPS output!) */
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-    /* PB6 - MCU transmit to GPS (OUTPUT-LOW prevents parasitic power) */
-    GPIO_InitStruct.Pin = GPIO_PIN_6;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-
-    /* PB7 - GPS transmit to MCU (ANALOG for minimal leakage, high impedance) */
-    /* CRITICAL: Do NOT drive this low - it's the GPS module's TX pin! */
-    GPIO_InitStruct.Pin = GPIO_PIN_7;
-    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    /* SP-09 (#249): pin sleep policy is owned by GNSS_UARTPins_SleepSafe() -
+     * the one definition every teardown path shares. */
+    GNSS_UARTPins_SleepSafe();
 
     SONDE_LOG_STR("[GPS STANDBY] PB6=OUTPUT-LOW, PB7=ANALOG (hi-Z)\r\n");
   }
@@ -1503,6 +1487,34 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   
   hgnss->is_powered = false;
   return GNSS_OK;
+}
+
+/* SP-09 (#249): the SINGLE owner of the UART pin sleep state. Pre-fix, PB6
+ * had three owners with two contradictory policies: the CubeMX MSP (AF on
+ * every HAL_UART_Init), EnterStandby's anti-parasitic PB6-LOW, and
+ * EnterStopMode's blanket ANALOG which silently undid the LOW drive every
+ * sleep cycle. Every teardown site now ends here:
+ *   PB6 (MCU TX -> GPS RX) OUTPUT-LOW  - no ESD-clamp leakage into the
+ *                                        depowered module's RX pin
+ *   PB7 (GPS TX -> MCU RX) ANALOG/Hi-Z - it's the GPS module's OUTPUT;
+ *                                        NEVER drive this low.
+ * NOTE: HAL_UART_MspDeInit de-configures the pins, so sites that call
+ * HAL_UART_DeInit must call this AFTER the DeInit. */
+void GNSS_UARTPins_SleepSafe(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
 /**

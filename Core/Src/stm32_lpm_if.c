@@ -48,6 +48,7 @@ extern RTC_HandleTypeDef hrtc;
 void SystemClock_Config(void);
 void MX_DMA_Init(void);
 void MX_USART1_UART_Init(void);
+void GNSS_UARTPins_SleepSafe(void);  /* SP-09 (#249): GNSS driver owns PB6/PB7 sleep policy */
 void MX_SUBGHZ_Init(void);
 /* USER CODE END EV */
 
@@ -189,15 +190,13 @@ void PWR_EnterStopMode(void)
   
   /* === UART1 Power Optimization === */
   /* Deinitialize UART peripheral (required for STOP2) */
-  /* GPS is fully powered off (PB5=LOW, PB10=LOW), no parasitic power path */
   HAL_UART_DeInit(&huart1);
-  
-  /* CRITICAL: Both UART pins to ANALOG - GPS fully powered off, no leakage */
-  GPIO_InitTypeDef GPIO_UART = {0};
-  GPIO_UART.Pin = GPIO_PIN_6 | GPIO_PIN_7;  // PB6=TX, PB7=RX
-  GPIO_UART.Mode = GPIO_MODE_ANALOG;
-  GPIO_UART.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_UART);
+
+  /* SP-09 (#249): HAL_UART_MspDeInit de-configures PB6/PB7 - re-assert the
+   * GNSS driver's sleep state after the DeInit. The old blanket ANALOG here
+   * undid EnterStandby's anti-parasitic PB6-LOW every single sleep (while a
+   * comment below told other code 'DO NOT override' GPS pins). */
+  GNSS_UARTPins_SleepSafe();
   
   /* === ADC Power Optimization: DeInit and set pin to ANALOG === */
   /* ADC uses PB4 (ADC_CHANNEL_3) for battery voltage measurement */

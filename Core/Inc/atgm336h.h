@@ -363,6 +363,13 @@ void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart);
   */
 void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart);
 
+/**
+  * @brief  SP-09 (#249): the SINGLE owner of the UART pin sleep policy.
+  *         Every site that tears down the GNSS UART (GNSS_EnterStandby,
+  *         EnterStopMode after HAL_UART_DeInit) ends in this same state.
+  */
+void GNSS_UARTPins_SleepSafe(void);
+
 #ifdef __cplusplus
 }
 #endif

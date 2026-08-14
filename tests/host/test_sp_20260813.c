@@ -385,11 +385,36 @@ static void test_sp07_fatal_escape_wired(const char *mainc)
                                  "ResetCause_GetBootAttempts()"), "SP-07-gate");
 }
 
+/* ========================================================================== */
+/* SP-09 (#249) - structural: ONE owner for the PB6/PB7 sleep policy            */
+/* ========================================================================== */
+static void test_sp09_single_pin_owner(const char *gnss, const char *lpm)
+{
+    printf("-- SP-09 (#249) structural: single-owner PB6/PB7 sleep policy\n");
+
+    /* Pre-fix: three owners (MSP AF init, GNSS_EnterStandby, EnterStopMode)
+     * and EnterStopMode overrode the anti-parasitic PB6-LOW with ANALOG on
+     * every sleep entry - directly contradicting its own 'DO NOT override'
+     * comment two paragraphs later. Fix: one policy function in the GNSS
+     * driver, called by both teardown sites after HAL_UART_DeInit. */
+    CHECK_REGRESSION(strstr(gnss, "GNSS_UARTPins_SleepSafe") != NULL, "SP-09-policy-fn");
+    CHECK_REGRESSION(in_function(gnss, "void GNSS_UARTPins_SleepSafe(void)", "GPIO_PIN_6"),
+                     "SP-09-policy-pb6");
+    CHECK_REGRESSION(in_function(gnss, "GNSS_StatusTypeDef GNSS_EnterStandby",
+                                 "GNSS_UARTPins_SleepSafe()"), "SP-09-standby-calls");
+    CHECK_REGRESSION(strstr(lpm, "GNSS_UARTPins_SleepSafe()") != NULL, "SP-09-lpm-calls");
+    /* The contradictory blanket-analog override must be gone (code scan,
+     * not prose: comments are stripped before this point). */
+    CHECK_REGRESSION(strstr(lpm, "GPIO_UART.Pin = GPIO_PIN_6 | GPIO_PIN_7") == NULL,
+                     "SP-09-lpm-no-override");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
     char *gnss  = strip_comments(slurp("../../Core/Src/atgm336h.c"));
     char *mainc = strip_comments(slurp("../../Core/Src/main.c"));
+    char *lpm   = strip_comments(slurp("../../Core/Src/stm32_lpm_if.c"));
     char *app   = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
     char *apph  = strip_comments(slurp("../../LoRaWAN/App/lora_app.h"));
     char *mreg  = strip_comments(slurp("../../Core/Src/multiregion_context.c"));
@@ -415,8 +440,10 @@ int main(void)
     test_sp05_structural(conf, app, mreg, mregh, msstate, seid);
     printf("\n");
     test_sp07_fatal_escape_wired(mainc);
+    printf("\n");
+    test_sp09_single_pin_owner(gnss, lpm);
 
-    free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg);
+    free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm);
     free(conf); free(mregh); free(msstate); free(seid);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
