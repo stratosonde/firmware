@@ -300,6 +300,55 @@ static void test_erase_ahead_slack(void)
 }
 
 /* ========================================================================== */
+/* SP-19 (#252) — tx_high_water must never lag behind the ring's oldest       */
+/* ========================================================================== */
+/* A long TX-silent run with continuous logging (GNSS-outage / restricted
+ * region silence) wraps the ring past H. Pending-live [H, next) then spans
+ * overwritten sequences, and every recovery call burns probes on R2-03
+ * identity skips - up to the R13 256-probe bound - per archive opportunity. */
+static void test_sp19_high_water_never_behind_oldest(void)
+{
+    printf("-- SP-19 (#252): ring wrap lifts tx_high_water to oldest\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* Wrap by 8 with ZERO sends: sequences 0..7 are overwritten; oldest=8,
+     * but tx_high_water still sits at 0. */
+    const uint32_t total = FLASH_LOG_MAX_RECORDS + 8U;
+    for (uint32_t i = 0; i < total; i++) {
+        sensor_t s = make_sensors((uint16_t)(i & 0xFFFFu));
+        if (FlashLog_WriteRecord(&hlog, &s, 1000U + i, 0, 0, 0) != FLASH_LOG_OK) {
+            CHECK(0);
+            break;
+        }
+    }
+
+    FlashLog_Record_t batch[64];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 64, &got, &skipped), FLASH_LOG_OK);
+
+    /* The wrap's oldest resident sequence (erase-ahead slack makes this >8;
+     * derive it, don't hardcode). */
+    const uint32_t oldest = hlog.next_sequence - FlashLog_GetAvailableRecords(&hlog);
+    printf("   got=%u skipped=%u first_seq=%u oldest=%u H=%u\n", got, skipped,
+           got ? (unsigned)batch[0].sequence : 0xFFFFFFFFu,
+           (unsigned)oldest, (unsigned)hlog.tx_high_water);
+
+    CHECK(oldest > 0U);   /* the ring really wrapped */
+    CHECK_REGRESSION(skipped == 0U, "SP-19-no-dead-probes");
+    CHECK_REGRESSION(got == 64U, "SP-19-full-batch");
+    CHECK_REGRESSION(got == 64U && batch[0].sequence == oldest, "SP-19-first-is-oldest");
+    /* The discriminating assertion: H was lifted to oldest (pre-fix it
+     * still sits at 0 while the ring starts at 64). */
+    CHECK_REGRESSION(hlog.tx_high_water == oldest, "SP-19-h-lifted");
+
+    fake_w25q_free();
+}
+
+/* ========================================================================== */
 /* T-5 / T-6 — corrupt-record skip accounting                                 */
 /* ========================================================================== */
 /* The composition rule that FR-08 and FR-09 were about lived in lora_app.c.
@@ -1025,6 +1074,7 @@ int main(void)
     test_deferred_header_sync_batches_burst();
     test_frontier_scan_rejects_previous_lap();
     test_erase_ahead_slack();
+test_sp19_high_water_never_behind_oldest();
     test_r2_02_watermark_overadvance_on_wrap();
     test_r2_03_sequence_identity_crosscheck();
     test_r2_14_ts_wrap_false_latch();

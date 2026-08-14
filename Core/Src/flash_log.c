@@ -178,6 +178,18 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
     }
 
     const uint32_t oldest = FlashLog_OldestSequence(hlog);
+
+    /* SP-19 (#252): a long TX-silent run can wrap the ring past H. Sequences
+     * in [H, oldest) are OVERWRITTEN - not pending, not corrupt, gone. Lift H
+     * so pending-live starts at resident data; otherwise every archive
+     * opportunity burned probes on R2-03 identity skips (up to the R13
+     * 256-probe bound) and GetUnsentCount overstated the real backlog. The
+     * lift is RAM-side only until the next MarkRecoverySent persists it;
+     * re-deriving it here each call is idempotent and cheap. */
+    if (hlog->tx_high_water < oldest) {
+        hlog->tx_high_water = oldest;
+    }
+
     uint32_t sendable = FlashLog_GetUnsentCount(hlog);
     if (max_count > sendable) {
         max_count = sendable;
