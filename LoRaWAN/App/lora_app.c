@@ -1617,7 +1617,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
   /* C2 FIX: Reset stale TX states so every timer cycle sends actual data.
    * If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
    * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
-   * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData. */
+   * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData.
+   * SP-15 (#253): this reset guarantees the switch below only ever sees
+   * PROBE_SF10 or BULK_TRANSFER - the old 'case TX_STATE_WAIT_PROBE_ACK' was
+   * unreachable, and its 'fall through' comment was falsified by its break. */
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
     SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
     /* Finding #8: the burst (if any) ended last cycle — flush the deferred
@@ -1706,14 +1709,6 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       break;
     }
     
-    case TX_STATE_WAIT_PROBE_ACK:
-      /* Should not reach here - stale states are reset above before the switch.
-       * Fall through to PROBE_SF10 as safety fallback. */
-      SONDE_LOG_STR("WARN: Unexpected WAIT_PROBE_ACK in switch, resetting\r\n");
-      g_tx_state = TX_STATE_PROBE_SF10;
-      /* fall through to PROBE_SF10 - will send on next cycle */
-      break;
-      
     case TX_STATE_BULK_TRANSFER:
     {
       SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n", 

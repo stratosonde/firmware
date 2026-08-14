@@ -426,6 +426,20 @@ static void test_sp14_nan_guards(const char *pend)
                                  "isnan"), "SP-14-batt-guard");
 }
 
+/* ========================================================================== */
+/* SP-15 (#253) - structural: the unreachable WAIT_PROBE_ACK case is gone      */
+/* ========================================================================== */
+static void test_sp15_unreachable_case_gone(const char *app)
+{
+    printf("-- SP-15 (#253) structural: no dead WAIT_PROBE_ACK switch case\n");
+    /* The pre-switch reset guarantees g_tx_state is PROBE_SF10 or
+     * BULK_TRANSFER at the switch; the case could never run, and its
+     * 'fall through' comment was falsified by its own break. */
+    CHECK_REGRESSION(strstr(app, "case TX_STATE_WAIT_PROBE_ACK:") == NULL, "SP-15-case-gone");
+    /* The reset itself must still exist (it is the actual mechanism). */
+    CHECK_REGRESSION(strstr(app, "Resetting stale TX state") != NULL, "SP-15-reset-kept");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
@@ -462,6 +476,8 @@ int main(void)
     test_sp09_single_pin_owner(gnss, lpm);
     printf("\n");
     test_sp14_nan_guards(pend);
+    printf("\n");
+    test_sp15_unreachable_case_gone(app);
 
     free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm); free(pend);
     free(conf); free(mregh); free(msstate); free(seid);
