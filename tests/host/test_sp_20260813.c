@@ -455,6 +455,23 @@ static void test_sp16_honest_switch_log(const char *app)
                      "SP-16-before-after");
 }
 
+/* ========================================================================== */
+/* SP-17 (#255) - structural: I2C2 init failures mark SYS_CAP_SENSORS          */
+/* ========================================================================== */
+static void test_sp17_i2c2_capability_marked(const char *mainc)
+{
+    printf("-- SP-17 (#255) structural: I2C2 failure marks the sensors capability\n");
+    /* MX_I2C2_Init has three failure branches (HAL_I2C_Init, analog filter,
+     * digital filter); each must mark SYS_CAP_SENSORS before degrading. */
+    /* Anchor on the DEFINITION: the '\n{' braces suffix skips the CubeMX
+     * forward declaration at the file top. */
+    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void)\n{",
+                                       "SysCaps_MarkFailed(SYS_CAP_SENSORS)") >= 3,
+                     "SP-17-three-marks");
+    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void)\n{",
+                                       "SONDE_LOG") >= 3, "SP-17-logs");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
@@ -495,6 +512,8 @@ int main(void)
     test_sp15_unreachable_case_gone(app);
     printf("\n");
     test_sp16_honest_switch_log(app);
+    printf("\n");
+    test_sp17_i2c2_capability_marked(mainc);
 
     free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm); free(pend);
     free(conf); free(mregh); free(msstate); free(seid);

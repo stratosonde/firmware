@@ -675,6 +675,11 @@ static void MX_I2C2_Init(void)
   hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
   if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
+    /* SP-17 (#255): degrade-and-say-so (DDR-0009, F-014 #207) - the boot
+     * capability mask must show sensors gone, or the flight log pretends a
+     * healthy I2C2. Error_Handler() continues. */
+    SysCaps_MarkFailed(SYS_CAP_SENSORS);
+    SONDE_LOG_STR("I2C2: HAL_I2C_Init failed - SYS_CAP_SENSORS marked failed\r\n");
     Error_Handler();
   }
 
@@ -682,6 +687,8 @@ static void MX_I2C2_Init(void)
   */
   if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
   {
+    SysCaps_MarkFailed(SYS_CAP_SENSORS);
+    SONDE_LOG_STR("I2C2: analog filter config failed - SYS_CAP_SENSORS marked failed\r\n");
     Error_Handler();
   }
 
@@ -689,6 +696,8 @@ static void MX_I2C2_Init(void)
   */
   if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
   {
+    SysCaps_MarkFailed(SYS_CAP_SENSORS);
+    SONDE_LOG_STR("I2C2: digital filter config failed - SYS_CAP_SENSORS marked failed\r\n");
     Error_Handler();
   }
   /* USER CODE BEGIN I2C2_Init 2 */
