@@ -486,13 +486,28 @@ Need a separate decision on:
 - whether watchdog reset is treated the same as software fatal reset;
 - persistent reset-loop detection.
 
-### OD-FAIL-006 — Reset-loop protection
+### OD-FAIL-006 — Reset-loop protection — **RESOLVED 2026-08-13**
 
-Need to decide whether repeated immediate resets should trigger a reduced recovery path or continue rebooting normally.
+Original question: whether repeated immediate resets should trigger a reduced
+recovery path or continue rebooting normally.
 
-This should be designed carefully so reset-loop protection does not accidentally create a permanent mission stop.
+**Resolved by DDR-0020 + the 2026-08-13 intent interview (see §18):**
 
-**2026-08-12 update:** the first-flight preference is simple retry (INV-FAIL-013/014). What remains open is only whether extreme immediate reset loops require any additional hardware/boot-level protection — see `open-intent-questions.md` item 6.
+> Repeated watchdog/deadman/fatal-recovery resets do **not** trigger a special
+> reduced mode, permanent feature disable, reset-count threshold, or mission stop.
+> Every reset attempts the same clean recovery path again, indefinitely.
+
+Reset-loop adaptation was deliberately rejected: it adds state and test
+complexity, and it can itself create an unrecoverable mission mode — which is the
+exact failure the original question warned about.
+
+**2026-08-12 context (retained):** the first-flight preference was already simple
+retry (`INV-FAIL-013/014`).
+
+**Residual (not part of this OD):** whether extreme immediate reset loops warrant
+additional *hardware/boot-level* brownout protection remains an engineering
+question, not a product-policy question — see `open-intent-questions.md` item 6
+and DDR-0012 `OD-BOOT-006`.
 
 ---
 
@@ -622,3 +637,107 @@ Questions should include:
 8. Does reset cause become part of the next science record or telemetry?
 
 That topic naturally follows this failure philosophy because deterministic reset is only useful if the mission can reconstruct enough state to continue correctly.
+
+---
+
+## 18. Amendment 2026-08-13 (intent interview, passes 1 and final)
+
+**Disposition:** amend; no new record required. Resolves `OD-FAIL-006` (§14).
+
+### Decision delta 1 — bounded local recovery before stale fallback
+
+A subsystem failure should not immediately degrade to stale without first making a
+small, bounded recovery effort.
+
+For each eligible acquisition, firmware SHOULD:
+
+1. attempt the normal acquisition;
+2. perform a small bounded number of local retries;
+3. where supported and safe, attempt simple deterministic recovery such as bus
+   re-clock/recovery, peripheral reset, or peripheral power-cycle;
+4. if no fresh value is obtained, **stop** recovery work for that wake;
+5. reuse last-known-good data when available and mark it stale;
+6. continue the rest of the mission cycle;
+7. retry the subsystem on the next ordinary energy-eligible wake.
+
+This applies across subsystems, not only environmental sensors: the same shape
+governs a failed sensor, GNSS receiver, radio hardware, radio stack, or bus.
+
+The exact retry counts and hardware recovery sequences are implementation
+bindings, and they must themselves be bounded.
+
+### INV-FAIL-016 — Local recovery is exhaustive but bounded
+
+Peripheral and subsystem recovery attempts SHALL exercise the reasonable
+deterministic recovery actions available, SHALL be finite, and SHALL NOT prevent
+the wake cycle from returning to low power within its budget (DDR-0001
+`INV-WAKE-004`, DDR-0020 supervision).
+
+When recovery succeeds, the subsystem SHALL return to normal service
+**immediately** — there is no probation, warm-up, or confidence-rebuilding state.
+
+### BR-FAIL-016 — Recovery before stale fallback
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-FAIL-016 | Before declaring an otherwise eligible subsystem unavailable for the current wake, firmware SHOULD attempt the configured bounded local recovery sequence. Failure after that sequence SHALL degrade only that subsystem's dependent capability and SHALL NOT stop the mission. | **CONFIRMED** |
+| BR-FAIL-017 | Recovery success SHALL restore normal service on the same wake, with no probationary or reduced-trust period. | **CONFIRMED** |
+| BR-FAIL-018 | Radio hardware/stack recovery MAY include bounded reset/reinitialization, but SHALL NOT trigger an autonomous in-flight LoRaWAN join (DDR-0018 `INV-COMM-001`). | **CONFIRMED** |
+
+### Decision delta 2 — reset loops do not escalate policy
+
+`OD-FAIL-006` is **resolved** in favor of no adaptation:
+
+> Repeated watchdog/deadman/fatal-recovery resets do not trigger a special reduced
+> mode, permanent feature disable, reset-count threshold, or mission stop.
+
+Every reset attempts the same clean recovery path again. This matches DDR-0020 and
+is chosen deliberately: reset-loop adaptation adds state and test complexity, and
+can itself manufacture an unrecoverable mission mode.
+
+Reset/fault counters remain **diagnostics only**. They must not acquire
+behavioral consequence without a new decision (DDR-0010 `INV-PERSIST-008`).
+
+### Rationale
+
+The mission bias is "try again" rather than "remember the failure and
+progressively disable the system."
+
+A sensor can recover because of a changing environment, a transient bus fault, or
+a power-cycle. A radio can recover from a stack or hardware fault. A whole-system
+reset can likewise clear an execution fault. Recovery must therefore stay
+deterministic, bounded, and repeatable — and forgetful, because failure history
+that changes policy is how a long mission talks itself into permanent silence.
+
+### Proof additions
+
+#### P-FAIL-011 — Bounded subsystem recovery
+
+Force a subsystem to fail through all configured local retries/recovery actions.
+Prove:
+
+- the recovery sequence terminates within the wake budget;
+- last-known-good is emitted with stale status where available;
+- unrelated subsystems and logging continue;
+- the subsystem is retried on the next eligible wake;
+- a subsequent success restores normal service immediately.
+
+#### P-FAIL-012 — Repeated reset loop has no adaptation
+
+Cause the same supervised reset repeatedly. Prove:
+
+- no reset counter changes product policy;
+- no subsystem becomes permanently disabled because of reset history;
+- each boot re-enters the same ordinary recovery path.
+
+### Cross-references
+
+- DDR-0020 — watchdog/progress supervision owns the reset mechanism and the
+  no-escalation rule.
+- DDR-0010 §18 — reset may omit but must not fabricate; telemetry must recover.
+- DDR-0012 §22 — boot restores minimum trustworthy state and returns to the
+  ordinary mission path.
+- DDR-0003 / DDR-0015 — GNSS failure additionally carries a regulatory tail: after
+  24 h without a valid fix, RF goes silent while science continues.
+- `../SYSTEM-INVARIANTS.md` SI-013.
+

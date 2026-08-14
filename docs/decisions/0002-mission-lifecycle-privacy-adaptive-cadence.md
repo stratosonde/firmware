@@ -68,9 +68,19 @@ If capabilities are missing—for example, network keys were not installed—the
 
 Once genuine flight has been detected or deliberately initiated, the sonde SHALL NOT automatically return to commissioning behavior during that mission.
 
-### INV-LIFE-005 — Cadence follows atmospheric change
+### INV-LIFE-005 — Cadence follows atmospheric change — **SUPERSEDED 2026-08-13**
 
-The sonde SHALL increase observation/transmission cadence when atmospheric pressure or pressure-derived altitude is changing significantly and reduce cadence when it is stable.
+> **Superseded by `INV-LIFE-011` (§19).** Retained for audit history.
+>
+> Original wording: *The sonde SHALL increase observation/transmission cadence
+> when atmospheric pressure or pressure-derived altitude is changing significantly
+> and reduce cadence when it is stable.*
+>
+> The reversible dynamics controller is no longer product intent. Pressure history
+> is still used to detect launch and to qualify stable float, but the
+> ascent-to-float cadence transition is now **one-way and terminal for the
+> mission**. This also promotes the 2026-08-11 accepted descope in §17
+> (`BR-LIFE-013/014`) from "accepted gap" to normative product intent.
 
 ### INV-LIFE-006 — Configured cadence is a target, not a survival obligation
 
@@ -112,8 +122,8 @@ Confidence legend:
 | BR-LIFE-010 | If a manual start/validation action does not receive the expected network acknowledgement, the device MAY warn the operator but SHALL still remain capable of entering flight automatically after release. | **CONFIRMED** |
 | BR-LIFE-011 | Once flight entry is established, the transition SHALL be one-way for the duration of that mission. | **CONFIRMED** |
 | BR-LIFE-012 | Flight-phase cadence control SHALL use pressure or pressure-derived altitude change as its primary signal; GNSS SHALL NOT be required for cadence detection. | **CONFIRMED** |
-| BR-LIFE-013 | Flight cadence SHALL be fast while the current pressure/altitude sample differs significantly from a recent running average and SHALL return to the slower cadence after measurements stabilize. | **CONFIRMED** |
-| BR-LIFE-014 | One general stability/change algorithm SHOULD serve ascent, stable float, and unexpected descent/rapid-altitude-change behavior instead of requiring separate bespoke algorithms for each. | **CONFIRMED** |
+| BR-LIFE-013 | ~~Flight cadence SHALL be fast while the current pressure/altitude sample differs significantly from a recent running average and SHALL return to the slower cadence after measurements stabilize.~~ | **SUPERSEDED 2026-08-13** — replaced by the one-way ascent→float latch (`INV-LIFE-011`, `BR-LIFE-023`). Descoped 2026-08-11 (§17); now formally retired. |
+| BR-LIFE-014 | ~~One general stability/change algorithm SHOULD serve ascent, stable float, and unexpected descent/rapid-altitude-change behavior instead of requiring separate bespoke algorithms for each.~~ | **SUPERSEDED 2026-08-13** — no descent/rapid-change cadence behavior is required. Launch detection and float qualification remain pressure-based (§19). |
 | BR-LIFE-015 | The running reference SHALL continue adapting over the mission using recent samples rather than remaining permanently anchored to launch-site conditions. | **CONFIRMED** |
 | BR-LIFE-016 | Fast and slow target update rates SHALL be mission-configurable. | **CONFIRMED** |
 | BR-LIFE-017 | Mission-specific configuration MAY vary with battery size, solar-panel size, attached sensor payload, and mission objectives without changing generic Stratosonde behavior. | **CONFIRMED** |
@@ -215,6 +225,12 @@ When the current value departs meaningfully from the reference, the atmosphere i
 
 When current samples and the moving reference converge again, the atmosphere is considered stable and the slow target cadence is selected.
 
+> **Superseded 2026-08-13 (see §19).** The reversible model below is retained for
+> historical rationale only. Flight cadence now uses a **one-way ascent-to-float
+> latch** (`INV-LIFE-011`): once float is qualified, the mission never returns to
+> ascent cadence. The `FlightSlow --> FlightFast` transition is no longer product
+> intent.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Commissioning
@@ -223,24 +239,38 @@ stateDiagram-v2
     Commissioning: Learn local pressure/altitude baseline
     Commissioning: Slow target cadence
 
-    Commissioning --> FlightFast: Manual start / launch request
-    Commissioning --> FlightFast: Automatic launch detection
+    Commissioning --> Ascent: Deliberate operator start
+    Commissioning --> Ascent: Automatic launch detection
 
-    FlightFast: Full mission telemetry
-    FlightFast: Fast target cadence
-    FlightSlow: Full mission telemetry
-    FlightSlow: Slow target cadence
+    Ascent: Full mission telemetry
+    Ascent: Fast/ascent target cadence
+    Float: Full mission telemetry
+    Float: Slow/float target cadence
 
-    FlightFast --> FlightSlow: Pressure/altitude stabilizes
-    FlightSlow --> FlightFast: Significant pressure/altitude change
+    Ascent --> Float: Float/stability qualification (one-way latch)
+    Float --> Float: Operate indefinitely
 
     note right of Commissioning
       Transition into flight
       is one-way for the mission.
     end note
+
+    note right of Float
+      Terminal for the mission.
+      Later pressure change or descent
+      does NOT restore ascent cadence.
+      Energy policy may still lengthen
+      the effective cadence (DDR-0016).
+    end note
 ```
 
-The names `FlightFast` and `FlightSlow` are descriptive. An implementation may name them differently or express them without explicit states.
+The names `Ascent` and `Float` are descriptive. An implementation may name them
+differently or express them without explicit states, provided the latch is
+one-way and durable.
+
+*Historical note:* this diagram previously showed reversible `FlightFast` /
+`FlightSlow` states with a `FlightSlow --> FlightFast` edge. That edge was removed
+2026-08-13; see §19.
 
 ---
 
@@ -599,3 +629,125 @@ Pre-commissioning exists to describe manufacturing/provisioning state. It SHALL 
 A never-commissioned device SHALL NOT silently behave as an already commissioned flight unit solely because power was applied.
 
 The exact first-power-on behavior for a never-commissioned board (radio, sensors, sleep, indication) remains an open question — see `open-intent-questions.md` item 10.
+
+---
+
+## 19. Amendment 2026-08-13 (intent interview, passes 1 and final)
+
+**Disposition:** amend; no new record required.
+
+### Decision delta — flight cadence has a one-way phase latch
+
+The reversible pressure-dynamics controller is **no longer product intent**.
+
+1. Commissioning / pre-flight behavior remains privacy-preserving (§7).
+2. Flight begins through either a deliberate operator start after a successful
+   readiness check (DDR-0018) **or** automatic pressure-based launch detection if
+   the operator forgets the deliberate step.
+3. During ascent, use the configured fast/ascent target cadence, subject to
+   DDR-0016 energy adaptation.
+4. When the established float/stability detector qualifies the flight as
+   float/stable, latch the mission into the slow/float target cadence.
+5. The float latch is **terminal for that mission**. Later pressure movement or
+   descent does not return the mission to ascent cadence.
+6. Energy policy may lengthen the effective cadence below either configured
+   target, but recovery from energy throttling returns toward the target of the
+   already-latched phase; it never unlatches float.
+
+This promotes the 2026-08-11 accepted descope (§17) to normative intent, and
+supersedes `INV-LIFE-005`, `BR-LIFE-013`, and `BR-LIFE-014`.
+
+### INV-LIFE-011 — Float cadence is terminal for the mission
+
+The sonde SHALL begin flight in the ascent/fast cadence target.
+
+Once the configured float/stability qualification is satisfied, firmware SHALL
+persistently latch the mission into the float/slow cadence target.
+
+The float latch SHALL NOT be cleared by later pressure change, descent, temporary
+instability, MCU reset, or power interruption.
+
+Only starting a new mission may clear the latch — and per DDR-0010
+`INV-PERSIST-012`, a reset never starts a new mission.
+
+### Runtime lifecycle states
+
+The explicit runtime lifecycle is:
+
+```text
+PRE-COMMISSIONED -> COMMISSIONED_PRE-FLIGHT -> ASCENT -> FLOAT
+```
+
+Every transition is one-way. There is no landing state, no descent state, and no
+ordinary mission-end transition (`INV-LIFE-008`). `FLOAT` operates indefinitely
+while energy and hardware permit.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-LIFE-023 | Flight SHALL begin in the ascent/fast cadence target and SHALL transition once to the float/slow cadence target when the configured float/stability qualification is met. | **CONFIRMED** |
+| BR-LIFE-024 | The float latch SHALL be persisted and SHALL survive reset, brownout, and power interruption (DDR-0010). | **CONFIRMED** |
+| BR-LIFE-025 | Pressure movement, descent, or instability observed after the float latch SHALL NOT restore the ascent cadence target. | **CONFIRMED** |
+| BR-LIFE-026 | Energy adaptation MAY lengthen the effective cadence below the latched phase target; recovery SHALL return toward that phase's target and SHALL NOT unlatch the phase. | **CONFIRMED** |
+| BR-LIFE-027 | Automatic pressure-based launch detection SHALL remain available even when the deliberate operator start was never performed (DDR-0018). | **CONFIRMED** |
+
+### Revised rationale
+
+The reversible controller was attractive because it avoided explicit
+ascent/float/descent states, but the interview rejected any need to accelerate
+cadence again after float.
+
+The latched model is preferred because it is:
+
+- simpler to reason about;
+- easier to prove and test;
+- resistant to pressure noise and unusual descent behavior;
+- less likely to unexpectedly increase energy consumption late in a long mission.
+
+There is no current product need to return to ascent cadence after stable float
+has been established.
+
+### Proof additions
+
+#### P-LIFE-012 — Float latch is one-way
+
+Drive pressure through valid launch/ascent behavior and satisfy the float
+detector. Prove:
+
+- the float/slow target becomes selected;
+- the latch is persisted;
+- later large pressure changes do not restore the ascent/fast target cadence.
+
+#### P-LIFE-013 — Reset preserves the float latch
+
+Enter latched float, reset the MCU, and restore state. Prove the first ordinary
+post-reset scheduling decision remains the float/slow target cadence, subject only
+to DDR-0016 energy adaptation.
+
+#### P-LIFE-014 — Automatic launch remains a safety net
+
+From a provisioned commissioning-ready state, omit the operator readiness/start
+action and provide a qualifying launch pressure trend. Prove the sonde enters
+flight automatically and begins ascent behavior.
+
+### Editorial cleanup performed
+
+- §8 diagram: `FlightSlow --> FlightFast` removed; states renamed
+  `Ascent`/`Float` with the terminal-latch note.
+- §9 (atmospheric stability model) and §14 proof text are retained as the
+  mechanism for *launch detection* and *float qualification* only, not for
+  reversible cadence selection.
+- §15 regeneration-test bullet "uses atmospheric stability, not a rigid
+  ascent/float/descent sequence, to choose fast versus slow target cadence" is
+  superseded by the one-way latch.
+
+### Cross-references
+
+- DDR-0016 — energy adaptation may lengthen effective cadence; per-wake admission
+  is FULL or SLEEP.
+- DDR-0018 — provisioning hard gate versus launch-readiness check; automatic
+  launch fallback.
+- DDR-0010 / DDR-0012 — latch durability and post-reset restoration.
+- `../SYSTEM-INVARIANTS.md` SI-002, SI-011.
+

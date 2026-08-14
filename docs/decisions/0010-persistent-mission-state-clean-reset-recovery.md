@@ -546,11 +546,23 @@ Those belong to the next implementation-oriented design decision.
 
 ## 14. Open Decisions
 
-### OD-PERSIST-001 — Complete state inventory
+### OD-PERSIST-001 — Complete state inventory — **NARROWED 2026-08-13**
 
 The initial list in §4 is not exhaustive.
 
-The inventory should be maintained as a living design artifact during feature development.
+The inventory should be maintained as a living design artifact during feature
+development.
+
+**2026-08-13 narrowing (see §18):** the *classification rule* and the *confirmed
+minimum inventory* are now normative — a state item is mission-critical when
+losing or rolling it back can cause protocol rejection, wrong RF-region
+authorization, wrong science chronology, pathological wake timing, loss of one-way
+lifecycle state, duplicate/non-monotonic record identity, loss of archive
+continuity, or misrepresented staleness.
+
+What remains open is the **per-object loss budget** for each real persistent
+object (see `open-intent-questions.md` item 4), not the question of which
+categories matter.
 
 ### OD-PERSIST-002 — LoRaWAN persistence granularity
 
@@ -714,3 +726,205 @@ The natural next topic is the **persistent-store implementation contract**:
 - how critical counters avoid unacceptable rollback.
 
 That DDR can then provide the concrete storage mechanism that satisfies the architectural persistence policy defined here.
+
+---
+
+## 18. Amendment 2026-08-13 (intent interview, passes 1, 2 and final)
+
+**Disposition:** amend; no new record required. Narrows `OD-PERSIST-001` (§14).
+
+### Refined intent — reset should look like an ordinary wake
+
+The desired semantic result of an unexpected reset is:
+
+> From the mission's point of view, recovery should look as close as practical to
+> an ordinary wake from sleep.
+
+This does **not** mean resuming the interrupted instruction or half-completed task.
+It means restoring the durable state that determines what the next ordinary mission
+action should be. `INV-PERSIST-001` (reset starts a new clean wake cycle) remains
+authoritative.
+
+A reset SHALL NOT accidentally:
+
+- accelerate wake cadence into a battery-killing loop;
+- delay the next observation for an unintended long interval;
+- roll back LoRaWAN counters or session state;
+- lose the flight/float latch;
+- lose RF-region context;
+- lose time/mission epoch;
+- lose last-known-good sensor/GNSS values needed for honest stale substitution;
+- duplicate archive record identity or destroy archive recovery progress.
+
+### State classification rule
+
+A state item is **mission-critical persistent state** if losing or rolling it back
+can cause one or more of:
+
+- protocol rejection, anti-replay failure, or session loss;
+- incorrect RF-region authorization;
+- incorrect science timestamp or mission chronology;
+- pathological wake timing or cadence;
+- loss of one-way lifecycle state;
+- duplicate or non-monotonic science record identity;
+- loss of archive traversal/delivery continuity;
+- stale data being represented incorrectly;
+- behavior materially different from an ordinary wake.
+
+Purely diagnostic values that do not affect those outcomes MAY be lost.
+
+### Confirmed minimum critical inventory
+
+The persistent-state inventory (§4, §8) SHALL explicitly cover, as applicable:
+
+| State class | Why it is critical |
+|---|---|
+| Commissioning/provisioning completion | Prevents accidental re-entry to commissioning/join behavior |
+| Flight latch and float latch | Preserves the one-way lifecycle and terminal float behavior (DDR-0002 `INV-LIFE-011`) |
+| Requested cadence and current scheduling tier | Preserves mission policy |
+| Scheduling anchor sufficient to derive the next wake | Prevents reset-induced excessive wake rate or unintended multi-day sleep |
+| Home/current RF region context | Preserves deterministic RF recovery, subject to fresh-position re-evaluation |
+| Per-region LoRaWAN credentials/session state | Required for communication at all |
+| Uplink/downlink frame-counter recovery state | Prevents protocol rejection and illegal reuse |
+| RTC validity/synchronization state and mission epoch | Preserves science chronology |
+| Last-known-good GNSS position + provenance/age anchor | Supports stale position and RF legality (DDR-0015) |
+| Last-known-good environmental sensor values + stale status | Supports fail-soft science (DDR-0009) |
+| Next science record identity | Prevents duplicate record IDs |
+| Archive write cursor / reconstructable anchors | Preserves archive continuity |
+| Archive-delivery watermark | Avoids arbitrary resend/skip after reset |
+| Battery/energy trend state | Preserves multi-wake cadence adaptation (DDR-0016) |
+| Calibration coefficients | Preserves scientific interpretability (DDR-0023) |
+| Last committed mission configuration | Preserves behavior across reset |
+
+Reset/fault/debug counters remain best-effort diagnostics unless some future
+feature gives them behavioral consequence.
+
+### INV-PERSIST-010 — Wake timing semantics survive reset; the exact timer need not
+
+The persistence design SHALL retain enough scheduling state to determine the
+intended next wake without overflow, wraparound, or reset-loop amplification.
+
+The representation need not be one exact timer register. An absolute deadline, a
+mission-time deadline, or cadence state plus an anchor are all acceptable.
+
+**Explicit tolerance (final pass, supersedes the pass-1 wording):** the *configured
+cadence* SHALL survive reset, but the exact transient next-wake timer/deadline MAY
+be lost when the consequence is at most **one missed or shifted observation**.
+After such a loss the device SHALL re-establish fixed start-to-start cadence
+(DDR-0001 `INV-WAKE-012`).
+
+What is forbidden is not timer loss; it is a rapid reset/wake energy loop or an
+unintended very long sleep.
+
+### INV-PERSIST-011 — Reset may omit, but SHALL NOT fabricate
+
+If reset interrupts an observation/wake cycle, firmware SHALL NOT reconstruct or
+transmit partially completed science as though that observation completed normally.
+
+After startup and persistent-state restoration, firmware SHALL either:
+
+1. begin a new clean science cycle immediately, when scheduler/energy policy makes
+   that appropriate; or
+2. return to low power and wait for the next intended science cycle.
+
+Either choice MAY produce a gap in the backend record stream. The implementation
+SHALL prefer a visible gap over:
+
+- corrupt measurements;
+- measurements mixed from two different wake cycles;
+- invented/default values represented as fresh;
+- duplicate record identity;
+- protocol-state rollback that prevents later uplinks.
+
+> **Omission is preferable to fabrication.**
+
+### INV-PERSIST-012 — A transient reset SHALL NOT become permanent telemetry loss
+
+Provided the independent radio, energy, RF-authorization, and provisioning
+requirements remain satisfied, a reset SHALL NOT leave the sonde in a state where
+future ordinary science transmission is permanently disabled merely because a
+previous wake was interrupted.
+
+The post-reset path must converge back to normal mission operation.
+
+There is **one mission**. A reset, watchdog recovery, brownout, RF loss, GNSS loss,
+sensor failure, or backend outage SHALL NOT create a new mission identity, reset
+the mission epoch, or restart record numbering.
+
+### Scheduler consequence
+
+The implementation MAY choose between redoing the science cycle after reboot and
+preserving the next scheduled deadline, provided the choice does not:
+
+- create a rapid reset/wake energy loop;
+- create an unintended very long scheduling delay;
+- publish partial science as complete;
+- violate persistent cadence semantics.
+
+The exact "redo now versus wait" rule remains an implementation binding while both
+outcomes satisfy these constraints.
+
+### Rationale
+
+Frame counters, wake timing, session keys, time, energy trend, and science
+provenance are equally "critical" in the sense that losing any one can materially
+break the mission: wrong counters or keys make data undeliverable; wrong wake
+timing can kill the battery or suppress science for days; wrong time ruins
+scientific interpretation.
+
+The persistence design is therefore **consequence-driven**, not limited to obvious
+protocol state.
+
+From the backend's perspective a missing record is diagnosable and honest. A
+corrupt or internally inconsistent record is worse, because it can contaminate
+scientific interpretation while appearing valid. Persistence does not exist to hide
+that a reset occurred; it exists to keep protocol, time, scheduling, mission, and
+provenance state coherent enough that normal operation resumes.
+
+### Proof additions
+
+#### P-PERSIST-010 — Reset during observation produces no fabricated record
+
+Inject reset before any sensor completes; after some sensors complete; after GNSS
+but before other sensors; during archive commit; and after archive commit but
+before transmission.
+
+Prove every backend-visible record is either a complete valid committed observation
+or absent.
+
+#### P-PERSIST-011 — Telemetry recovers after reset
+
+Reset the MCU at arbitrary wake-cycle points during normal flight. Prove:
+
+- critical persistent state restores;
+- later valid observations continue to archive;
+- later RF opportunities continue to transmit;
+- no reset-induced permanent communications-disabled state exists.
+
+#### P-PERSIST-012 — Gap is acceptable, corruption is not
+
+Force one scheduled observation to be lost by reset. Prove record identity and time
+ordering expose the missing observation as a gap while subsequent records remain
+correct and monotonic.
+
+#### Additional scenario proofs
+
+1. **Reset during sleep:** prove the sonde does not restart a rapid full wake loop
+   and respects the intended schedule.
+2. **Reset in float:** prove the float latch remains set.
+3. **Reset after sensor failure:** prove last-known-good + stale semantics survive.
+4. **Reset after region selection:** prove state is restored conservatively and
+   re-evaluated when fresh GNSS is available.
+5. **Reset with battery trend accumulated:** prove the energy trend survives and
+   cadence adaptation does not restart from scratch.
+6. **Diagnostic-state loss:** erase noncritical reset/debug counters and prove
+   mission behavior is unchanged.
+
+### Cross-references
+
+- DDR-0012 §22 — the boot path that restores this state.
+- DDR-0011 §25 — archive integrity, torn writes, and lazy reconstruction.
+- DDR-0001 §17 — start-to-start cadence and FULL/SLEEP admission.
+- DDR-0016 §11 — durable battery trend.
+- `../SYSTEM-INVARIANTS.md` SI-001, SI-004, SI-005, SI-018.
+

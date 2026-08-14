@@ -122,7 +122,9 @@ static bool in_function(const char *src, const char *sig, const char *needle)
  * AcquireGnssFix(0, ...) evaluates `while ((HAL_GetTick() - gps_start) < 0)`
  * zero times and falls straight through to the stale-position branch, having
  * power-cycled the receiver for nothing. s_last_fresh_fix_s never advances, so
- * the 6 h silence is permanent.
+ * the 6 h silence is permanent. (Window is 24 h since 2026-08-13 — DDR-0015
+ * BR-STALE-017; "permanent" was the point, and the fix below is what makes
+ * BR-STALE-019 "one fix clears it" reachable at all.)
  *
  * Invariant the fix must establish: the block that forces the enable flag must
  * also raise a zero gps_timeout_ms. */

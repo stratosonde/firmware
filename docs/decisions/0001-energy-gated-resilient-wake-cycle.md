@@ -654,3 +654,96 @@ The wake-cycle intent is now substantially captured. Before marking this DDR Acc
 Those questions are now narrow enough to interview independently without reopening the core wake-cycle philosophy.
 
 **Update (2026-08-09):** questions 1 (energy thresholds), 2 (reserve policy), 5 (temperature failure), and 6 (GNSS skipped vs failed) were resolved by the power-management interview — see **DDR-0016** (tiered energy model + droop admission; reserve-by-refusal in CRITICAL; last-known-good temperature; skip-cause provenance as a SHOULD). Questions 3 and 4 (archive-recovery burst bound, link-establishment evidence) were resolved by **DDR-0019** (confirmed-probe escalation, supervised burst with configured bounds).
+
+---
+
+## 17. Amendment 2026-08-13 (intent interview, final pass)
+
+**Disposition:** amend; no new record required.
+
+### INV-WAKE-012 — One start-of-wake energy decision; fixed start-to-start cadence
+
+**Per-wake admission is a single early decision.** At the beginning of a scheduled
+wake, after establishing current energy truth (`INV-WAKE-009`), the orchestrator SHALL
+select exactly one of:
+
+- **FULL CYCLE** — perform the ordinary observation cycle; or
+- **SLEEP** — do not deliberately start the observation; return to low power and try
+  again at the next scheduled epoch.
+
+For first flight, energy policy SHALL NOT deliberately select an intermediate
+partial-science mode (for example "sensors and radio but no GNSS"). A stale or absent
+GNSS fix, or a stale sensor value, is a **failure** outcome under DDR-0009 — not an
+energy mode.
+
+**Cadence is start-to-start.** The configured/effective observation interval SHALL be
+measured from one scheduled observation start to the next scheduled observation start,
+not as "finish work, then sleep N minutes."
+
+A ten-minute target therefore means scheduled epochs at `12:00`, `12:10`, `12:20`, and
+so on. Wake duration variation SHALL NOT accumulate into cadence drift.
+
+### Relationship to `BR-WAKE-003`
+
+`BR-WAKE-003` ("if energy permits basic science acquisition but not GNSS acquisition,
+the sonde SHALL still attempt environmental sensing and durable logging") remains
+correct and is **not** superseded.
+
+The distinction is deliberate and worth stating plainly:
+
+- `BR-WAKE-003` governs what happens when GNSS is *unaffordable or unavailable at the
+  moment it is attempted* — the observation degrades honestly rather than being
+  discarded. That behavior is required.
+- `INV-WAKE-012` governs what energy policy is allowed to *plan in advance*. Energy
+  policy does not pre-decide "this wake will be a GNSS-less wake."
+
+Put differently: the cycle may end up without GNSS; it may not be *designed* without
+GNSS.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-WAKE-017 | Scheduled observation epochs SHALL be computed start-to-start, so that variable wake duration does not accumulate cadence drift. | **CONFIRMED** |
+| BR-WAKE-018 | Per-wake energy admission SHALL yield FULL CYCLE or SLEEP for first flight, and SHALL NOT deliberately plan a partial observation. | **CONFIRMED** |
+| BR-WAKE-019 | Opportunistic archive/backlog work SHALL yield to the next live science epoch (DDR-0005 `INV-TX-001`). | **CONFIRMED** |
+| BR-WAKE-020 | Behavior when work overruns one or more scheduled epochs is an implementation binding, provided it neither drops indefinitely many epochs nor produces a rapid catch-up burst. | **INFERRED** |
+
+### Rationale
+
+A single admission point is far easier to prove than a set of partial modes: there are
+two outcomes to test per wake instead of a combinatorial ladder, and there is no risk
+of energy policy quietly deciding that position — the thing that makes the science
+interpretable — is the cheapest thing to discard.
+
+Start-to-start cadence keeps the science time series regular. "Sleep N after finishing"
+makes the effective interval a function of how long work happened to take, which
+couples the scientific sampling grid to incidental radio and flash timing.
+
+### Proof additions
+
+#### P-WAKE-011 — Fixed start-to-start scheduler
+
+Run with deliberately variable wake durations. Prove scheduled epochs remain on the
+start-to-start grid within the allowed jitter and do not drift by accumulated work
+time.
+
+#### P-WAKE-012 — FULL/SLEEP admission
+
+Present energy states around the admission boundary. Prove each wake either performs a
+complete ordinary cycle or returns to sleep, with no deliberately partial cycle.
+
+#### P-WAKE-013 — Degradation is failure-driven, not plan-driven
+
+Admit a FULL cycle, then force GNSS to fail. Prove the observation is still archived
+with honest stale/invalid position provenance, and that this path is distinguishable
+from a SLEEP decision.
+
+### Cross-references
+
+- DDR-0016 §11 — cadence as the long-term lever; FULL/SLEEP admission.
+- DDR-0002 §19 — the latched flight phase supplying the cadence target.
+- DDR-0009 §18 — bounded recovery producing honest stale values.
+- DDR-0010 §18 — cadence durability; exact transient timer may be lost.
+- `../SYSTEM-INVARIANTS.md` SI-011, SI-012.
+

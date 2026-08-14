@@ -594,3 +594,128 @@ The next high-value topic should be **power-management policy**, specifically th
 That is one of the few remaining areas where the product intent is clear at a high level but the statefulness and decision logic still need a precise contract.
 
 **Resolved:** this interview was conducted 2026-08-09 and is captured in **DDR-0016 (Power-Management and Energy-Adaptation Policy)**. Summary: a tiered energy-state model (voltage + trend + temperature) scales cadence first; expensive operations pass temperature-normalized droop admission tests; recovery is trend-driven; CRITICAL is refusal-based survival. Concrete thresholds await battery/load profiling (OD-PWR-001).
+
+---
+
+## 20. Amendment 2026-08-13 (intent interview, pass 1)
+
+**Disposition:** amend — scope clarification and confirmation. Most of this delta was
+already normative after the 2026-08-12 merge; only the downlink-safety and
+persisted-config-recovery wording is new.
+
+### Scope clarification for first flight
+
+First-flight firmware does **not** require:
+
+- firmware-over-the-air update;
+- remote mission reconfiguration;
+- a finalized downlink command protocol.
+
+**Firmware OTA is not a planned LoRaWAN capability for this product.** The interview
+explicitly rejected it. The authoritative record for firmware servicing and the
+non-OTA policy is **DDR-0025**; DDR-0027 `INV-PROTO-004` depends on it. This section
+is a scope pointer, not a second policy.
+
+### Unexpected downlinks in first-flight firmware must be safe
+
+Unexpected or unsupported downlinks SHALL be handled safely:
+
+- parse only enough to avoid memory or control-flow faults;
+- log or count the unsupported downlink when practical;
+- ignore unsupported content;
+- continue the mission;
+- **never crash, reset, or corrupt state merely because a downlink was received.**
+
+A received downlink is untrusted input arriving at a device that cannot be recovered
+after launch. Robustness here is a mission-survival requirement, not politeness.
+
+### Activation timing — confirmation
+
+`OD-CONFIG-004` was already resolved 2026-08-12 by `INV-CONFIG-014`: an accepted
+configuration becomes active at the **next ordinary wake boundary**, never mid-cycle.
+
+The 2026-08-13 interview independently reconfirmed this as the product default. A
+future field or one-shot command may explicitly define immediate semantics, but
+next-wake activation remains the default. No change to `INV-CONFIG-014` is required.
+
+### Persisted-config recovery is distinct from proposed-update validation
+
+Two different rules apply, and conflating them is a defect:
+
+1. **A proposed *update*** that is invalid does not replace known-good config. This
+   remains correct (§11).
+2. **The persisted *operational configuration itself*** being old, partially
+   incompatible, or semantically out of range at boot is a different situation. Here
+   boot progress has priority:
+
+   1. boot progress takes precedence;
+   2. do not silently ignore the problem;
+   3. log the incompatibility/repair when practical;
+   4. preserve valid fields where unambiguous;
+   5. clamp a value to a defined safe bound when that is semantically obvious;
+   6. otherwise substitute the field's documented sane default;
+   7. continue operation.
+
+Example: if a field contains `7` and the supported minimum is `8`, and clamping has
+unambiguous meaning, record the repair and use `8`.
+
+An unsupported or corrupt **ordinary mission** configuration SHALL NOT by itself
+hard-stop the device. This is consistent with the existing `INV-CONFIG-011` (clamp
+scalars) and `INV-CONFIG-012` (reject only structurally unrecoverable config).
+
+**Security/protocol credentials remain outside this fail-soft rule** — see DDR-0018,
+where missing or unverified session material is a hard commissioning gate.
+
+### Pre-launch validation class
+
+Operational mission-configuration errors are generally **warning / go-with-repair**
+conditions:
+
+- show a not-ready/warning indication to the operator (DDR-0018 `INV-COMM-009`);
+- log and repair/clamp/default as defined;
+- do **not** treat them like missing session credentials.
+
+### Configuration classes — restated
+
+1. **Security / protocol commissioning state** — no fabricated defaults; hard
+   provisioning requirement (DDR-0018).
+2. **Operational mission configuration** — validated, repaired/clamped/defaulted where
+   safe, warning emitted, mission may proceed.
+3. **Future remote command/update protocol** — not required for first flight; must be
+   authenticated and explicitly specified before any behavior is enabled.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-CONFIG-014 | An unsupported or malformed downlink SHALL NOT cause a crash, reset, or state corruption; it SHALL be ignored and logged where practical. | **CONFIRMED** |
+| BR-CONFIG-015 | Corrupt or out-of-range persisted *operational* configuration SHALL NOT by itself prevent boot; it SHALL be repaired/clamped/defaulted with the repair recorded. | **CONFIRMED** |
+| BR-CONFIG-016 | Configuration repair SHALL NOT be applied to security/session material, which remains a hard gate under DDR-0018. | **CONFIRMED** |
+| BR-CONFIG-017 | Firmware OTA over LoRaWAN is out of scope for this product (DDR-0025). | **CONFIRMED** |
+
+### Proof additions
+
+#### P-CONFIG-009 — Next-wake activation
+
+Apply a valid future config during an active wake. Prove the current wake completes
+using the old active config, the new config is durable, and the next wake uses it.
+
+#### P-CONFIG-010 — Boot clamps a recoverable field
+
+Boot with an operational field just outside its valid bound. Prove the issue is
+diagnosable/logged, the safe bound or default is used, and boot continues.
+
+#### P-CONFIG-011 — Unsupported downlink is safe
+
+Deliver arbitrary unsupported first-flight downlink content. Prove no crash, reset, or
+memory corruption occurs; the unsupported command has no mission effect; and an
+event/diagnostic is retained when practical.
+
+### Cross-references
+
+- DDR-0025 — firmware servicing and the authoritative non-OTA policy.
+- DDR-0027 — protocol evolution without OTA dependency.
+- DDR-0018 §10 — credentials are a hard gate, unlike operational config.
+- DDR-0012 §22 — boot must continue despite recoverable config problems.
+- `../SYSTEM-INVARIANTS.md` SI-019, SI-020.
+

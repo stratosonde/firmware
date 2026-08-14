@@ -1,6 +1,7 @@
 # Stratosonde Requirements Traceability Matrix
 
 **Date:** 2026-08-12 (merges the round-2 and round-3 interview matrices into one living V-model artifact)
+**Updated:** 2026-08-13 (three-pass intent interview merged; see §"2026-08-13 rows" and `../decisions/merge-ledger-2026-08-13.md`)
 **Purpose:** Link product intent to DDR ownership, implementation responsibility, and objective proof.
 
 Every flight-critical row should answer:
@@ -134,3 +135,50 @@ Round-2 "action" dispositions are now **merged** into the corpus (2026-08-12); t
 11. Verify archive reconstruction under metadata corruption/power cuts.
 12. Build the first target-HIL lane and retain evidence.
 
+
+---
+
+## 5. 2026-08-13 rows (three-pass intent interview)
+
+New/changed requirements from the 2026-08-13 merge. Implementation bindings marked
+**(none yet)** are intent without code — they are the real gap list.
+
+| Requirement | Intent | DDR | Implementation binding | Proof |
+|---|---|---|---|---|
+| SYS-RF-010 | Stale-position RF budget is 24 h, and it is the only time-based RF cutoff | DDR-0015 `BR-STALE-017/018/020` | `GPS_LOSS_SILENCE_S` = `24U*3600U` (`LoRaWAN/App/lora_app.h`), evaluated in `lora_app.c` | `P-STALE-014`; `test_stale_position_budget_is_24h` (source scan) + FW-CONF-023 behavioral |
+| SYS-RF-011 | One valid fix clears staleness silence on the same wake | DDR-0015 `BR-STALE-019` | `s_last_fresh_fix_s` age reference | `P-STALE-015` / FW-CONF-024 |
+| SYS-RF-012 | RTC sync age never silences RF | DDR-0013 `INV-TIME-009`, DDR-0015 `BR-STALE-020` | audit — no second timer may exist | `P-STALE-016`, `P-TIME-010` / FW-CONF-025 |
+| SYS-RF-013 | Band 0 commissioned `home_region` fallback, expiring into silence | DDR-0015 `INV-STALE-008` | **(none yet)** — no `home_region` provisioning in code | `P-STALE-011..013` / FW-CONF-026 |
+| SYS-LIFE-010 | One-way ascent→float cadence latch, terminal for the mission | DDR-0002 `INV-LIFE-011`, `BR-LIFE-023/025` | `mission_state.c` FLOAT latch, `mission_logic.c` detector | `P-LIFE-012` / FW-CONF-047 |
+| SYS-LIFE-011 | Float latch survives reset | DDR-0002 `BR-LIFE-024` | DR3-persisted mission state | `P-LIFE-013`, `P-BOOT-012` / FW-CONF-033 |
+| SYS-LIFE-012 | Automatic pressure launch works without the operator action | DDR-0002 `BR-LIFE-027` | launch detector + arming hook | `P-LIFE-014`, `P-COMM-013` / FW-CONF-048 |
+| SYS-PWR-010 | Per-wake admission is FULL CYCLE or SLEEP | DDR-0001 `BR-WAKE-018`, DDR-0016 `BR-PWR-018` | `power_model.c` / `transmit_plan.c` (divergence 3) | `P-WAKE-012`, `P-PWR-013` / FW-CONF-028 |
+| SYS-PWR-011 | Battery/energy trend is durable across reset | DDR-0016 `BR-PWR-016` | backup-register/flash trend state | `P-PWR-015` / FW-CONF-029 |
+| SYS-SCHED-001 | Cadence is start-to-start, not finish-plus-sleep | DDR-0001 `BR-WAKE-017` | wake scheduler | `P-WAKE-011` / FW-CONF-027 |
+| SYS-PERSIST-010 | Reset may omit an observation but never fabricate one | DDR-0010 `INV-PERSIST-011` | archive commit ordering | `P-PERSIST-010` / FW-CONF-031 |
+| SYS-PERSIST-011 | Transient reset never permanently disables telemetry; one mission identity | DDR-0010 `INV-PERSIST-012` | persistent-state restore path | `P-PERSIST-011/012` / FW-CONF-032 |
+| SYS-PERSIST-012 | Cadence survives reset; exact transient timer may be lost | DDR-0010 `INV-PERSIST-010` | scheduler anchor | `P-BOOT-013` / FW-CONF-034 |
+| SYS-STORE-010 | Isolated torn record is skipped, never truncating the archive | DDR-0011 `BR-STORE-001` | archive traversal/validation | `P-STORE-011` / FW-CONF-035 |
+| SYS-STORE-011 | No bulk archive scan as a boot prerequisite; lazy validation | DDR-0011 `BR-STORE-002/003`, DDR-0012 `INV-BOOT-010` | boot + archive index recovery | `P-STORE-012..014`, `P-BOOT-014` / FW-CONF-036/037/038 |
+| SYS-FAIL-010 | Bounded cross-subsystem recovery; normal service immediately on success | DDR-0009 `BR-FAIL-016/017` | sensor/GNSS/radio drivers | `P-FAIL-011` / FW-CONF-039 |
+| SYS-FAIL-011 | Radio recovery never triggers an in-flight join | DDR-0009 `BR-FAIL-018` | radio/stack reset paths | fault injection / FW-CONF-040 |
+| SYS-FAIL-012 | No reset-count or failure-history escalation | DDR-0009 `OD-FAIL-006` resolved, DDR-0020 | audit | `P-FAIL-012` / FW-CONF-041 |
+| SYS-ARCH-010 | Arbitrary retained-ID lookup; linear search acceptable | DDR-0004 `BR-ARCH-018` | archive lookup | `P-ARCH-011` / FW-CONF-042 |
+| SYS-ARCH-011 | Unavailable requested ID returns a useful substitute; returned ID authoritative | DDR-0004 `BR-ARCH-019` | archive request handler | `P-ARCH-012` / FW-CONF-043 |
+| SYS-ARCH-012 | Record structure stable under partial failure | DDR-0004 `BR-ARCH-017` | record encoder | `P-ARCH-013` / FW-CONF-046 |
+| SYS-TX-010 | Explicit record request preempts backfill and is ephemeral | DDR-0005 `BR-TX-023/024` | **(none yet)** — no request path implemented | `P-TX-011/012` / FW-CONF-044 |
+| SYS-TX-011 | Energy and RF legality outrank any request | DDR-0005 `BR-TX-025` | veto ordering in `transmit_plan.c` | `P-TX-013` / FW-CONF-045 |
+| SYS-GNSS-010 | Readiness uses the same fix-acceptance predicate as flight | DDR-0003 `BR-GNSS-021` | shared acceptance helper | `P-GNSS-011` / FW-CONF-049 |
+| SYS-GNSS-011 | Never-fixed placeholder cannot masquerade as a position | DDR-0003 §17 | position provenance encoding | `P-GNSS-012` / FW-CONF-051 |
+| SYS-COMM-010 | Provisioning is a hard gate; readiness check is separate and unambiguous | DDR-0018 `BR-COMM-017..020`, `INV-COMM-009` | commissioning state machine, LED | `P-COMM-011/012/014` / FW-CONF-049/050 |
+| SYS-CFG-010 | Unsupported downlink is safe (no crash/reset/corruption) | DDR-0014 `BR-CONFIG-014` | downlink handler | `P-CONFIG-011` / FW-CONF-052 |
+| SYS-CFG-011 | Corrupt persisted operational config is repaired, not fatal; credentials excluded | DDR-0014 `BR-CONFIG-015/016` | `config.c` validator | `P-CONFIG-010` / FW-CONF-053 |
+| SYS-PROTO-001 | Deployed packet versions stay decodable; no OTA dependency | DDR-0027 `BR-PROTO-001..005` | backend codecs (ground-side) | `P-PROTO-001..004` / FW-CONF-054 |
+
+### Closure note
+
+Rows whose implementation binding reads **(none yet)** — SYS-RF-013 (`home_region`
+Band 0 fallback) and SYS-TX-010 (explicit record request) — are the two places where the
+2026-08-13 intent has no code at all. Everything else is either already implemented,
+partially implemented, or a test gap. Per the header rule, none of these rows are closed
+until the proof column points at real evidence tied to a build.

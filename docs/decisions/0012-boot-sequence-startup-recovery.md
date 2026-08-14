@@ -552,17 +552,34 @@ Need to define whether firmware:
 - declares LoRaWAN unavailable;
 - uses another provisioned session mechanism.
 
-### OD-BOOT-005 — Post-reset cadence initialization
+### OD-BOOT-005 — Post-reset cadence initialization — **NARROWED 2026-08-13**
 
-Need to decide the exact initial pressure-history/filter state after reboot in flight.
+Need to decide the exact initial pressure-history/filter state after reboot in
+flight.
 
-Current direction: begin simple and let new measurements rapidly re-establish dynamic versus stable cadence.
+Current direction: begin simple and let new measurements rapidly re-establish the
+detector state.
 
-### OD-BOOT-006 — Reset-loop behavior
+**2026-08-13 narrowing:** the *reversible* dynamic-versus-stable cadence question is
+gone (DDR-0002 `INV-LIFE-011`). Cadence after reset is determined by the **restored
+latched flight phase**, not by rebuilt pressure history. Pressure history now only
+needs to be good enough to (a) detect launch if still pre-flight, or (b) qualify
+float if in ascent and not yet latched. A float-latched unit does not need its
+pressure history rebuilt to choose cadence at all.
 
-Repeated resets remain unresolved.
+### OD-BOOT-006 — Reset-loop behavior — **RESOLVED 2026-08-13**
 
-Need to ensure any reset-loop mitigation does not accidentally create a permanent mission-stop state.
+Original: repeated resets unresolved; any mitigation must not create a permanent
+mission-stop state.
+
+**Resolved by DDR-0020 + DDR-0009 `OD-FAIL-006` + the 2026-08-13 interview:** there
+is **no** reset-count adaptation, no reduced recovery mode, no permanent feature
+disable, and no give-up state. Every boot re-enters the same ordinary recovery path
+indefinitely.
+
+The residual question — whether extreme immediate reset loops warrant additional
+hardware/boot-level brownout protection — is an engineering matter tracked in
+`open-intent-questions.md` item 6, not a product-policy decision.
 
 ### OD-BOOT-007 — RTC validity at boot
 
@@ -696,3 +713,106 @@ Questions should include:
 7. What happens after full power loss if RTC backup power was also lost?
 
 That DDR will complete the time-related decisions first surfaced in the GNSS interview.
+
+---
+
+## 22. Amendment 2026-08-13 (intent interview, pass 1)
+
+**Disposition:** amend; no new record required. Resolves `OD-BOOT-006` and narrows
+`OD-BOOT-005` (§18).
+
+### Refined boot principle
+
+Boot is the path back to an ordinary mission wake — **not a maintenance window**.
+
+The startup sequence SHALL prioritize restoring the minimum trustworthy state
+required for:
+
+- lifecycle correctness;
+- wake scheduling;
+- time continuity;
+- RF legality/session correctness;
+- current science acquisition;
+- a safe return to low power.
+
+Bulk archive reconstruction SHALL NOT be an unconditional prerequisite to any of
+those goals.
+
+### INV-BOOT-010 — Boot completes without bulk archive reconstruction
+
+Startup SHALL reach ordinary mission operation without requiring a full archive or
+whole-flash scan.
+
+If archive metadata is unavailable or contradictory, startup SHALL:
+
+- mark archive traversal as needing reconstruction;
+- **not** fabricate an index;
+- **not** treat a full archive scan as a hard precondition for boot completion;
+- continue ordinary mission operation where safe;
+- reconstruct in bounded/lazy work per DDR-0011 (`BR-STORE-002`).
+
+### Flight-state recovery replaces flight-dynamics recovery
+
+Any text in §14 suggesting that a recovered sonde should rebuild a reversible
+pressure-dynamics classifier — and could therefore return from float to fast cadence
+— is **superseded** by DDR-0002's terminal float latch (`INV-LIFE-011`).
+
+Post-reset behavior follows the restored persistent lifecycle state:
+
+| Restored state | Behavior |
+|---|---|
+| Commissioning-ready | Remain commissioning-ready unless a real launch transition occurs |
+| Flight/ascent, not yet float-latched | Resume the ascent target cadence, subject to DDR-0016; float qualification may still occur |
+| Float-latched | Remain float-latched; select the float/slow target cadence; never re-enter ascent cadence |
+
+### Wake-schedule recovery
+
+Startup SHALL restore enough scheduler state to avoid either:
+
+- an unintended rapid reset/wake loop that consumes the battery; or
+- an unintended very long delay caused by timer rollover or default initialization.
+
+Exact timer-register restoration is **not** required; semantic preservation of the
+intended next wake is (DDR-0010 `INV-PERSIST-010`). Losing at most one shifted
+observation is acceptable; the device then re-establishes fixed start-to-start
+cadence.
+
+### Rationale
+
+A brownout loop is exactly the condition in which large startup reads are least
+desirable: energy is scarce, and every retry pays the cost again. Startup should be
+small, deterministic, and oriented toward mission survival.
+
+Making archive repair a boot gate would convert a storage inconvenience into a
+mission-ending livelock — the opposite of DDR-0009's fail-soft intent.
+
+### Proof additions
+
+#### P-BOOT-012 — Float latch survives reset
+
+Reset with the float latch set. Prove float remains latched and the float cadence
+target is selected on the first ordinary post-reset scheduling decision.
+
+#### P-BOOT-013 — Long-sleep reset does not collapse the schedule
+
+Reset during long sleep. Prove the schedule does not collapse into rapid waking and
+does not extend into an unintended multi-day delay.
+
+#### P-BOOT-014 — Corrupt archive metadata still boots
+
+Reset with corrupt archive metadata. Prove the science mission boots and continues,
+and that archive reconstruction is deferred/bounded rather than blocking.
+
+#### P-BOOT-015 — Single invalid history item degrades only itself
+
+Reset with one invalid sensor-history item. Prove only that capability degrades and
+the rest of the cycle proceeds.
+
+### Cross-references
+
+- DDR-0002 §19 — the terminal float latch this boot path must honor.
+- DDR-0010 §18 — what must be restored and what may be lost.
+- DDR-0011 §25 — bounded/lazy archive reconstruction and skip-and-continue.
+- DDR-0009 §18 — bounded recovery, no reset-count escalation.
+- `../SYSTEM-INVARIANTS.md` SI-004, SI-005, SI-010.
+

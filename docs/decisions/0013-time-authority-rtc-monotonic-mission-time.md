@@ -578,3 +578,83 @@ Questions should include:
 8. What configuration belongs per device versus per mission?
 
 That DDR will connect persistence mechanics with mission-specific tunability.
+
+---
+
+## 18. Amendment 2026-08-13 (intent interview, passes 1 and 2)
+
+**Disposition:** amend; no new record required.
+
+### Confirmed time hierarchy
+
+1. Valid GNSS UTC is the authoritative absolute time source.
+2. On a valid GNSS sync, firmware sets/corrects the STM32 RTC according to the
+   existing monotonic-time safety rules (§7).
+3. Whenever fresh GNSS time is unavailable, **the STM32 RTC remains the working
+   absolute clock** — it is not discarded, and its output is not treated as invalid.
+4. Mission monotonic time remains independent and SHALL NOT move backward because of
+   RTC or GNSS correction (`INV-GNSS-006`, §6).
+
+### INV-TIME-009 — RTC age alone does not stop the mission or RF
+
+Loss of fresh GNSS time SHALL NOT, by itself:
+
+- stop science collection;
+- invalidate all timestamps;
+- force RF silence.
+
+RF silence caused by prolonged GNSS outage is governed by **position/region
+uncertainty** under DDR-0015 (`BR-STALE-018`), not by an independent "the RTC has been
+unsynchronized too long" timer.
+
+While RF is permitted by the position/region policy, RTC-derived absolute UTC remains
+acceptable for packet and science timestamps, with GNSS freshness/provenance marked
+accordingly.
+
+### New behavioral requirement
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-TIME-015 | Absence of fresh GNSS time SHALL NOT by itself stop science, invalidate stored timestamps, or silence RF. | **CONFIRMED** |
+| BR-TIME-016 | No second, time-specific RF cutoff SHALL be introduced; the DDR-0015 position-staleness budget is the only RF-silence timer. | **CONFIRMED** |
+| BR-TIME-017 | RTC-derived timestamps used during a GNSS outage SHALL be marked with honest freshness/provenance and SHALL NOT be presented as fresh GNSS time. | **CONFIRMED** |
+
+### Rationale
+
+GNSS is expected to supply both position and authoritative UTC, but the STM32 RTC is
+accurate enough to preserve useful time continuity across the same outage window in
+which the system is already willing to operate on stale geographic information.
+
+The scientifically dangerous failure is **pretending RTC-derived time is fresh GNSS
+time**, not using the RTC at all. Honest provenance solves that; discarding the clock
+would not.
+
+### Open numeric policy — deliberately not chosen
+
+The interview considered examples such as six, twelve, or twenty-four hours for
+prolonged GNSS outage but did **not** select an independent time number.
+
+Do not add a second time-specific cutoff. The configured stale-**position** legality
+budget from DDR-0015 (24 h for first flight, `BR-STALE-017`) is the only relevant
+bound.
+
+### Proof additions
+
+#### P-TIME-009 — RTC carries the mission through a GNSS outage
+
+Run without GNSS time sync for an extended period. Prove science continues, records
+carry RTC-derived UTC with honest provenance, and monotonic mission time never steps
+backward.
+
+#### P-TIME-010 — No independent time-based RF veto
+
+With RF otherwise authorized by fresh-enough position, let RTC sync age grow. Prove no
+RF silence is triggered by time age alone.
+
+### Cross-references
+
+- DDR-0015 §11 — the single RF-silence budget (position-based).
+- DDR-0003 §17 — position provenance and honest placeholders.
+- DDR-0010 §18 — RTC validity/mission-epoch durability across reset.
+- `../SYSTEM-INVARIANTS.md` SI-014.
+

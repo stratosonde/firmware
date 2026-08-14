@@ -188,8 +188,21 @@ typedef enum {
 /* #141: GPS-loss silence - no fresh fix for this long -> radio dark (logging
  * continues, GPS retried every cycle). FLIGHT only (DDR-0018 exempts
  * commissioning). */
+/* DDR-0015 BR-STALE-017 (2026-08-13 intent interview): this macro is the binding
+ * of the SINGLE stale-position RF budget, and it is 24 h. Boundary convention:
+ * age <= 24 h permitted, > 24 h silent (DDR-0015 P-STALE-014).
+ *
+ * WAS 6 h until 2026-08-13. The 6 h value came from DDR-0016 INV-PWR-009 /
+ * BR-PWR-014, which framed the silence as ENERGY conservation ("a stale position
+ * is not worth radio energy"). That framing was superseded: the sonde goes silent
+ * because it can no longer prove which regulatory region it is in, so the budget
+ * is a REGULATORY bound owned by DDR-0015, not an energy bound. DDR-0015
+ * BR-STALE-020 additionally forbids any second, independent time-based RF cutoff
+ * (e.g. an RTC-sync-age timer). See docs/decisions/merge-ledger-2026-08-13.md
+ * section 3 for the full conflict resolution. */
+
 #ifndef GPS_LOSS_SILENCE_S
-#define GPS_LOSS_SILENCE_S  (6U * 3600U)   /* 6 h */
+#define GPS_LOSS_SILENCE_S  (24U * 3600U)  /* 24 h - DDR-0015 BR-STALE-017 */
 #endif
 
 /* S-A (#211, 2026-08-12 review): acquisition budget for the #141

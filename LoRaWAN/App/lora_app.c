@@ -2056,7 +2056,21 @@ static void SendTxData(void)
    * until a fresh fix clears it — "keep doing science and logging and keep
    * trying GPS, but stop transmitting". FLIGHT only: commissioning is exempt
    * (DDR-0018). The grace epoch arms at this boot's first cycle, so a
-   * never-fixed unit gets the full window before going dark. */
+   * never-fixed unit gets the full window before going dark.
+   *
+   * DDR-0015 (2026-08-13 intent interview) now OWNS this budget and binds it to
+   * 24 h (BR-STALE-017). The reason for the silence changed with it: it is
+   * REGULATORY (the sonde can no longer prove which region it is in), not energy
+   * conservation as DDR-0016 INV-PWR-009 originally framed it. Consequences:
+   *   - exactly one staleness budget exists; BR-STALE-020 forbids a second,
+   *     independent time-based cutoff (notably an RTC-sync-age timer - see
+   *     DDR-0013 INV-TIME-009);
+   *   - one quality-valid fix clears the silence immediately, on that same wake
+   *     (BR-STALE-019), which is what the s_last_fresh_fix_s reference below does;
+   *   - science, archive logging, RTC timekeeping and GPS retries all continue
+   *     while dark (BR-STALE-018).
+   * The never-fixed (Band 0) home-region fallback shares this same budget,
+   * anchored at the flight transition (DDR-0015 INV-STALE-008). */
   {
     /* F-1 (#176): the whole grace policy runs on the UTC clock
      * (SysTimeGet().Seconds). Before the first sync this is the SysTime
@@ -2064,7 +2078,7 @@ static void SendTxData(void)
      * which is exactly right: an unsynced unit has no trustworthy absolute
      * age to carry across a reset. Post-sync the epoch is real UTC, so the
      * persist and restore gates below are reachable and a reset can no
-     * longer restart the 6 h window. */
+     * longer restart the 24 h window. */
     uint32_t utc_now_s = SysTimeGet().Seconds;
     if (s_gps_loss_epoch_s == 0) {
       /* STAB-01 (#148): restore the persisted loss epoch - a reset must not

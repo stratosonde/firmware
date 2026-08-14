@@ -484,7 +484,9 @@ static void test_decide_transmit_plan(void)
 
     /* RV-08 (#164, DDR-0021 conformance): temperature no longer gates GPS.
      * -60C is normal float ambient for this airframe; the cold lockout x
-     * GPS-loss silence composed into a 6 h dark sawtooth for the whole float. */
+     * GPS-loss silence composed into a 6 h dark sawtooth for the whole float.
+     * (Historical window; the silence budget is 24 h since 2026-08-13 per
+     *  DDR-0015 BR-STALE-017. The lockout removal is unaffected.) */
     memset(&vs, 0, sizeof(vs));
     p = DecideTransmitPlan(&vs, 5200, -60.0f, false, 1000, true, false, false);
     CHECK_REGRESSION(p.veto == VETO_NONE, "RV-08");

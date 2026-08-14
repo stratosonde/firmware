@@ -243,3 +243,148 @@ The remaining migration topics are:
 
 After these, the legacy DDR set is fully absorbed and retirable, and the V2 corpus is the complete self-contained product design.
 
+
+---
+
+## 10. Amendment 2026-08-13 (intent interview, passes 1 and final)
+
+**Disposition:** amend; no new record required.
+
+### Key distinction — provisioning completion versus launch readiness
+
+The interview separated two concepts that must not be conflated.
+
+#### 1. Provisioning / session commissioning — a hard gate
+
+Before a unit is considered deployment-ready:
+
+- every required/configured LoRaWAN region is joined on the ground
+  (`INV-COMM-001`);
+- credentials/session material are durably written **and read back and verified**
+  (`INV-COMM-002`);
+- the unit SHALL NOT declare commissioning complete while required keys or session
+  state are missing or unverified.
+
+In-flight OTAA join remains forbidden. Missing/unverified security or session
+material is **not** an ordinary warning-level configuration error — it is a hard
+blocker. (Contrast DDR-0014, where ordinary operational configuration problems are
+warn-and-repair.)
+
+#### 2. Launch-readiness check — the preferred workflow, but never the sole trigger
+
+At the launch site, after privacy-sensitive movement is complete, the operator
+performs the deliberate readiness/start action.
+
+That action SHOULD run a bounded go/no-go check:
+
+1. acquire a GNSS fix using the **normal** DDR-0003 quality predicate
+   (`BR-GNSS-021`) — no weaker commissioning-only criterion;
+2. read the required sensors successfully, or classify any failure clearly;
+3. send the intended readiness/data uplink using the provisioned session;
+4. receive the expected acknowledgement;
+5. present an unambiguous positive "ready/go" indication **only** when the
+   required checks pass.
+
+The physical indication pattern is not architectural. With a single LED, the
+implementation must still make "ready" versus "not ready/warning" clear enough for
+an operator under launch-day conditions.
+
+### Automatic launch remains mandatory
+
+Launch day is busy and operators may forget the deliberate step.
+
+The readiness action SHALL NOT be the only way to enter flight. Once credential
+provisioning is complete, qualifying pressure-based launch detection SHALL
+automatically enter the one-way flight state even if the readiness check was never
+performed (DDR-0002 `BR-LIFE-027`). This is a deliberate fail-safe against human
+omission, consistent with the existing dual-trigger door (`INV-COMM-007`).
+
+### Privacy rationale
+
+Before the flight transition, precise horizontal X/Y remains suppressed from
+ordinary transmitted commissioning telemetry (`INV-COMM-006`, DDR-0002
+`INV-LIFE-002`).
+
+The operator chooses when the device is at an acceptable launch location and may
+deliberately run the readiness check. After actual pressure-detected launch,
+mission continuity takes priority and flight behavior begins automatically.
+
+### Home-region implication
+
+Provisioning SHOULD include the deployment `home_region` required by DDR-0015
+(`INV-STALE-008`) for the abnormal case where automatic launch occurs before any
+valid mission X/Y has been accepted.
+
+For the current North American first-flight deployment this may bind to US915.
+The architecture SHALL NOT hard-code US915 as a universal constant; it is a
+commissioned/deployment value.
+
+### INV-COMM-009 — Go/no-go must be externally obvious
+
+The launch-readiness result SHALL be externally observable without a PC or debug
+interface.
+
+The product requirement is semantic:
+
+- a positive ready indication when the required checks pass;
+- a clearly non-ready/warning indication otherwise;
+- never a false positive.
+
+Blink frequency, colour, and pattern are implementation/UI bindings.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-COMM-017 | Commissioning SHALL NOT be declared complete unless every required region's credential/session material is durably written and verified. | **CONFIRMED** |
+| BR-COMM-018 | The launch-readiness check SHALL use the DDR-0003 normal fix-acceptance predicate (`BR-GNSS-021`) and SHALL NOT apply a weaker commissioning-only position criterion. | **CONFIRMED** |
+| BR-COMM-019 | A positive ready indication SHALL require GNSS acceptance, required-sensor success, and an acknowledged readiness uplink. | **CONFIRMED** |
+| BR-COMM-020 | Failure of the readiness check SHALL leave the unit recoverable and retryable, and SHALL NOT block later automatic launch. | **CONFIRMED** |
+| BR-COMM-021 | Provisioning SHOULD record a deployment `home_region` for the DDR-0015 never-fixed fallback. | **CONFIRMED** |
+| BR-COMM-022 | The exact operator gesture and indication pattern are implementation bindings. | **CONFIRMED** |
+
+### Future local diagnostics
+
+A wired local development/health interface over an available serial or two-wire
+path is useful future work for manufacturing/development diagnostics (GNSS
+quality, sensor health, and similar), but it is **not** required for first-flight
+operation and is not part of the commissioning hard gate defined here.
+
+### Proof additions
+
+#### P-COMM-011 — Readiness success
+
+From a fully provisioned commissioning-ready state: perform the operator action,
+provide an accepted GNSS fix, make sensors succeed, and acknowledge the readiness
+uplink. Prove a positive ready indication occurs.
+
+#### P-COMM-012 — Readiness failure is visible
+
+Repeat with one required readiness condition missing. Prove no false-positive
+ready indication occurs and the device remains recoverable/retryable.
+
+#### P-COMM-013 — Forgotten operator action does not lose the mission
+
+From a fully provisioned state, never perform the readiness action; provide a
+valid launch pressure trend. Prove:
+
+- automatic flight transition occurs;
+- commissioning privacy mode is left permanently for the mission;
+- ascent cadence begins;
+- no in-flight join path is entered.
+
+#### P-COMM-014 — Provisioning cannot complete with a missing region session
+
+Remove or invalidate one required region's commissioned session before
+provisioning completion. Prove the unit does not declare provisioning complete or
+launch-ready.
+
+### Cross-references
+
+- DDR-0002 §19 — one-way lifecycle and the ascent/float latch.
+- DDR-0003 §17 — the shared fix-acceptance predicate.
+- DDR-0015 — `home_region` fallback and its 24 h expiry.
+- DDR-0014 — ordinary operational configuration is warn-and-repair, unlike
+  credentials.
+- `../SYSTEM-INVARIANTS.md` SI-003, SI-015.
+

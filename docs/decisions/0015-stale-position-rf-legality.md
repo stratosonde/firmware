@@ -82,15 +82,20 @@ No additional event-log entries, telemetry bits, or authorization-history machin
 
 ---
 
-## 3. The Three Staleness Bands
+## 3. The Staleness Bands
 
-The RF authorization outcome for a wake cycle follows the position provenance:
+The RF authorization outcome for a wake cycle follows the position provenance.
+
+Band 0 was added 2026-08-13 (§11) to cover the previously silent "no valid position
+ever obtained" case. The configured maximum is **24 h** for first flight
+(`BR-STALE-017`).
 
 | Band | Position state | RF behavior |
 |---|---|---|
-| 1 | Fresh fix this cycle | Full DDR-0006/0020 policy: direct region authoritative; ring search if no-region; silence if restricted |
-| 2 | Stale, age ≤ configured max | Full normal RF policy on the stale geography: held region with full privileges, or ring search from the stale no-region position |
-| 3 | Stale, age > configured max | RF silence. Science, archive, and GNSS attempts continue. Band 1 resumes on the wake with the first fresh fix |
+| 0 | **Never** had an accepted mission fix, within budget of the flight transition | Position is invalid/degraded (never fresh). RF MAY be authorized using the commissioned `home_region` (`INV-STALE-008`) |
+| 1 | Fresh fix this cycle | Full DDR-0006/0007 policy: direct region authoritative; ring search if no-region; silence if restricted |
+| 2 | Stale, age ≤ configured max (24 h) | Full normal RF policy on the stale geography: held region with full privileges, or ring search from the stale no-region position |
+| 3 | Stale, age > configured max (24 h), **or** Band 0 expired | RF silence. Science, archive, and GNSS attempts continue. Band 1 resumes on the wake with the first fresh fix |
 
 ---
 
@@ -145,9 +150,19 @@ This risk is **explicitly accepted**:
 
 ## 7. Open Decisions
 
-### OD-STALE-001 — Maximum staleness value
+### OD-STALE-001 — Maximum staleness value — **RESOLVED 2026-08-13**
 
-The concrete maximum staleness age is undecided. It should be chosen as a mission configuration value (per DDR-0014 configuration classes), balancing regulatory-risk exposure against silent-gap tolerance. Candidate order of magnitude discussed: hours.
+The concrete maximum staleness age was undecided. It should be chosen as a mission
+configuration value (per DDR-0014 configuration classes), balancing regulatory-risk
+exposure against silent-gap tolerance. Candidate order of magnitude discussed: hours.
+
+**Resolved 2026-08-13 (see §11): the first-flight maximum stale-position RF budget
+is 24 hours** (`BR-STALE-017`).
+
+Whether the value remains per-mission configurable is still a configuration binding
+(`BR-STALE-012`). This decision also retires the separate 6 h GNSS-outage silence
+window formerly held in DDR-0016 `INV-PWR-009`/`BR-PWR-014` — there is now exactly
+one budget, and it lives here.
 
 ### OD-STALE-002 — Interaction with commissioning
 
@@ -270,3 +285,177 @@ The 2026-08-12 interviews (rounds 1 and 2) independently reaffirmed the existing
 Added rationale:
 
 > The staleness budget is a regulatory-confidence bound, not a declaration that the old position has stopped being scientifically useful.
+
+---
+
+## 11. Amendment 2026-08-13 (intent interview, passes 1 and 2)
+
+**Disposition:** amend; no new record required. Resolves `OD-STALE-001`.
+
+### Decision delta 1 — the budget is bound to 24 hours
+
+> **The first-flight maximum RF-authoritative position staleness is 24 hours.**
+
+Age is measured from the last accepted quality-valid horizontal GNSS position. For
+the abnormal "no valid mission position ever" case (Band 0 below), the flight
+transition / start of home-region fallback is the equivalent age anchor.
+
+The boundary convention is `<= 24 h` permitted, `> 24 h` silent.
+
+### Decision delta 2 — one budget, and it lives here
+
+The same 24 h budget SHALL govern:
+
+- held-region RF authorization using the last valid in-region position (Band 2);
+- nearest-region ring search based on stale no-region geography (Band 2, DDR-0006);
+- commissioned home-region fallback when flight begins before any valid mission X/Y
+  exists (Band 0).
+
+**No separate time-based RF cutoff may exist.** This explicitly retires the former
+DDR-0016 6-hour GNSS-outage silence window (`INV-PWR-009` / `BR-PWR-014`), which is
+now a pointer to this record. See `merge-ledger-2026-08-13.md` §3 for the full
+conflict resolution and the corresponding code change.
+
+The silence exists because of **geographic/regulatory uncertainty**, not because
+stale-position telemetry is a poor use of energy. Energy policy may still
+independently suppress RF work (DDR-0016), but it no longer owns the staleness
+cutoff.
+
+### Decision delta 3 — commissioned home region
+
+Provisioning SHALL supply a `home_region` / launch-region fallback suitable for the
+deployment (DDR-0018 `BR-COMM-021`).
+
+For the current North American first-flight deployment this may bind to US915. The
+architecture SHALL NOT hard-code US915 as a universal worldwide constant; it is a
+commissioned/deployment value.
+
+The home region exists specifically to close the abnormal case where flight begins
+without any usable horizontal fix.
+
+### INV-STALE-008 — Band 0: no valid mission position ever obtained
+
+If the sonde has entered flight but no valid horizontal GNSS fix has ever been
+accepted:
+
+1. position data SHALL be represented as invalid/degraded; `0,0` MAY be encoded only
+   with authoritative invalid/stale status (DDR-0003 §17);
+2. firmware MAY use the commissioned `home_region` as the temporary RF region;
+3. that fallback SHALL be treated as stale/uncertain geography, never as a fabricated
+   GNSS fix, and SHALL NOT be promoted to last-known-good;
+4. the same 24 h budget applies, anchored at the flight transition;
+5. once that budget expires without a fresh fix, RF SHALL become silent (Band 3);
+6. science collection, archive logging, RTC timekeeping, and GNSS attempts SHALL
+   continue throughout;
+7. the first accepted fresh fix immediately replaces the fallback, and normal
+   DDR-0006/0007 geography rules apply.
+
+### INV-STALE-009 — RTC age creates no independent RF cutoff
+
+RF silence caused by prolonged GNSS outage is governed by **position/region
+uncertainty**, not by any "the RTC has been unsynchronized too long" timer.
+
+While RF is permitted by the position/region policy, RTC-derived absolute UTC remains
+acceptable for packet and science timestamps, with GNSS freshness/provenance marked
+accordingly (DDR-0013 `INV-TIME-009`).
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-STALE-013 | Flight with no accepted mission X/Y SHALL NOT fabricate a valid geographic position. | **CONFIRMED** |
+| BR-STALE-014 | While within the budget, firmware MAY authorize RF using the commissioned home region. | **CONFIRMED** |
+| BR-STALE-015 | Initial no-fix home-region fallback SHALL expire into RF silence if no fresh valid position is obtained before the budget expires. | **CONFIRMED** |
+| BR-STALE-016 | The first fresh valid position SHALL immediately supersede home-region fallback on the same wake. | **CONFIRMED** |
+| BR-STALE-017 | The first-flight maximum stale-position RF budget SHALL be 24 hours. | **CONFIRMED** |
+| BR-STALE-018 | Position age greater than 24 hours SHALL cause RF silence while science, archive logging, and timekeeping continue. | **CONFIRMED** |
+| BR-STALE-019 | RF silence caused solely by position staleness SHALL end immediately after one accepted quality-valid GNSS fix, subject to normal geographic RF authorization. | **CONFIRMED** |
+| BR-STALE-020 | RTC synchronization age SHALL NOT create an independent RF-silence timer. | **CONFIRMED** |
+
+### Beyond-budget behavior
+
+When position age exceeds 24 h:
+
+- stop LoRaWAN RF transmission;
+- continue science collection;
+- continue full-resolution archive logging;
+- continue STM32 RTC timekeeping;
+- continue GNSS attempts whenever energy policy permits.
+
+### Recovery behavior — one fix is enough
+
+A **single** new quality-valid GNSS fix immediately ends staleness-induced RF silence.
+
+No operator acknowledgement, repeated-fix requirement, dwell period, or special
+recovery handshake is required. On that same wake: fresh geography becomes
+authoritative, normal region/restricted-area policy is evaluated, and if authorized,
+ordinary RF may resume immediately. (This restates `INV-STALE-004` for the Band 0 and
+24 h cases.)
+
+### Rationale
+
+The preferred launch path obtains a valid fix before release, so Band 0 is a fault
+path, not normal operation. However, a human may omit the readiness step and
+automatic pressure launch must still start the mission. Permanent RF silence from the
+first second would needlessly discard communication capability, while unbounded
+transmission in an assumed region would create regulatory risk. A bounded commissioned
+home-region fallback is the predictable middle ground.
+
+After roughly a day without trustworthy position, a drifting sonde may plausibly have
+crossed a regulatory boundary, so indefinite transmission on old geography is not
+acceptable. The RTC remains useful for science chronology, local science remains
+valuable, and GNSS can recover later. Once a fresh valid position returns there is no
+product value in delaying RF further — that fix supplies the missing geographic
+evidence.
+
+### Proof additions
+
+#### P-STALE-011 — Never-fixed home-region fallback
+
+Provision a home region, enter flight without any accepted X/Y, and remain inside the
+budget. Prove position is invalid/degraded, home-region RF policy is used, and no
+position is treated as fresh.
+
+#### P-STALE-012 — Never-fixed fallback expires
+
+Continue without a valid position past the budget. Prove RF becomes silent while
+science and GNSS attempts continue.
+
+#### P-STALE-013 — First fix supersedes fallback
+
+During home-region fallback, provide a valid fix mapping to another supported region.
+Prove the fresh geography becomes authoritative immediately.
+
+#### P-STALE-014 — Twenty-four-hour boundary
+
+Prevent further GNSS fixes after one valid position. Prove RF remains eligible under
+normal policy while age is `<= 24 h`, that no LoRaWAN RF is transmitted once age is
+`> 24 h`, and that science/archive operation continues.
+
+#### P-STALE-015 — Immediate same-wake recovery
+
+Remain RF-silent due only to expired stale position, then provide one valid GNSS fix.
+Prove the fix immediately replaces stale geography and, if normal regional policy
+authorizes it, RF is eligible on that same wake.
+
+#### P-STALE-016 — RTC does not independently veto recovery
+
+Let the RTC run without GNSS time synchronization throughout the outage, then obtain a
+valid position. Prove RF eligibility is governed by recovered geography and is not
+blocked by any separate RTC-age rule.
+
+### Implementation binding
+
+`GPS_LOSS_SILENCE_S` in `LoRaWAN/App/lora_app.h` is the first-flight binding of
+`BR-STALE-017` and is set to `24U * 3600U`. It was `6U * 3600U` before 2026-08-13.
+
+### Cross-references
+
+- DDR-0003 §17 — invalid/placeholder position semantics.
+- DDR-0006 — nearest-region ring search (required for no-region geography).
+- DDR-0007 — restricted-region immediate silence.
+- DDR-0013 §18 — RTC remains the working clock; no independent time cutoff.
+- DDR-0016 §11 — `INV-PWR-009`/`BR-PWR-014` superseded and redirected here.
+- DDR-0018 §10 — `home_region` provisioning.
+- `../SYSTEM-INVARIANTS.md` SI-014.
+

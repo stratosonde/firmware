@@ -610,3 +610,106 @@ Questions to resolve one at a time:
 7. How should newest-first recovery resume on the next opportunity?
 
 Those decisions should remain separate from the immutable circular-storage contract captured here.
+
+---
+
+## 19. Amendment 2026-08-13 (intent interview, final pass)
+
+**Disposition:** amend; no new record required. Narrows `OD-ARCH-002`.
+
+### INV-ARCH-008 — A record is one complete observation package
+
+One archived record is one **coherent observation package**, binding together:
+
+- the logical record ID;
+- time;
+- position plus its freshness/provenance;
+- each sensor value plus its freshness/provenance;
+- system/power interpretation context;
+- an integrity check.
+
+A failed sensor or a failed GNSS acquisition SHALL NOT produce a structurally
+different or truncated record. After bounded recovery (DDR-0009 `BR-FAIL-016`), a
+last-known-good value MAY be substituted **with stale status**, so that the record
+shape stays stable and the honesty lives in the provenance fields.
+
+This matters because the backend must be able to decode every record with one schema,
+and a scientist must be able to tell "we did not measure this" from "we measured this."
+
+### Arbitrary record lookup is required; linear search is acceptable
+
+The backend MAY request **any** retained record ID (`INV-ARCH-007`,
+`BR-ARCH-009`). Firmware SHALL NOT require that requests arrive in order, in ranges,
+or near the current cursor.
+
+**Linear search of the archive is an acceptable implementation.** Targeted retrieval is
+rare — it happens only when the backend has detected a specific gap — so an index or
+other acceleration structure is an optional optimization, not a requirement
+(`../SYSTEM-INVARIANTS.md` SI-020).
+
+### Unavailable requested record — useful substitution
+
+`OD-ARCH-002` is **narrowed**:
+
+> The returned record's own ID is authoritative and sufficient. The backend compares
+> the returned ID against the requested ID to determine whether it received the exact
+> record, a duplicate, or a substitute. No separate explicit
+> `REQUESTED_RECORD_OVERWRITTEN` status field is required.
+
+When the requested ID is no longer retained, firmware SHOULD return a **useful
+substitute** rather than an error-only response, because a wake's RF opportunity is
+scarce and an empty answer wastes it.
+
+What remains open is only **which** substitute is most useful (earliest retained,
+nearest retained, or newest) — that is a binding, not a product-intent gap. The
+existing `BR-ARCH-011` direction (earliest still-available record) stands until
+deliberately revisited.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-ARCH-017 | Every archived record SHALL have the same logical structure regardless of individual sensor or GNSS failure; degradation SHALL be expressed in provenance/freshness fields, not by omitting fields. | **CONFIRMED** |
+| BR-ARCH-018 | Firmware SHALL support lookup of an arbitrary retained record ID; linear search is an acceptable implementation. | **CONFIRMED** |
+| BR-ARCH-019 | When a requested record ID is unavailable, firmware SHOULD return a useful substitute record whose own ID exposes the mismatch; no separate status field is required. | **CONFIRMED** |
+| BR-ARCH-020 | The exact substitute-selection rule is an implementation/configuration binding. | **OPEN** |
+
+### Commissioning erase and just-in-time erase
+
+- **Commissioning** SHOULD initialize/erase the archive so a flight begins from a
+  known state.
+- **In flight**, erase just in time, at the smallest practical hardware erase unit,
+  immediately before the space is needed. Speculative bulk pre-erase is not required
+  and wastes scarce energy.
+
+Mechanics, erase geometry, and bad-area bookkeeping live in DDR-0011 §25 and
+`../FlashStorageNotes.md`.
+
+### Proof additions
+
+#### P-ARCH-011 — Random retained-ID lookup
+
+Write many records, then request a randomly chosen retained ID. Prove the exact record
+is returned with its correct ID and science values, without requiring ordered or
+range-based access.
+
+#### P-ARCH-012 — Requested-ID-unavailable substitution
+
+Request an ID that has been overwritten. Prove a useful substitute is returned, that
+its own ID is present and authoritative, and that the backend can therefore infer the
+requested record is gone.
+
+#### P-ARCH-013 — Record shape is stable under partial failure
+
+Force a sensor failure and a GNSS failure in separate cycles. Prove each committed
+record retains the full package structure with stale/invalid provenance rather than
+omitting fields.
+
+### Cross-references
+
+- DDR-0005 §18 — request preemption and ephemeral request handling.
+- DDR-0011 §25 — torn-write containment, skip-and-continue, erase policy.
+- DDR-0009 §18 — bounded recovery before stale substitution.
+- DDR-0027 — retransmitted records keep their original ID and format semantics.
+- `../SYSTEM-INVARIANTS.md` SI-006, SI-007, SI-008, SI-009.
+

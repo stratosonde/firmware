@@ -154,7 +154,9 @@ static bool in_function(const char *src, const char *sig, const char *needle)
  *     restored -> a restored position's true age is always unknown.
  *   - BKP_REG_GPS_LOSS_EPOCH is NEVER written at all (the write is itself
  *     behind `now_timestamp >= 1700000000UL`) -> the 6 h GPS-loss silence
- *     grace restarts on EVERY reset.
+ *     grace restarts on EVERY reset. (Window is 24 h since 2026-08-13 —
+ *     DDR-0015 BR-STALE-017 — which makes this persistence bug worse, not
+ *     better: a reset loop could evade a full day of regulatory silence.)
  *
  * A unit in a brownout/deadman/IWDG reset loop can therefore never reach RF
  * silence and keeps transmitting on days-old geography — the exact DDR-0015

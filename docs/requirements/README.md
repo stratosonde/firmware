@@ -8,13 +8,22 @@ to implementation/proof.
 | File | Role |
 |---|---|
 | `stratosonde-engineering-requirements-specification-first-flight.md` | Engineering requirements specification (SYS-*) for first flight |
-| `requirements-traceability-matrix.md` | Merged round-2/round-3 traceability matrix (living artifact) |
+| `requirements-traceability-matrix.md` | Traceability matrix (living artifact); §5 holds the 2026-08-13 rows |
+| `flight1-mission-definition.md` | Flight 1 mission hypothesis, objectives (PMO/SMO/STO), and success levels |
 | `flight1-validation-readiness-checklist.md` | Go/no-go evidence checklist for the first-flight build (DDR-0026 INV-VER-011) |
 | `firmware-conformance-worklist.md` | Implementation/proof queue (FW-CONF-*) converting intent into code/test work |
 
+`flight1-mission-definition.md` says *what the flight must demonstrate*;
+`flight1-validation-readiness-checklist.md` says *what must be proved before we
+launch it*. Keep them distinct.
+
 Related artifacts in `../decisions/`: `system-operational-assumptions.md`
-(environmental/operational assumptions the requirements are designed around)
-and `open-intent-questions.md` (consolidated unresolved intent).
+(environmental/operational assumptions the requirements are designed around),
+`open-intent-questions.md` (consolidated unresolved intent), and
+`merge-ledger-2026-08-13.md` (audit trail for the 2026-08-13 interview merge).
+
+Cross-cutting context in `../`: `SYSTEM-INVARIANTS.md` (SI-001…SI-020) and
+`ARCHITECTURE-OVERVIEW.md`. Both are explanatory; the DDRs remain normative.
 
 The objective is the closed chain:
 

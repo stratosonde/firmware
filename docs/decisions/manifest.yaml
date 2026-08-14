@@ -36,6 +36,7 @@ records:
   - { id: DDR-0024, file: 0024-device-identity-provisioning-ownership.md, title: Device Identity, Provisioning, Ownership, and Backend Registry, status: Draft }
   - { id: DDR-0025, file: 0025-firmware-servicing-bootloader-non-ota-update-policy.md, title: Firmware Servicing, Bootloader, and Non-OTA Update Policy, status: Draft }
   - { id: DDR-0026, file: 0026-verification-traceability-flight-readiness-evidence.md, title: Verification, Traceability, Hardware-in-the-Loop CI, and Flight-Readiness Evidence, status: Draft }
+  - { id: DDR-0027, file: 0027-long-lived-wire-protocol-compatibility.md, title: Long-Lived Wire Protocol Compatibility, status: Draft }
 
 # Retired aliases from the pre-2026-08-09 V2 numbering (README table era).
 # Alias references in older prose still resolve, but are reported as
@@ -43,6 +44,9 @@ records:
 # Note: old-generation aliases 0022-0026 were retired 2026-08-12 when the
 # canonical DDR-0022..DDR-0026 records were added; no live references to the
 # old-generation meaning remained.
+# Note: old-generation alias 0027 (-> DDR-0014) was retired 2026-08-13 when the
+# canonical DDR-0027 (Long-Lived Wire Protocol Compatibility) was added; no live
+# references to the old-generation meaning remained.
 aliases:
   - { alias: DDR-0014, of: DDR-0001 }
   - { alias: DDR-0015, of: DDR-0002 }
@@ -52,7 +56,6 @@ aliases:
   - { alias: DDR-0019, of: DDR-0006 }
   - { alias: DDR-0020, of: DDR-0007 }
   - { alias: DDR-0021, of: DDR-0008 }
-  - { alias: DDR-0027, of: DDR-0014 }
   - { alias: DDR-0028, of: DDR-0015 }
   - { alias: DDR-0029, of: DDR-0016 }
   - { alias: DDR-0030, of: DDR-0017 }

@@ -646,3 +646,106 @@ Questions should include:
 7. How should region transitions interact with existing LoRaWAN session state?
 
 This topic is high value because the product must distinguish **mission survivability** from **legal permission to transmit**.
+
+---
+
+## 18. Amendment 2026-08-13 (intent interview, passes 2 and final)
+
+**Disposition:** amend. Pass 2 reconfirmed the existing ACK gating with no change; the
+final pass adds explicit-request priority semantics.
+
+### Pass-2 confirmation — ACK still gates backlog
+
+The interview reconfirmed, with **no normative change required**:
+
+> No confirmed-probe ACK means do not proceed into unconfirmed backlog/archive
+> transmission. That wake's RF opportunity ends; return to the normal mission/sleep
+> path and try again on the next scheduled science cycle.
+
+This already matches §3 (float-mode transmission sequence), proof `P-TX-002`, and
+DDR-0019 `INV-RADIO-007` / `BR-RADIO-010`. There is no same-wake probe retry.
+
+At the application/product level, a missing probe ACK is **not** permission to keep
+probing or to dump backlog.
+
+### INV-TX-010 — An explicit record request preempts opportunistic backfill
+
+A valid backend request for a specific record ID SHALL take priority over the ordinary
+newest-to-oldest backlog walker for that wake.
+
+The request is **ephemeral**:
+
+- it applies to the current wake's RF opportunity;
+- it SHALL NOT be persisted across sleeps;
+- it SHALL NOT create a durable job queue, retry list, or pending-request table;
+- if it cannot be served this wake, it is simply forgotten — the backend will ask again
+  if it still cares.
+
+After one response attempt, ordinary newest-first backfill MAY resume if RF budget
+remains.
+
+**Energy policy and RF legality always outrank the request.** A request never
+authorizes transmission that DDR-0015/0016/0007 would otherwise forbid, and never
+delays live science (`INV-TX-001`).
+
+### Bounded replay-watermark rollback is acceptable
+
+The archive-delivery watermark (§7) is mission-critical persistent state (DDR-0010
+§18), but it MAY tolerate **bounded rollback** across reset when the only consequence is
+a small number of duplicate transmissions.
+
+Duplicates are explicitly acceptable to the backend; skipped-and-forgotten records are
+not. Checkpointing therefore errs toward re-sending rather than advancing optimistically.
+
+The exact checkpoint interval and duplicate bound remain an implementation binding. The
+interview mentioned "about 5-10" duplicates purely as an illustration and did **not**
+bind that number.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-TX-023 | A valid explicit record request SHALL be served before ordinary newest-first backlog work in the same wake. | **CONFIRMED** |
+| BR-TX-024 | Explicit record requests SHALL NOT be persisted across sleeps and SHALL NOT create a durable request queue. | **CONFIRMED** |
+| BR-TX-025 | Energy policy and RF authorization SHALL outrank any explicit record request. | **CONFIRMED** |
+| BR-TX-026 | The delivery watermark MAY roll back a bounded amount across reset, producing duplicates rather than silently skipped records. | **CONFIRMED** |
+| BR-TX-027 | The exact watermark checkpoint interval and duplicate bound are implementation bindings. | **OPEN** |
+
+### Rationale
+
+A backend gap-repair request is far more valuable per byte than opportunistic backfill:
+the backend has already determined that this specific record is the one it is missing.
+Serving it first makes the scarce RF opportunity count.
+
+Keeping the request ephemeral is a deliberate simplicity choice (`SI-020`). A persistent
+request queue would add durable state, an expiry policy, and a whole class of
+"stale request executed days later" bugs, to solve a problem the backend can solve for
+free by asking again.
+
+### Proof additions
+
+#### P-TX-011 — Request preempts backfill
+
+With a large backlog pending, deliver an explicit request for a specific retained
+record. Prove the requested record is sent before ordinary backlog progression resumes.
+
+#### P-TX-012 — No persistent request queue
+
+Deliver a request, then sleep or reset before it can be served. Prove no request state
+survives and no delayed/spontaneous response occurs on a later wake.
+
+#### P-TX-013 — Request never overrides legality or energy
+
+Deliver a valid request while RF is prohibited (stale position beyond budget per
+DDR-0015, restricted region per DDR-0007, or insufficient energy per DDR-0016). Prove no
+transmission occurs.
+
+### Cross-references
+
+- DDR-0004 §19 — arbitrary ID lookup and useful substitution.
+- DDR-0019 — confirmed-probe behavior and the no-ACK branch.
+- DDR-0015 §11 — RF legality gate.
+- DDR-0016 §11 — energy admission gate.
+- DDR-0010 §18 — watermark durability and bounded rollback.
+- `../SYSTEM-INVARIANTS.md` SI-016, SI-017, SI-018.
+

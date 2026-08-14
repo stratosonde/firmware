@@ -606,3 +606,86 @@ Relationship notes:
 
 - The broader raw/calibrated/derived-data and provenance policy that this DDR's freshness semantics participate in is now owned by **DDR-0023** (Scientific Data Truth, Derived Products, and Onboard Interpretation).
 - RF legality derived from stale position remains governed by **DDR-0015**, not by this DDR.
+
+---
+
+## 17. Amendment 2026-08-13 (intent interview, pass 1)
+
+**Disposition:** amend; no new record required.
+
+### Decision delta 1 — one GNSS acceptance predicate
+
+Commissioning/launch-readiness and ordinary flight SHALL use the **same** normal
+GNSS fix-acceptance predicate (§3).
+
+The readiness check SHALL NOT invent a weaker or special-purpose position
+criterion. For the current product, an accepted fix is the same fix the firmware
+already treats as usable for ordinary acquisition: a valid 3D fix satisfying the
+configured satellite-count and HDOP/quality limits.
+
+The exact numeric limits remain configuration/implementation bindings unless
+separately promoted to product requirements.
+
+**BR-GNSS-021 — Common fix acceptance:** Any operation that requires a "valid
+GNSS fix," including pre-launch readiness (DDR-0018), SHALL use the same
+product-level fix-acceptance rule used by ordinary flight acquisition.
+**CONFIRMED.**
+
+### Decision delta 2 — never-fixed placeholder semantics
+
+If flight begins before any valid mission position exists:
+
+- science SHALL continue;
+- the position SHALL be semantically unavailable/invalid;
+- an on-wire or internal placeholder such as `0,0` MAY be used **only** if the
+  freshness/validity representation makes it impossible to interpret that
+  placeholder as a real fix;
+- where the compact packet carries only a stale/degraded bit rather than a richer
+  provenance enum, that bit SHALL be asserted;
+- the placeholder SHALL NOT be promoted to last-known-good.
+
+This does **not** redefine "stale" in full-resolution provenance. Full-resolution
+records should continue to distinguish "never had a valid fix" from
+"carried-forward last-known-good" where the format permits (§6, §10).
+
+RF behavior for this case — including the commissioned `home_region` fallback and
+its expiry — is owned by **DDR-0015** (`INV-STALE-008`), not by this record.
+
+### Rationale
+
+The operator expects the readiness test to mean the same thing as normal
+operation: if firmware would stop GNSS acquisition and accept a fix during flight,
+that same quality is good enough for launch readiness. A second, looser
+commissioning predicate would let a unit indicate "ready" on evidence the mission
+itself would reject.
+
+For the abnormal no-fix-at-flight case the system must remain honest. Zero
+coordinates are an acceptable *encoding*, never *evidence*. The validity/stale
+status is authoritative. (Consistent with `INV-GNSS-002` and DDR-0001
+`INV-WAKE-006`.)
+
+### Proof additions
+
+#### P-GNSS-011 — Readiness uses normal acceptance
+
+Provide fixes around the configured acceptance boundary. Prove a fix accepted for
+ordinary flight is accepted by readiness, and a fix rejected in ordinary flight is
+not accepted merely because the unit is commissioning.
+
+#### P-GNSS-012 — Placeholder cannot masquerade as location
+
+Enter flight with no valid mission fix. Prove:
+
+- science continues;
+- placeholder coordinates, if encoded, are marked invalid/degraded;
+- they are never promoted to last-known-good;
+- the first later accepted fix replaces the placeholder and becomes fresh
+  last-known-good.
+
+### Cross-references
+
+- DDR-0018 — the readiness check that consumes `BR-GNSS-021`.
+- DDR-0015 — RF legality for the never-fixed case.
+- DDR-0016 — GNSS is not deliberately shed for energy within an admitted wake;
+  a stale/absent fix is a failure outcome, not an energy mode.
+

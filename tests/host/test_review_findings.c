@@ -283,6 +283,51 @@ static void test_geofence_runs_when_gps_skipped(void)
 }
 
 /* ========================================================================== */
+/* DDR-0015 BR-STALE-017 — the stale-position RF budget is 24 h, and single     */
+/* ========================================================================== */
+/* 2026-08-13 intent interview: the GNSS-outage RF silence is a REGULATORY bound
+ * owned by DDR-0015, not the energy bound DDR-0016 INV-PWR-009 originally
+ * framed it as. It was retimed 6 h -> 24 h, and BR-STALE-020 forbids a SECOND
+ * independent time-based cutoff (notably an RTC-sync-age timer).
+ *
+ * This is the guard that stops the value silently drifting back: nothing else in
+ * the tree asserted it numerically before this test existed. Scans, not runtime,
+ * because the macro is compile-time and lora_app.c is not host-linkable. */
+static void test_stale_position_budget_is_24h(void)
+{
+    printf("-- DDR-0015/BR-STALE-017: stale-position RF budget is 24 h\n");
+
+    char *hdr = slurp("../../LoRaWAN/App/lora_app.h");
+
+    /* The binding itself. Accept either spelling of the 24 h product value so a
+     * deliberate refactor is not a false failure, but a change of VALUE is. */
+    int is_24h = (strstr(hdr, "GPS_LOSS_SILENCE_S  (24U * 3600U)") != NULL) ||
+                 (strstr(hdr, "GPS_LOSS_SILENCE_S (24U * 3600U)")  != NULL) ||
+                 (strstr(hdr, "GPS_LOSS_SILENCE_S  (86400U)")      != NULL);
+    CHECK(is_24h);
+
+    /* The retired 6 h value must not come back. */
+    CHECK(strstr(hdr, "GPS_LOSS_SILENCE_S  (6U * 3600U)") == NULL);
+    CHECK(strstr(hdr, "GPS_LOSS_SILENCE_S (6U * 3600U)")  == NULL);
+
+    /* The DDR citation must travel with the number, so the next reader learns
+     * WHO owns it (DDR-0015) rather than re-deriving it from DDR-0016. */
+    CHECK(strstr(hdr, "BR-STALE-017") != NULL);
+    free(hdr);
+
+    /* Boundary convention (DDR-0015 P-STALE-014): age <= 24 h permitted,
+     * > 24 h silent. A `>=` here would silence the mission one wake early. */
+    char *app = slurp("../../LoRaWAN/App/lora_app.c");
+    CHECK(strstr(app, "> GPS_LOSS_SILENCE_S") != NULL);
+    CHECK(strstr(app, ">= GPS_LOSS_SILENCE_S") == NULL);
+
+    /* BR-STALE-019: one quality-valid fix clears the silence on that same wake.
+     * The fresh-fix epoch must still participate in the age reference. */
+    CHECK(strstr(app, "s_last_fresh_fix_s") != NULL);
+    free(app);
+}
+
+/* ========================================================================== */
 /* MISSION-01 (#142) — launch detection, no float altitude guard, quiet watch  */
 /* ========================================================================== */
 /* Maintainer decisions 2026-08-11: flight entry is explicit (arming hook or
@@ -431,6 +476,9 @@ static void test_ts_wrap_persistence_wiring(void)
 /* ========================================================================== */
 /* The position persisted in DR8-DR11 had no acquisition time: every reset
  * restarted the 6 h GPS-loss grace with a stale position RF-authoritative.
+ * (The grace window is 24 h since 2026-08-13 — DDR-0015 BR-STALE-017. The
+ *  persistence requirement this test guards is unchanged and now matters more,
+ *  since a reset must not restart a 24 h regulatory budget either.)
  * The fresh-fix epoch and the GPS-loss epoch must persist (plausibility-gated:
  * no invented freshness) and seed the RAM state at boot. */
 static void test_position_age_persistence_wiring(void)
@@ -682,6 +730,7 @@ int main(void)
     test_ci_runs_all_suites();
     test_no_uart_it_receive_on_gps_uart();
     test_geofence_runs_when_gps_skipped();
+    test_stale_position_budget_is_24h();
     test_mission_entry_and_float_guard();
     test_float_detection_and_cadence();
     test_chunk_bound_covers_survival_interval();

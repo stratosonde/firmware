@@ -291,7 +291,11 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
      * The field evidence (#128) is that the ATGM336H operates at cold/altitude
      * without special handling. temp_stale still skips normalization above
      * (R2-10) — data honesty, not a veto. The config field
-     * gps_temperature_lockout remains for backcompat but is no longer read. */
+     * gps_temperature_lockout remains for backcompat but is no longer read.
+     * NOTE (2026-08-13): the "6 h" above is the HISTORICAL window this defect
+     * was observed against. The silence budget is now 24 h and is owned by
+     * DDR-0015 BR-STALE-017, not by DDR-0016. The removal of the lockout stands
+     * on its own merits either way. */
 
     /* T1 ladder (DDR-0018): FLIGHT with no session = RF silence. The cycle
      * still runs (GPS + flash logging); only the radio stays dark. */

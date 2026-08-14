@@ -759,3 +759,136 @@ Questions should resolve:
 8. What startup failures are allowed to trigger another reset versus degrade and carry on?
 
 That will bind DDR-0009 through DDR-0011 into one deterministic reset-to-mission startup path.
+
+---
+
+## 25. Amendment 2026-08-13 (intent interview, passes 1 and final)
+
+**Disposition:** amend; no new record required.
+
+### Decision delta 1 — isolated corruption creates a gap, not a truncated archive
+
+A torn or corrupted science record is acceptable as an isolated data gap.
+
+It is **not** acceptable for one bad record to make:
+
+- all prior committed records inaccessible;
+- all later/future records inaccessible;
+- the archive appear to end permanently at the bad record;
+- normal mission logging stop.
+
+#### INV-STORE-011 — Record corruption is locally contained
+
+Validity SHALL be independently decidable at a granularity that allows an isolated
+damaged record or page to be skipped without invalidating unrelated earlier or later
+records.
+
+#### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-STORE-001 | When archive traversal encounters an isolated invalid/torn science record, recovery/delivery SHALL skip that record, preserve the resulting gap, and continue searching for later valid records. | **CONFIRMED** |
+| BR-STORE-002 | Archive index/metadata reconstruction SHALL NOT be an unconditional precondition for completing boot or for ordinary mission progress. | **CONFIRMED** |
+| BR-STORE-003 | A successful science record write SHALL NOT require a mandatory read-back verification pass in flight; validity is decided on read (lazy validation). | **CONFIRMED** |
+
+A gap in science data is acceptable. A premature logical end-of-archive caused
+solely by one corrupt record is not.
+
+### Decision delta 2 — recovery need not block boot
+
+§7 and §10 already allow a full archive scan when metadata is invalid. The interview
+refines this:
+
+> Correct recovery is required, but an expensive whole-flash sanity scan SHALL NOT
+> become an unconditional startup prerequisite.
+
+Repeated brownout/reset conditions are precisely when heavy flash reads are most
+counterproductive.
+
+Archive recovery MAY therefore be bounded at boot, lazy, incremental, deferred until
+archive traversal actually needs the missing index, or resumed across wakes.
+
+The architecture must still **eventually** reconstruct correct archive state.
+
+#### Revised metadata rule
+
+If archive metadata is corrupt or contradictory:
+
+1. do not trust it;
+2. preserve ordinary mission boot progress;
+3. enter a known "archive index requires reconstruction" condition;
+4. perform bounded/incremental reconstruction when energy and mission scheduling
+   permit;
+5. skip isolated bad science records during traversal;
+6. regenerate metadata from surviving valid records.
+
+A full scan remains an allowed implementation *technique*; it is not mandatory
+boot-time behavior.
+
+### Decision delta 3 — torn write behavior
+
+If power disappears during a record write:
+
+- the partial record MUST fail validation;
+- previously committed records remain valid;
+- the next future record can still be written;
+- archive traversal can step past the damaged slot/page;
+- no repair-in-place is required merely to continue the mission.
+
+### Decision delta 4 — erase policy
+
+- **Commissioning** should initialize/erase the archive, so a flight begins from a
+  known state.
+- **In flight**, erase just in time, at the smallest practical hardware erase unit,
+  immediately before the space is needed. Large speculative pre-erase campaigns are
+  not required and waste scarce energy.
+- Elaborate bad-block management is explicitly **not** required for first flight
+  (`../SYSTEM-INVARIANTS.md` SI-020). Exact erase geometry and bad-area bookkeeping
+  remain implementation bindings.
+
+### Rationale
+
+The archive's purpose is long-duration science survivability. The most realistic
+single-record corruption mechanism is power loss during write. The product should
+tolerate that event without spending scarce energy on eager repair, and without
+turning one missing observation into catastrophic log loss.
+
+A brownout loop is exactly the condition in which large startup reads are least
+affordable — so recovery work must be schedulable, not a boot gate.
+
+### Proof additions
+
+#### P-STORE-011 — Torn middle record
+
+Create valid records A and B, tear the write of C, then successfully write D and E.
+Prove:
+
+- A and B remain readable;
+- C is rejected;
+- D and E remain discoverable/readable;
+- archive iteration reports one gap rather than stopping at C.
+
+#### P-STORE-012 — Brownout-loop-safe boot
+
+Invalidate archive metadata and repeatedly reset the MCU under constrained energy.
+Prove boot can still restore critical mission state and return to safe operation
+without requiring an unbounded whole-archive scan before normal mission progress.
+
+#### P-STORE-013 — Deferred reconstruction
+
+Boot with invalid archive index metadata but healthy science pages. Prove archive
+reconstruction can be performed later in bounded pieces and eventually reconstructs
+traversal state correctly.
+
+#### P-STORE-014 — No routine scan on a valid-cursor boot
+
+Boot with valid retained cursor/metadata. Prove no whole-archive scan is performed
+as ordinary startup work.
+
+### Cross-references
+
+- DDR-0012 §22 — boot ordering and the deferred-reconstruction condition.
+- DDR-0010 §18 — record identity and delivery watermark durability.
+- DDR-0004 — circular archive semantics and record immutability.
+- `../SYSTEM-INVARIANTS.md` SI-009, SI-010.
+

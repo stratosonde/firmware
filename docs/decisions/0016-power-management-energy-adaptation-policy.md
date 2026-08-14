@@ -85,11 +85,36 @@ This deliberately revises the retired legacy data-honesty record's cold-assumpti
 
 Energy admission is a *gate on top of* RF authorization, never a bypass. Work that passes energy admission is still subject to DDR-0006/0020/0028 region, restricted, and staleness rules. Conversely, energy policy may suppress otherwise-legal RF work.
 
-### INV-PWR-009 — Sustained GNSS outage silences the radio
+### INV-PWR-009 — Sustained GNSS outage silences the radio — **SUPERSEDED 2026-08-13**
 
-If no fresh GNSS fix has been obtained for a configured grace window (implementation: `GPS_LOSS_SILENCE_S`, default **6 hours**), the sonde SHALL stop transmitting while continuing to log science to the archive, and SHALL keep attempting GNSS acquisition every cycle until a fresh fix clears the silence.
+> **Superseded by DDR-0015 (`INV-STALE-009`, `BR-STALE-017/018/019/020`).**
+> RF silence from GNSS outage is a **regulatory** policy owned by DDR-0015, not an
+> energy policy owned here. There is now exactly **one** staleness budget, bound to
+> **24 hours**, and no independent time-based RF cutoff may exist.
+>
+> **Original wording (retained for audit history):** *If no fresh GNSS fix has been
+> obtained for a configured grace window (implementation: `GPS_LOSS_SILENCE_S`,
+> default 6 hours), the sonde SHALL stop transmitting while continuing to log
+> science to the archive, and SHALL keep attempting GNSS acquisition every cycle
+> until a fresh fix clears the silence.*
+>
+> **Original rationale (superseded, maintainer policy 2026-08-12):** *a stale
+> position is not worth radio energy — the archive is the point, and it is recovered
+> when a fresh fix (or recovery) returns. The radio silence conserves the energy that
+> positionless telemetry would burn.*
+>
+> The 2026-08-13 interview rejected that framing: the sonde goes silent because it
+> can no longer prove which regulatory region it is in, not to save energy. Energy
+> policy may still independently suppress RF work — that authority is unchanged
+> (`INV-PWR-008`) — but it no longer owns the staleness cutoff or its duration.
+>
+> The implementation knob `GPS_LOSS_SILENCE_S` survives as the binding of DDR-0015
+> `BR-STALE-017`, retimed from `6U * 3600U` to `24U * 3600U` on 2026-08-13. See
+> `merge-ledger-2026-08-13.md` §3.
 
-Rationale (maintainer policy, 2026-08-12): a stale position is not worth radio energy — the archive is the point, and it is recovered when a fresh fix (or recovery) returns. The radio silence conserves the energy that positionless telemetry would burn.
+The operational hardening below remains valid and still applies to the (now 24 h)
+window, because the mechanism is unchanged — only its owner, duration, and stated
+reason changed.
 
 Operational details (as implemented, issue #141 and hardening trail):
 
@@ -181,7 +206,7 @@ Confidence legend:
 | BR-PWR-011 | Science records SHOULD distinguish GNSS "skipped for energy/policy" from "attempted but no fix" when encoding space permits; this is a nice-to-have, since the backend can usually infer cause from battery voltage, temperature, and scenario context. | CONFIRMED (as SHOULD, not SHALL) |
 | BR-PWR-012 | Tier boundaries, tier count, normalization curve, and droop-model parameters SHALL be configuration bindings set by battery/load profiling over temperature. | CONFIRMED |
 | BR-PWR-013 | Whether tier-to-cadence scaling is a fixed table or a continuous function is an implementation choice. | INFERRED |
-| BR-PWR-014 | After a configured GNSS-outage grace window (default 6 h), firmware SHALL inhibit transmission while continuing science logging and GNSS retry, until a fresh fix clears the silence (INV-PWR-009). | CONFIRMED |
+| BR-PWR-014 | ~~After a configured GNSS-outage grace window (default 6 h), firmware SHALL inhibit transmission while continuing science logging and GNSS retry, until a fresh fix clears the silence (INV-PWR-009).~~ | **SUPERSEDED 2026-08-13** — the stale-position RF budget is owned by DDR-0015 `BR-STALE-017` and bound to 24 h. Energy policy no longer defines a time-based RF cutoff. |
 | BR-PWR-015 | Energy scarcity gates feasibility rather than inventing a new mission: moving into a constrained energy state SHALL reduce cadence or suppress physically unaffordable work according to established policy; it SHALL NOT create an unrelated alternate mission objective. | CONFIRMED — 2026-08-12 interview |
 
 ---
@@ -351,4 +376,128 @@ The queued high-value topics are:
 4. **Battery/load profiling campaign** — not an interview; a hardware task that unblocks OD-PWR-001 and moves this DDR toward Accepted.
 
 These are independent topics and may be addressed in any order.
+
+
+---
+
+## 11. Amendment 2026-08-13 (intent interview, passes 1 and final)
+
+**Disposition:** amend; no new record required.
+
+### Refined mission objective
+
+The preferred scientific product is a **coherent observation package** containing:
+
+- time;
+- position, or honest stale/invalid position provenance;
+- environmental sensor readings.
+
+When energy is insufficient to sustain the configured observation frequency, the
+first response is to collect these coherent packages **less often** — not to preserve
+high cadence by stripping mission-value components out of each observation.
+
+### INV-PWR-022 — Prefer sparse complete observations to dense crippled observations
+
+Where energy policy has a choice between:
+
+- keeping the requested high wake rate while repeatedly omitting mission-critical
+  observation components; or
+- reducing the wake rate enough to preserve coherent science packages,
+
+firmware SHALL prefer the latter.
+
+This strengthens and generalizes `INV-PWR-001` (cadence is the first energy lever).
+
+### Two-level energy model
+
+#### Level 1 — cadence adapts across wakes (long-term lever)
+
+When the battery trend is unsustainable, lengthen the configured/effective
+observation interval. This is the primary and preferred adaptation, and it operates
+over many wakes.
+
+The battery/energy trend state SHALL be durable across reset (DDR-0010 §18) so that
+adaptation does not restart from scratch after every reboot.
+
+Recovery is trend-driven (`INV-PWR-005`) and returns toward the target cadence of the
+**latched flight phase** (DDR-0002 `INV-LIFE-011`); it never unlatches the phase.
+
+#### Level 2 — per-wake admission is FULL or SLEEP (first flight)
+
+Once a scheduled wake begins, first-flight firmware makes **one** early admission
+decision:
+
+- **FULL CYCLE** — perform the ordinary observation cycle; or
+- **SLEEP** — do not deliberately start the observation; return to low power and try
+  again at the next scheduled epoch.
+
+> **Supersession.** This supersedes the 2026-08-13 pass-1 proposal of a three-tier
+> ladder (cadence → deliberate GNSS suppression → sleep). First-flight energy policy
+> does **not** deliberately manufacture a partial observation mode such as
+> "sensors + radio but no GNSS."
+>
+> Note this also restores consistency with the pre-existing `INV-PWR-001`, which
+> already forbade shedding GNSS merely because the energy tier dropped.
+
+GNSS may still end up stale because GNSS itself failed or timed out. Individual
+sensors may still be stale because they failed. Those are honest **failure** outcomes
+under DDR-0009, not energy modes.
+
+Below the minimum safe operating reserve (CRITICAL, `INV-PWR-006`), firmware SHALL NOT
+attempt the normal science/radio/GNSS work; it returns to low power and re-checks
+later rather than driving the rail into brownout.
+
+### New behavioral requirements
+
+| ID | Requirement | Confidence |
+|---|---|---|
+| BR-PWR-016 | Battery/energy trend state SHALL be durable across reset so cadence adaptation persists across wakes. | **CONFIRMED** |
+| BR-PWR-017 | When the energy trend is unsustainable, firmware SHALL lengthen the effective observation interval before degrading observation content. | **CONFIRMED** |
+| BR-PWR-018 | For first flight, per-wake energy admission SHALL select either FULL CYCLE or SLEEP; it SHALL NOT deliberately select a partial-science mode. | **CONFIRMED** |
+| BR-PWR-019 | Energy recovery SHALL return the effective cadence toward the latched flight phase's configured target without changing the latched phase. | **CONFIRMED** |
+| BR-PWR-020 | Energy policy SHALL NOT define a time-based RF-silence cutoff; stale-position RF legality is owned by DDR-0015. | **CONFIRMED** |
+
+### Important implementation note
+
+The interview described admission conceptually in terms of voltage thresholds. This
+does **not** require replacing the existing predicted-droop / temperature-aware
+admission model (`INV-PWR-002`, `INV-PWR-003`) with raw voltage comparisons.
+
+The product requirements are the behaviors above. The numeric thresholds and model
+remain a battery/load-profiling binding (`OD-PWR-001`), and the illustrative
+−60 °C / 3.6 V / 3.4 V values must not be treated as decided.
+
+### Proof additions
+
+#### P-PWR-012 — Cadence adapts before content degrades
+
+Simulate a constrained night. Prove the effective cadence lengthens, and that
+firmware does not respond by keeping cadence and dropping GNSS.
+
+#### P-PWR-013 — FULL/SLEEP admission
+
+At the start of a wake, present energy states around the admission boundary. Prove the
+outcome is either a complete ordinary cycle or an immediate return to sleep, with no
+deliberately partial science cycle.
+
+#### P-PWR-014 — Critical reserve sleeps immediately
+
+Present a below-reserve energy state. Prove no GNSS/radio/optional work is attempted
+and the device returns to low power promptly.
+
+#### P-PWR-015 — Persistent battery trend across reset
+
+Accumulate an unsustainable trend, reset the MCU, and restore. Prove the trend and the
+adapted cadence survive, and that adaptation does not restart from a neutral
+assumption.
+
+### Cross-references
+
+- DDR-0001 §17 — start-to-start cadence and the one-decision-per-wake admission point.
+- DDR-0002 §19 — the latched flight phase that defines the cadence target.
+- DDR-0009 §18 — subsystem failure produces honest stale values, not energy modes.
+- DDR-0010 §18 — durable battery/energy trend.
+- DDR-0015 §11 — the single 24 h stale-position RF budget that replaced
+  `INV-PWR-009`/`BR-PWR-014`.
+- `../SYSTEM-INVARIANTS.md` SI-011, SI-012.
 
