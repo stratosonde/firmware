@@ -522,6 +522,14 @@ static int16_t ConvertLongitudeToCompact(int32_t binary_longitude)
  */
 static int8_t ConvertTemperatureToCompact(float temperature_c)
 {
+    /* SP-14 (#251): NaN has no defined comparison, and float->int casts on
+     * out-of-range values are UB (observed toolchain-lottery: host x86 and
+     * ARM disagree). No wire sentinel exists for temperature - range-bottom
+     * (0 raw = -64C) and the status byte's stale bits carry the honesty. */
+    if (isnan(temperature_c) || temperature_c < -128.0f) {
+        return 0;
+    }
+
     // Scale by 2°C resolution and add offset to handle negative values
     int16_t scaled = (int16_t)(temperature_c / TEMPERATURE_SCALE_FACTOR) + TEMPERATURE_OFFSET;
     
@@ -563,6 +571,12 @@ static uint16_t PackPressureHumidity(float pressure_mbar, float humidity_percent
  */
 static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts)
 {
+    /* SP-14 (#251): guard NaN/negative BEFORE the float->int cast (UB).
+     * 0 units = 0 V is the range bottom; no wire sentinel exists. */
+    if (isnan(voltage_volts) || voltage_volts < 0.0f) {
+        return 0;
+    }
+
     // Convert to 50mV units
     uint16_t voltage_50mv_units = (uint16_t)(voltage_volts / BATTERY_SCALE_FACTOR);
     

@@ -409,12 +409,30 @@ static void test_sp09_single_pin_owner(const char *gnss, const char *lpm)
                      "SP-09-lpm-no-override");
 }
 
+/* ========================================================================== */
+/* SP-14 (#251) - structural: compact converters guard NaN BEFORE the cast     */
+/* ========================================================================== */
+static void test_sp14_nan_guards(const char *pend)
+{
+    printf("-- SP-14 (#251) structural: NaN/negative guards on temp + battery\n");
+    /* Value-based NaN probes are a toolchain lottery (float->int UB is
+     * diagnosable but not deterministic), so the deterministic assertion is
+     * the guard's presence; test_main.c carries the behavioural mirrors. */
+    /* Anchor on the DEFINITION (the ')\n{' suffix separates it from the
+     * forward prototype at the file top - the notes' scan pit). */
+    CHECK_REGRESSION(in_function(pend, "static int8_t ConvertTemperatureToCompact(float temperature_c)\n{",
+                                 "isnan"), "SP-14-temp-guard");
+    CHECK_REGRESSION(in_function(pend, "static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts)\n{",
+                                 "isnan"), "SP-14-batt-guard");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
     char *gnss  = strip_comments(slurp("../../Core/Src/atgm336h.c"));
     char *mainc = strip_comments(slurp("../../Core/Src/main.c"));
     char *lpm   = strip_comments(slurp("../../Core/Src/stm32_lpm_if.c"));
+    char *pend  = strip_comments(slurp("../../Core/Src/payload_encode.c"));
     char *app   = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
     char *apph  = strip_comments(slurp("../../LoRaWAN/App/lora_app.h"));
     char *mreg  = strip_comments(slurp("../../Core/Src/multiregion_context.c"));
@@ -442,8 +460,10 @@ int main(void)
     test_sp07_fatal_escape_wired(mainc);
     printf("\n");
     test_sp09_single_pin_owner(gnss, lpm);
+    printf("\n");
+    test_sp14_nan_guards(pend);
 
-    free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm);
+    free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg); free(lpm); free(pend);
     free(conf); free(mregh); free(msstate); free(seid);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",

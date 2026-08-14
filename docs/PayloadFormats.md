@@ -630,6 +630,11 @@ Bulk packet: Type=2 Records=1 CRC32=0xAB9C...
 
 Values outside these ranges indicate sensor errors.
 
+SP-14 (#251): NaN/negative inputs to the COMPACT temperature/battery converters encode as
+range-bottom (0 raw units); only pressure/humidity have explicit sentinels (2047/31). Treat
+temperature=raw-0 or battery=0 as sensor-error evidence, and prefer the heartbeat status
+byte's stale bits for data-quality judgements.
+
 ---
 
 ## Related Documentation

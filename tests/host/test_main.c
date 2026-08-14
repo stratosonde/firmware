@@ -132,6 +132,26 @@ static void test_compact_packet(void)
     CHECK_EQ_I(pkt.press_hum >> PRESS_HUM_HUM_SHIFT, PRESS_HUM_HUM_INVALID);
     s.humidity = 45.0f;
 
+    /* SP-14 (#251): compact temperature/battery converters must not cast
+     * NaN/out-of-range floats to int (UB). No wire sentinel exists for these
+     * fields - clamp to range bottom; the status byte carries honesty. */
+    CHECK(EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL));
+    s.temperature = NAN;
+    EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL);
+    CHECK_REGRESSION((uint8_t)pkt.temperature_2deg == 0, "SP-14-temp-nan");
+    s.temperature = -500.0f;
+    EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL);
+    CHECK_REGRESSION((uint8_t)pkt.temperature_2deg == 0, "SP-14-temp-neg");
+    s.temperature = 25.0f;
+    s.battery_voltage = NAN;
+    EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL);
+    CHECK_REGRESSION(pkt.battery_volt_50mv == 0, "SP-14-batt-nan");
+    s.battery_voltage = -1.5f;
+    EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL);
+    CHECK_REGRESSION(pkt.battery_volt_50mv == 0, "SP-14-batt-neg");
+    s.battery_voltage = 5.0f;
+    EncodeCompactBinaryPacket(&pkt, &s, 1234, 0, MODE_NORMAL);  /* re-encode after restore */
+
     CHECK_EQ_I(pkt.battery_volt_50mv, 100);          /* 5.0V/0.05 */
     CHECK(pkt.latitude_100m > 16300 && pkt.latitude_100m < 16470);
     CHECK(pkt.longitude_100m < -20700 && pkt.longitude_100m > -20810);
