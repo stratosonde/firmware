@@ -265,6 +265,22 @@ void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
   }
 }
 
+/* SP-01 (#244): the vendored HAL treats ANY UART error as blocking while
+ * CR3.DMAR is set and aborts the circular GNSS DMA (UART_EndRxTransfer +
+ * HAL_DMA_Abort_IT in HAL_UART_IRQHandler) — and NEVER consults the
+ * AdvancedInit DMADisableonRxError bit the S-C (#212) fix relied on. Without
+ * THIS override the stream died silently for the whole acquisition window
+ * (dma_head simply stops, indistinguishable from "no bytes"). USART1 is the
+ * GPS UART (FW-13: no console RX path exists); the GNSS driver owns the
+ * recovery policy. */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    GNSS_UART_ErrorCallback(huart);
+  }
+}
+
 /* USER CODE BEGIN EF */
 
 /* USER CODE END EF */

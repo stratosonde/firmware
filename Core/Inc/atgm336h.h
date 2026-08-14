@@ -155,6 +155,16 @@ typedef struct
   volatile uint32_t dma_produced_total;   // Bytes produced by DMA (256-granular)
   uint32_t dma_consumed_total;            // Bytes consumed by the parser
   uint32_t dma_overrun_count;             // Cumulative overrun events (health metric)
+  /* SP-01 (#244): UART error recovery. The vendored HAL aborts the circular
+   * DMA on ANY UART error while CR3.DMAR is set and never consults the
+   * AdvancedInit DMADisableonRxError bit (HAL_UART_IRQHandler), so the error
+   * callback must re-arm the stream. rx_dma_active tells "mid-acquisition
+   * stream killed" from "error during teardown": it is set after each
+   * successful HAL_UART_Receive_DMA start and cleared at teardown BEFORE
+   * aborting (is_powered cannot serve here - Wake sets is_powered only after
+   * the DMA is already started). */
+  volatile bool rx_dma_active;            // Circular DMA expected live
+  uint32_t uart_error_count;              // Cumulative UART error events
   
   /* NMEA Sentence Processing */
   char nmea_sentence[GNSS_NMEA_MAX_LENGTH];  // Current NMEA sentence being built
@@ -325,6 +335,13 @@ GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *b
 uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss);
 
 /**
+  * @brief  SP-01 (#244): cumulative UART error events seen by the GNSS error
+  *         callback (health metric; nonzero means the stream died and was
+  *         re-armed at least once).
+  */
+uint32_t GNSS_GetUartErrorCount(const GNSS_HandleTypeDef *hgnss);
+
+/**
   * @brief  Calculate NMEA checksum
   * @param  sentence: NMEA sentence (without $ and checksum)
   * @retval Calculated checksum
@@ -336,6 +353,15 @@ uint8_t GNSS_CalculateChecksum(const char *sentence);
   */
 void GNSS_DMA_RxHalfCallback(UART_HandleTypeDef *huart);
 void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart);
+
+/**
+  * @brief  SP-01 (#244): UART error recovery, called from usart_if.c's
+  *         HAL_UART_ErrorCallback for USART1. The HAL has already torn down
+  *         the RX DMA by this point; this counts the event, drops the torn
+  *         partial sentence, restarts the ring bookkeeping and re-arms
+  *         HAL_UART_Receive_DMA while rx_dma_active marks the stream live.
+  */
+void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }

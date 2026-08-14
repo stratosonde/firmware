@@ -873,20 +873,25 @@ void MX_USART1_UART_Init(void)
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
   huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  /* S-C (#212, 2026-08-12): with DMA RX active the HAL treats ANY UART error
-   * as BLOCKING (stm32wlxx_hal_uart.c: the DMAR test alone is enough - not
-   * just ORE, a single framing or noise glitch qualifies). It then runs
-   * UART_EndRxTransfer() + HAL_DMA_Abort_IT(hdmarx) and the circular GNSS
-   * reception is dead for the rest of the acquisition window. Nothing
-   * restarts it (HAL_UART_ErrorCallback is not overridden) and nothing can
-   * observe it (dma_head just stops advancing, identical to "no bytes").
-   * Reachable at GPS power-on: PB6 is driven LOW and PB7 is analog during
-   * standby, so the first character after wake is easily partial.
+  /* S-C (#212, 2026-08-12) / SP-01 (#244, 2026-08-13): with DMA RX active the
+   * vendored HAL treats ANY UART error (FE/NE/ORE/PE) as BLOCKING
+   * (stm32wlxx_hal_uart.c HAL_UART_IRQHandler: the CR3.DMAR test alone is
+   * enough) and runs UART_EndRxTransfer() + HAL_DMA_Abort_IT(hdmarx). It
+   * NEVER consults the DMADisableonRxError setting below, so these two bits
+   * alone could not save the transfer: without recovery, the circular GNSS
+   * reception died for the rest of the acquisition window, invisible as "no
+   * bytes" (dma_head just stops advancing). Recovery now lives in
+   * HAL_UART_ErrorCallback (usart_if.c -> GNSS_UART_ErrorCallback): the event
+   * is counted and the stream re-armed. Reachable at GPS power-on: PB6 is
+   * driven LOW and PB7 is analog during standby, so the first character
+   * after wake is easily partial.
    *   OverrunDisable      - RDR is overwritten instead of asserting ORE.
    *                         Correct for a circular NMEA sniffer: a lost byte
    *                         costs one sentence (checksum rejects it), a lost
    *                         DMA costs the whole fix.
-   *   DMA_ENABLEONRXERROR - reception survives a framing/noise glitch.
+   *   DMA_ENABLEONRXERROR - does NOT stop the HAL software teardown (SP-01);
+   *                         kept so the peripheral-side DMA request also
+   *                         survives an error.
    * NOTE: this block is CubeMX-generated. Mirrored in
    * Radio_Sonde_E5_HF_EU.ioc (USART1 Advanced Parameters); the S-C
    * regression scan catches a silent .ioc revert. */

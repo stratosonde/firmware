@@ -160,11 +160,13 @@ static void test_sa_gps_loss_retry_budget(const char *app)
 /* S-C (P1) — UART RX DMA must survive a reception error                      */
 /* ========================================================================== */
 /* stm32wlxx_hal_uart.c treats ANY error as blocking while CR3.DMAR is set, and
- * aborts the circular GNSS DMA. HAL_UART_ErrorCallback is not overridden, and
- * GNSS_ProcessDMABuffer cannot detect a dead ring (dma_head simply stops).
- * Either advanced-feature suppression OR an explicit error-recovery callback
- * satisfies this; the scan accepts both so a future maintainer is not forced
- * into one implementation. */
+ * aborts the circular GNSS DMA. SP-01 (#244, verified against the vendored HAL
+ * 2026-08-13): HAL_UART_IRQHandler NEVER consults the AdvancedInit
+ * DMADisableonRxError bit, so the two advanced-feature assignments below CANNOT
+ * save the transfer - they keep their hardware value (ORE overwrite, DDRE), but
+ * the operative fix is the HAL_UART_ErrorCallback override that re-arms the
+ * stream (usart_if.c -> GNSS_UART_ErrorCallback, covered behaviourally by
+ * test_sp_20260813.c). */
 static void test_sc_uart_dma_error_recovery(const char *mainc, const char *usart,
                                             const char *gnss)
 {
@@ -174,16 +176,17 @@ static void test_sc_uart_dma_error_recovery(const char *mainc, const char *usart
     bool dma_survives = strstr(mainc, "UART_ADVFEATURE_DMA_ENABLEONRXERROR") != NULL;
     bool no_init_left = strstr(mainc, "AdvFeatureInit = UART_ADVFEATURE_NO_INIT") != NULL;
 
-    /* Alternative acceptable fix: an explicit error callback that re-arms. */
+    /* SP-01: the error-callback re-arm is REQUIRED (bits alone are inert). */
     bool err_cb = (strstr(usart, "HAL_UART_ErrorCallback") != NULL) ||
                   (strstr(gnss,  "HAL_UART_ErrorCallback") != NULL);
 
     printf("   OverrunDisable: %s | DMA_ENABLEONRXERROR: %s | NO_INIT still set: %s\n",
            ovr_disabled ? "yes" : "no", dma_survives ? "yes" : "no",
            no_init_left ? "yes" : "no");
-    printf("   HAL_UART_ErrorCallback override: %s\n", err_cb ? "yes" : "no");
+    printf("   HAL_UART_ErrorCallback override (operative fix, SP-01): %s\n",
+           err_cb ? "yes" : "no");
 
-    CHECK_REGRESSION((ovr_disabled && dma_survives) || err_cb, "S-C");
+    CHECK_REGRESSION(err_cb, "S-C-callback");
     CHECK_REGRESSION(!no_init_left || err_cb, "S-C-noinit");
 }
 

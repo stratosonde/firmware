@@ -69,7 +69,9 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   hgnss->dma_produced_total = 0;
   hgnss->dma_consumed_total = 0;
   hgnss->dma_overrun_count = 0;
-  
+  hgnss->rx_dma_active = false;      /* SP-01 (#244): no stream expected yet */
+  hgnss->uart_error_count = 0;
+
   /* Initialize NMEA sentence processing */
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
   hgnss->nmea_length = 0;
@@ -169,11 +171,16 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
 
+  /* SP-01 (#244): the circular stream is expected live from here — the UART
+   * error callback may now re-arm it after an FE/NE glitch. */
+  hgnss->rx_dma_active = true;
+
   /* Send wake character to exit standby mode */
   if (HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100) != HAL_OK)
   {
     /* R9 (#194): same transactional cleanup - DMA was started, so abort it
      * too on the way back to OFF. */
+    hgnss->rx_dma_active = false;  /* SP-01 (#244): not live anymore */
     HAL_UART_AbortReceive(hgnss->huart);
     UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
     HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
@@ -216,6 +223,10 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   }
   
   HAL_Delay(200); */
+
+  /* SP-01 (#244): the stream is no longer expected live BEFORE the abort —
+   * a late error callback must not re-arm a stream we are tearing down. */
+  hgnss->rx_dma_active = false;
 
   /* Abort DMA reception */
   if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
@@ -1011,6 +1022,62 @@ uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss)
   return (hgnss != NULL) ? hgnss->dma_overrun_count : 0;
 }
 
+uint32_t GNSS_GetUartErrorCount(const GNSS_HandleTypeDef *hgnss)
+{
+  return (hgnss != NULL) ? hgnss->uart_error_count : 0;
+}
+
+/* SP-01 (#244): recover the circular GNSS stream after a UART error.
+ *
+ * The vendored HAL treats ANY error (FE/NE/ORE/PE) as BLOCKING while
+ * CR3.DMAR is set (stm32wlxx_hal_uart.c: HAL_UART_IRQHandler runs
+ * UART_EndRxTransfer() + HAL_DMA_Abort_IT()) and NEVER consults the
+ * AdvancedInit DMADisableonRxError bit S-C (#212) set — that bit only relaxes
+ * the hardware DMA-request disable. Without this callback, a single framing
+ * or noise glitch (expected at GPS wake: PB6 is driven LOW and PB7 is analog
+ * during standby, so the first character after wake is easily partial) killed
+ * reception for the whole acquisition window, looking exactly like "no bytes".
+ *
+ * Called via HAL_UART_ErrorCallback (usart_if.c) AFTER the HAL has fully
+ * quiesced the DMA abort; the hardware error flags were already cleared by
+ * the ISR. We count the event, drop the torn partial sentence (the NMEA
+ * checksum would reject it anyway), restart the ring bookkeeping, and re-arm
+ * the circular DMA. This is NOT a fresh acquisition: the overrun counter and
+ * the cross-sleep vertical-speed reference (DR-10) both survive. A
+ * teardown-time error (rx_dma_active already false) is ignored. */
+void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart == NULL || huart->Instance != USART1 || pHgnss == NULL)
+  {
+    return;
+  }
+  if (!pHgnss->rx_dma_active)
+  {
+    return;  /* teardown/dormant: nothing to recover */
+  }
+
+  pHgnss->uart_error_count++;
+  huart->ErrorCode = HAL_UART_ERROR_NONE;
+
+  /* The DMA restarts at buffer index 0, so the ring indices and the F-011
+   * absolute producer/consumer counters must restart too. */
+  pHgnss->dma_head = 0;
+  pHgnss->dma_tail = 0;
+  pHgnss->dma_data_ready = false;
+  pHgnss->dma_produced_total = 0;
+  pHgnss->dma_consumed_total = 0;
+  pHgnss->nmea_length = 0;
+
+  if (HAL_UART_Receive_DMA(huart, pHgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE) != HAL_OK)
+  {
+    /* Re-arm refused (e.g. HAL lock contention against an interrupted
+     * task-level UART op): the stream stays dead for this window. Honest
+     * disengage — the GNSS timeout path ends the acquisition and the next
+     * wake re-arms from scratch. The event itself is counted above. */
+    pHgnss->rx_dma_active = false;
+  }
+}
+
 /**
   * @brief  Convert NMEA coordinate format to decimal degrees
   * @param  raw_degrees: Raw coordinate (DDMM.MMMM format)
@@ -1388,6 +1455,9 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   /* Configure UART pins for minimal power (full power-off follows below) */
   if (hgnss->huart != NULL)
   {
+    /* SP-01 (#244): stream no longer expected live before DeInit tears it
+     * down — a late error callback must not re-arm here. */
+    hgnss->rx_dma_active = false;
     HAL_UART_DeInit(hgnss->huart);
     SONDE_LOG_STR("[GPS STANDBY] UART deinitialized\r\n");
 
@@ -1500,6 +1570,11 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     return GNSS_ERROR;
   }
   SONDE_LOG_STR("[GPS WAKE] DMA started - ready to receive\r\n");
+
+  /* SP-01 (#244): the circular stream is expected live from here — BEFORE the
+   * module is enabled (next step), so an early glitched first character can
+   * still recover via the error callback instead of killing the whole window. */
+  hgnss->rx_dma_active = true;
   
   /* STEP 4: Ensure PB10 is HIGH (main power) - may have been affected by sleep mode */
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)

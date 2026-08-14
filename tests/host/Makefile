@@ -61,6 +61,12 @@ CONFIG_SRCS := test_config.c
 # DR-03 behavioural against the real transmit_plan.c, DR-02c source scan.
 DR_SRCS := test_dr_20260812.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/sys_caps.c
 
+# SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
+# FE/NE killed the circular DMA because the HAL never consults the
+# DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
+# atgm336h.c (#included by the test TU) + structural scans of usart_if.c/main.c.
+SP_SRCS := test_sp_20260813.c
+
 # Sources #included by the test TUs (not linked separately) must still be
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
@@ -101,6 +107,9 @@ test_config$(EXE): $(CONFIG_SRCS) ../../Core/Src/config.c ../../Core/Inc/config.
 test_dr$(EXE): $(DR_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(DR_SRCS) -lm
 
+test_sp0813$(EXE): $(SP_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SP_SRCS) -lm
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -113,11 +122,14 @@ config: test_config$(EXE)
 dr: test_dr$(EXE)
 	./test_dr$(EXE)
 
+sp0813: test_sp0813$(EXE)
+	./test_sp0813$(EXE)
+
 # R3-11 (#223): DDR identity integrity against the canonical manifest.
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr ddrmanifest
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 ddrmanifest
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -144,7 +156,7 @@ timerif: test_timerif$(EXE)
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
@@ -156,6 +168,7 @@ baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EX
 	EXPECT_UNFIXED=1 ./test_deepreview$(EXE)
 	EXPECT_UNFIXED=1 ./test_config$(EXE)
 	EXPECT_UNFIXED=1 ./test_dr$(EXE)
+	EXPECT_UNFIXED=1 ./test_sp0813$(EXE)
 
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
@@ -168,7 +181,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_sanitize$(EXE)

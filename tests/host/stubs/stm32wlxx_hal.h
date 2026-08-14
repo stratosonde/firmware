@@ -61,7 +61,10 @@ static inline HAL_StatusTypeDef HAL_UART_DeInit(UART_HandleTypeDef *h) { (void)h
 static inline HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n, uint32_t t) { (void)h; (void)d; (void)n; (void)t; return HAL_OK; }
 /* R9 (#194): DMA-start failure injection (per-TU static, defaults OK). */
 static HAL_StatusTypeDef g_host_uart_dma_rc __attribute__((unused)) = HAL_OK;
-static inline HAL_StatusTypeDef HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n) { (void)h; (void)d; (void)n; return g_host_uart_dma_rc; }
+/* SP-01 (#244): count DMA (re)arm calls so the UART error-recovery test can
+ * assert the callback re-armed exactly once (and not during teardown). */
+static uint32_t g_host_uart_rx_dma_calls __attribute__((unused));
+static inline HAL_StatusTypeDef HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n) { (void)h; (void)d; (void)n; g_host_uart_rx_dma_calls++; return g_host_uart_dma_rc; }
 static inline HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
 
 /* ---- misc ---- */
