@@ -27,10 +27,12 @@ typedef struct sLmHandlerParams {
     int8_t TxDatarate;
 } LmHandlerParams_t;
 
-void LmHandlerConfigure(LmHandlerParams_t *params);
+/* F-01 (#245): match the real API - these return statuses (previously the
+ * stub said void, which is exactly how the unchecked-return bug hid). */
+LmHandlerErrorStatus_t LmHandlerConfigure(LmHandlerParams_t *params);
 LmHandlerErrorStatus_t LmHandlerSetKey(KeyIdentifier_t keyId, uint8_t *key);
 LmHandlerErrorStatus_t LmHandlerGetKey(KeyIdentifier_t keyId, uint8_t *key);
-void LmHandlerSetDevEUI(uint8_t *devEui);
+LmHandlerErrorStatus_t LmHandlerSetDevEUI(uint8_t *devEui);
 void LmHandlerSetAppEUI(uint8_t *appEui);
 void LmHandlerProcess(void);
 void LmHandlerJoin(ActivationType_t mode, bool forceRejoin);

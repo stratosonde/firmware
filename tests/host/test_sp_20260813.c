@@ -13,6 +13,12 @@
   *     Fix: HAL_UART_ErrorCallback override (usart_if.c) ->
   *     GNSS_UART_ErrorCallback (atgm336h.c) counts, resets ring state, re-arms.
   *
+  *   F-01 (#245, P1): LoRaWAN stack lifecycle return values ignored at boot
+  *     (LmHandlerInit/Configure) and in the region switch/restore ritual -
+  *     R1 (#187) fail-closed steps 4-10, but steps 1-3 were bare and
+  *     LoRaApp_ReInitStack returned void. Structural scans only; behavioural
+  *     coverage is the fault-injection matrix in test_multiregion.c.
+  *
   *   BEHAVIOURAL against the real atgm336h.c (#included below, DR-suite
   *   precedent) + structural scans of usart_if.c / main.c.
   *
@@ -134,6 +140,23 @@ static bool in_function(const char *src, const char *sig, const char *needle)
     bool found = strstr(body, needle) != NULL;
     free(body);
     return found;
+}
+
+/* Occurrences of `needle` inside the function body that starts at the first
+ * occurrence of `sig` (same bounds as in_function). -1 if sig not found. */
+static int count_in_function(const char *src, const char *sig, const char *needle)
+{
+    const char *start = strstr(src, sig);
+    if (!start) return -1;
+    const char *end = strstr(start, "\n}\n");
+    if (!end) end = src + strlen(src);
+    size_t len = (size_t)(end - start);
+    char *body = (char *)malloc(len + 1);
+    memcpy(body, start, len);
+    body[len] = '\0';
+    int c = count_occurrences(body, needle);
+    free(body);
+    return c;
 }
 
 /* ========================================================================== */
@@ -267,11 +290,50 @@ static void test_sp01_structural(const char *usart, const char *gnss, const char
                                                           * the override */
 }
 
+/* ========================================================================== */
+/* F-01 (#245) - structural: every lifecycle call returns a CHECKED status     */
+/* ========================================================================== */
+static void test_f01_structural(const char *app, const char *apph, const char *mreg)
+{
+    printf("-- F-01 (#245) structural: LoRaWAN lifecycle returns are checked\n");
+
+    /* LoRaApp_ReInitStack now returns a status; the void form is gone. */
+    CHECK_REGRESSION(strstr(apph, "LmHandlerErrorStatus_t LoRaApp_ReInitStack") != NULL,
+                     "F-01-hdr-status");
+    CHECK_REGRESSION(strstr(app, "void LoRaApp_ReInitStack") == NULL, "F-01-no-void");
+
+    /* ReInitStack checks each of Halt/DeInit/Init. */
+    const char *rsig = "LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t new_region)";
+    CHECK_REGRESSION(count_in_function(app, rsig, "!= LORAMAC_HANDLER_SUCCESS") >= 3,
+                     "F-01-reinit-checks");
+
+    /* Boot failure marks SYS_CAP_RADIO (degrade-and-say-so, DDR-0009). */
+    CHECK_REGRESSION(count_in_function(app, "void LoRaWAN_Init(void)",
+                                       "SysCaps_MarkFailed(SYS_CAP_RADIO)") >= 2,
+                     "F-01-boot-marks");  /* LmHandlerInit + LmHandlerConfigure */
+
+    /* Auto-switch: the plain-ERROR outcome gets a real log line. */
+    CHECK_REGRESSION(strstr(app, "Switch FAILED") != NULL, "F-01-switch-log");
+
+    /* RestoreSessionToMac: steps 1-3 (reinit/configure/deveui/keys) all
+     * fail-closed, joining R1's steps 4-10. */
+    CHECK_REGRESSION(count_in_function(mreg, "static LmHandlerErrorStatus_t RestoreSessionToMac",
+                                       "!= LORAMAC_HANDLER_SUCCESS") >= 5,
+                     "F-01-restore-checks");
+    /* Both ReInitStack call sites check the status. */
+    CHECK_REGRESSION(count_occurrences(mreg,
+                     "if (LoRaApp_ReInitStack(region) != LORAMAC_HANDLER_SUCCESS)") >= 2,
+                     "F-01-reinit-callers");
+}
+
 int main(void)
 {
     char *usart = strip_comments(slurp("../../Core/Src/usart_if.c"));
     char *gnss  = strip_comments(slurp("../../Core/Src/atgm336h.c"));
     char *mainc = strip_comments(slurp("../../Core/Src/main.c"));
+    char *app   = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
+    char *apph  = strip_comments(slurp("../../LoRaWAN/App/lora_app.h"));
+    char *mreg  = strip_comments(slurp("../../Core/Src/multiregion_context.c"));
 
     printf("=== SP-series review regressions (2026-08-13) ===\n\n");
 
@@ -282,8 +344,10 @@ int main(void)
     test_sp01_teardown_error_is_ignored();
     printf("\n");
     test_sp01_structural(usart, gnss, mainc);
+    printf("\n");
+    test_f01_structural(app, apph, mreg);
 
-    free(usart); free(gnss); free(mainc);
+    free(usart); free(gnss); free(mainc); free(app); free(apph); free(mreg);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

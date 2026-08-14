@@ -5,7 +5,8 @@
 #include <stdbool.h>
 #include "LoRaMacInterfaces.h"
 
-void LoRaApp_ReInitStack(LoRaMacRegion_t region);
+/* F-01 (#245): real signature returns LmHandlerErrorStatus_t - callers check. */
+LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t region);
 bool LoRaApp_EraseNvmSlots(void);
 
 #endif

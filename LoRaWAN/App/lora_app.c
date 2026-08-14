@@ -45,6 +45,7 @@
 #include "atgm336h.h"
 #include "multiregion_h3.h"
 #include "multiregion_context.h"
+#include "sys_caps.h"  /* F-01 (#245): SYS_CAP_RADIO degrade marking */
 #include "timer_if.h"
 #include "payload_format.h"
 #include "flash_log.h"
@@ -417,29 +418,42 @@ static uint32_t g_science_due_ms = 0;
  * @note This performs DeInit/Init cycle to clear ALL state between region joins
  * @note Caller must set DevEUI and call LmHandlerConfigure() after this returns
  */
-void LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
+LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t new_region)
 {
   SONDE_LOG_STR("LoRaApp_ReInitStack: Starting full stack reset...\r\n");
-  
-  // Halt current operations
-  LmHandlerHalt();
+
+  /* F-01 (#245): every lifecycle return checked, fail closed. A mid-flight
+   * region switch whose teardown/rebuild failed must NOT report success -
+   * the caller would mark the region active on a torn stack and transmit-
+   * retry against dead state for the rest of the flight. */
+  if (LmHandlerHalt() != LORAMAC_HANDLER_SUCCESS) {
+    SONDE_LOG_STR("LoRaApp_ReInitStack: Halt FAILED - aborting reinit\r\n");
+    return LORAMAC_HANDLER_ERROR;
+  }
   HAL_Delay(100);
-  
+
   // Complete teardown
   SONDE_LOG_STR("LoRaApp_ReInitStack: Calling LmHandlerDeInit...\r\n");
-  LmHandlerDeInit();
+  if (LmHandlerDeInit() != LORAMAC_HANDLER_SUCCESS) {
+    SONDE_LOG_STR("LoRaApp_ReInitStack: DeInit FAILED - aborting reinit\r\n");
+    return LORAMAC_HANDLER_ERROR;
+  }
   HAL_Delay(200);
-  
+
   // Rebuild from scratch
   SONDE_LOG_STR("LoRaApp_ReInitStack: Calling LmHandlerInit...\r\n");
-  LmHandlerInit(&LmHandlerCallbacks, APP_VERSION);
+  if (LmHandlerInit(&LmHandlerCallbacks, APP_VERSION) != LORAMAC_HANDLER_SUCCESS) {
+    SONDE_LOG_STR("LoRaApp_ReInitStack: Init FAILED - stack unusable\r\n");
+    return LORAMAC_HANDLER_ERROR;
+  }
   HAL_Delay(100);
-  
+
   // Set region parameter but DON'T configure yet
   // Configuration must be done AFTER DevEUI is set by caller
   LmHandlerParams.ActiveRegion = new_region;
-  
+
   SONDE_LOG_STR("LoRaApp_ReInitStack: Stack reset complete (region set, not configured)\r\n");
+  return LORAMAC_HANDLER_SUCCESS;
 }
 
 /* USER CODE END EF */
@@ -465,10 +479,20 @@ void LoRaWAN_Init(void)
   /* Init Info table used by LmHandler*/
   LoraInfo_Init();
 
-  /* Init the Lora Stack*/
-  LmHandlerInit(&LmHandlerCallbacks, APP_VERSION);
+  /* Init the Lora Stack
+   * F-01 (#245): a boot-time lifecycle failure leaves the radio unusable for
+   * the whole mission. Degrade-and-say-so (DDR-0009): mark the capability
+   * and keep flying - science acquisition + archive logging proceed; the TX
+   * paths fail visibly instead of pretending the stack is up. */
+  if (LmHandlerInit(&LmHandlerCallbacks, APP_VERSION) != LORAMAC_HANDLER_SUCCESS) {
+    SONDE_LOG_STR("LoRaWAN_Init: LmHandlerInit FAILED - marking radio unavailable\r\n");
+    SysCaps_MarkFailed(SYS_CAP_RADIO);
+  }
 
-  LmHandlerConfigure(&LmHandlerParams);
+  if (LmHandlerConfigure(&LmHandlerParams) != LORAMAC_HANDLER_SUCCESS) {
+    SONDE_LOG_STR("LoRaWAN_Init: LmHandlerConfigure FAILED - marking radio unavailable\r\n");
+    SysCaps_MarkFailed(SYS_CAP_RADIO);
+  }
 
   /* USER CODE BEGIN LoRaWAN_Init_2 */
   
@@ -1433,6 +1457,10 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
         SONDE_LOG_STR("MultiRegion: Auto-switch completed successfully\r\n");
       } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
         SONDE_LOG_STR("MultiRegion: Switch deferred (MAC busy)\r\n");
+      } else {
+        /* F-01 (#245): the fail-closed restore left the working session
+         * intact - stay on the current region and SAY SO (was silent). */
+        SONDE_LOG_STR("MultiRegion: Switch FAILED (restore error) - staying on current region\r\n");
       }
       }
     }

@@ -31,6 +31,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "LoRaMacInterfaces.h"
+#include "LmHandler.h"   /* F-01 (#245): LmHandlerErrorStatus_t used in prototypes below */
 #include "power_model.h"  /* R49: OperatingMode_t + VoltageSlope_t live here now */
 /* USER CODE END Includes */
 
@@ -248,8 +249,12 @@ void LoRaWAN_ResetJoinSuccess(void);
  * @brief Reinitialize the entire LoRaWAN stack for a new region
  * @param new_region: Target region to configure after reinit
  * @note This performs a complete stack teardown and rebuild to ensure clean state
+ * @note Caller must set DevEUI and call LmHandlerConfigure() after this returns
+ * @retval LORAMAC_HANDLER_SUCCESS on full teardown+rebuild, else ERROR
+ *         (F-01 #245: every lifecycle step is checked; failure is fatal to
+ *         the stack, so callers must fail closed)
  */
-void LoRaApp_ReInitStack(LoRaMacRegion_t new_region);
+LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t new_region);
 
 /**
  * @brief Erase BOTH LoRaWAN NVM context slots (pages 126+127) and reset the

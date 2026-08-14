@@ -60,6 +60,11 @@ static struct {
     bool corrupt_keys_on_mib_get;   /* NVM readback shows wrong session keys */
     bool null_nvm;                  /* MIB_NVM_CTXS get returns NULL contexts */
     bool fail_getkey;               /* F-008 (#205): LmHandlerGetKey fails */
+    /* F-01 (#245): lifecycle-return injections for restore steps 1-3 */
+    bool fail_reinit;               /* LoRaApp_ReInitStack fails */
+    bool fail_configure;            /* LmHandlerConfigure fails */
+    bool fail_setdeveui;            /* LmHandlerSetDevEUI fails */
+    bool fail_setkey;               /* LmHandlerSetKey fails */
 } g_mac;
 
 LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
@@ -136,10 +141,17 @@ bool LoRaMacIsBusy(void) { return g_mac.busy; }
 
 LmHandlerParams_t LmHandlerParams;
 
-void LmHandlerConfigure(LmHandlerParams_t *params) { (void)params; }
+/* F-01 (#245): the real LmHandlerConfigure returns a status; the fake can
+ * now be told to fail so restore step 2 is provably fail-closed. */
+LmHandlerErrorStatus_t LmHandlerConfigure(LmHandlerParams_t *params)
+{
+    (void)params;
+    return g_mac.fail_configure ? LORAMAC_HANDLER_ERROR : LORAMAC_HANDLER_SUCCESS;
+}
 
 LmHandlerErrorStatus_t LmHandlerSetKey(KeyIdentifier_t keyId, uint8_t *key)
 {
+    if (g_mac.fail_setkey) return LORAMAC_HANDLER_ERROR;   /* F-01 (#245) */
     if (keyId >= KEY_LIST_SIZE || key == NULL) return LORAMAC_HANDLER_ERROR;
     memcpy(g_mac.keys[keyId], key, 16);
     /* SetKey also lands in the NVM mirror, as on target */
@@ -155,7 +167,13 @@ LmHandlerErrorStatus_t LmHandlerGetKey(KeyIdentifier_t keyId, uint8_t *key)
     return LORAMAC_HANDLER_SUCCESS;
 }
 
-void LmHandlerSetDevEUI(uint8_t *devEui) { memcpy(g_mac.dev_eui, devEui, 8); }
+/* F-01 (#245): real LmHandlerSetDevEUI returns a status; injectable. */
+LmHandlerErrorStatus_t LmHandlerSetDevEUI(uint8_t *devEui)
+{
+    if (g_mac.fail_setdeveui) return LORAMAC_HANDLER_ERROR;
+    memcpy(g_mac.dev_eui, devEui, 8);
+    return LORAMAC_HANDLER_SUCCESS;
+}
 void LmHandlerSetAppEUI(uint8_t *appEui) { (void)appEui; }
 void LmHandlerProcess(void) { }
 void LmHandlerJoin(ActivationType_t mode, bool forceRejoin) { (void)mode; (void)forceRejoin; }
@@ -175,8 +193,10 @@ LmHandlerErrorStatus_t LmHandlerSend(LmHandlerAppData_t *appData, LmHandlerMsgTy
 /* Fake app/infra surfaces                                              */
 /* ------------------------------------------------------------------ */
 
-void LoRaApp_ReInitStack(LoRaMacRegion_t region)
+/* F-01 (#245): real ReInitStack returns LmHandlerErrorStatus_t - injectable. */
+LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t region)
 {
+    if (g_mac.fail_reinit) return LORAMAC_HANDLER_ERROR;
     LmHandlerParams.ActiveRegion = region;
     /* stack reinit wipes live MAC state... */
     g_mac.dev_addr = 0;
@@ -184,6 +204,7 @@ void LoRaApp_ReInitStack(LoRaMacRegion_t region)
     memset(g_mac.keys, 0, sizeof(g_mac.keys));
     memset(&g_mac.nvm, 0, sizeof(g_mac.nvm));
     /* ...but NEVER the injection knobs (faults persist across a restore). */
+    return LORAMAC_HANDLER_SUCCESS;
 }
 
 bool g_erase_nvm_ok = true;
@@ -407,8 +428,65 @@ static void test_r1_restore_fail_closed(void)
 
 
 /* ========================================================================== */
+/* F-01 (#245) — restore steps 1-3 must fail closed too                        */
+/* ========================================================================== */
+/* R1 (#187) made restore steps 4-10 fail-closed, but the lifecycle calls at
+ * the TOP of RestoreSessionToMac - LoRaApp_ReInitStack / LmHandlerConfigure /
+ * LmHandlerSetDevEUI / LmHandlerSetKey - were still bare: a failed stack
+ * teardown or configure fell through to SUCCESS and the caller marked the
+ * region active on a dead session. Same matrix shape as R1. */
+static void test_f01_restore_steps123_fail_closed(void)
+{
+    printf("-- F-01 (P1, #245): restore lifecycle steps 1-3 must fail closed\n");
+
+    /* Guard: clean switch works (fresh commissioning, no faults). */
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    CHECK_REGRESSION(MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) == LORAMAC_HANDLER_SUCCESS, "F-01-guard");
+
+    /* Step 1: stack reinit fails. */
+    mac_reset();
+    g_mac.fail_reinit = true;
+    LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    printf("   reinit failure: rc=%d, active=%s (want rc!=0, active=US915)\n",
+           st, RegionToString(MultiRegion_GetActiveRegion()));
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "F-01a-rc");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "F-01a-active");
+
+    /* Step 2: handler configure fails. */
+    mac_reset();
+    g_mac.fail_configure = true;
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    printf("   configure failure: rc=%d, active=%s\n", st, RegionToString(MultiRegion_GetActiveRegion()));
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "F-01b-rc");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "F-01b-active");
+
+    /* Step 3a: DevEUI set fails. */
+    mac_reset();
+    g_mac.fail_setdeveui = true;
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "F-01c-rc");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "F-01c-active");
+
+    /* Step 3b: session-key set fails. */
+    mac_reset();
+    g_mac.fail_setkey = true;
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "F-01d-rc");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "F-01d-active");
+
+    /* Recovery: faults cleared, the banked switch succeeds. */
+    mac_reset();
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    CHECK_REGRESSION(st == LORAMAC_HANDLER_SUCCESS, "F-01e-recovery");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_EU868, "F-01e-active");
+}
+
+/* ========================================================================== */
 /* R3 (P0) — FCnt restore must resume AHEAD of the true network counter       */
 /* ========================================================================== */
+
 /* Saves batch every FRAME_COUNTER_SAVE_INTERVAL (10) TXs and persist the TRUE
  * counter; a reset mid-batch resumes from the persisted value with no margin,
  * so the next uplinks reuse counters the NS already saw (dropped), and a reset
@@ -658,6 +736,7 @@ int main(void)
     test_f008_key_acquisition_fail_closed();
 printf("\n");
 test_r1_restore_fail_closed();
+test_f01_restore_steps123_fail_closed();
     printf("\n");
     test_r3_fcnt_reset_margin();
     test_dr07_single_margin();

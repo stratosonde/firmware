@@ -591,23 +591,40 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     SONDE_LOG("Restoring session context for %s\r\n", RegionToString(region));
 
     // STEP 1: Reinitialize stack (loads zeros from se-identity.h)
-    LoRaApp_ReInitStack(region);
+    if (LoRaApp_ReInitStack(region) != LORAMAC_HANDLER_SUCCESS) {
+        /* F-01 (#245): fail closed like R1's steps 4-10 */
+        SONDE_LOG_STR("  ERROR: stack reinit failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     HAL_Delay(100);
 
     // STEP 2: Configure the handler (this might load from NVM)
-    LmHandlerConfigure(&LmHandlerParams);
+    if (LmHandlerConfigure(&LmHandlerParams) != LORAMAC_HANDLER_SUCCESS) {
+        SONDE_LOG_STR("  ERROR: LmHandlerConfigure failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     HAL_Delay(50);
 
     // STEP 3: NOW set identity and keys AFTER configure (to override NVM restore)
-    LmHandlerSetDevEUI(ctx->dev_eui);
-    LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key);
-    LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key);
+    if (LmHandlerSetDevEUI(ctx->dev_eui) != LORAMAC_HANDLER_SUCCESS) {
+        SONDE_LOG_STR("  ERROR: SetDevEUI failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+    if (LmHandlerSetKey(APP_S_KEY, (uint8_t*)ctx->app_s_key) != LORAMAC_HANDLER_SUCCESS) {
+        SONDE_LOG_STR("  ERROR: SetKey(AppSKey) failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
+    if (LmHandlerSetKey(NWK_S_KEY, (uint8_t*)ctx->nwk_s_key) != LORAMAC_HANDLER_SUCCESS) {
+        SONDE_LOG_STR("  ERROR: SetKey(NwkSKey) failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
 
     /* R1 (#187): FAIL CLOSED. Every required step is checked; any failure
      * aborts the restore with LORAMAC_HANDLER_ERROR so the caller never
      * marks the region active on a dead session (the banked context stays
      * valid - a later cycle can retry). Previously these failures were log
-     * lines and the function fell through to SUCCESS. */
+     * lines and the function fell through to SUCCESS. (F-01 #245 extended
+     * the same contract to steps 1-3, which were still bare.) */
     // STEP 4: Set DevAddr and activation via MIB before channel mask
     MibRequestConfirm_t mib;
     mib.Type = MIB_DEV_ADDR;
@@ -997,7 +1014,11 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     if (check_mib.Param.NetworkActivation != ACTIVATION_TYPE_NONE) {
         // We were already joined to another region - full reset needed
         SONDE_LOG_STR("Previous join detected - performing full stack reset...\r\n");
-        LoRaApp_ReInitStack(region);
+        if (LoRaApp_ReInitStack(region) != LORAMAC_HANDLER_SUCCESS) {
+            /* F-01 (#245): the reset failed - do not join on a torn stack */
+            SONDE_LOG_STR("JoinRegion: stack reset FAILED - aborting join\r\n");
+            return LORAMAC_HANDLER_ERROR;
+        }
         // LoRaApp_ReInitStack sets ActiveRegion but doesn't configure
         // We'll set DevEUI and configure below
     }
@@ -1023,7 +1044,11 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
     }
 
     LmHandlerSetDevEUI((uint8_t *)ident->dev_eui);
-    LmHandlerConfigure(&LmHandlerParams);
+    if (LmHandlerConfigure(&LmHandlerParams) != LORAMAC_HANDLER_SUCCESS) {
+        /* F-01 (#245): no join against an unconfigured stack */
+        SONDE_LOG_STR("JoinRegion: LmHandlerConfigure FAILED - aborting join\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     LmHandlerSetDevEUI((uint8_t *)ident->dev_eui);
 
     // CRITICAL: Set JoinEUI (AppEUI) - must be set before join
