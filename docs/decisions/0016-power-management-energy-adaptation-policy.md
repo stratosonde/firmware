@@ -98,7 +98,64 @@ Operational details (as implemented, issue #141 and hardening trail):
 - the forced GNSS retry carries its own acquisition budget and is never forced over the hard electrical floor (MODE_SURVIVAL stays dark);
 - commissioning is exempt (DDR-0018).
 
+### INV-PWR-010 — Energy margin protects mission continuity, not hardware asset value
 
+Energy margin SHALL be chosen to protect valid peripheral operation, transient/load headroom, predictable recurring science, controlled return to low power, and subsequent mission cycles. The product does not preserve charge merely to maximize battery reserve or physical hardware longevity. (Added 2026-08-12; see DDR-0022 INV-MISSION-003.)
+
+### INV-PWR-011 — Healthy energy may enable additional information return
+
+After required science and configured operating margin are protected, surplus energy MAY admit additional communication or scientific work per DDR-0022 — archive recovery bursts, additional high-resolution science, derived/event products, and enabled diagnostic/status traffic. The energy manager gates whether such work is physically affordable; it does not redefine the mission-value hierarchy. (Added 2026-08-12.)
+
+### INV-PWR-012 — Brownout is an accident, never an intentional operating state
+
+Policy SHALL attempt to avoid brownout before starting a load expected to collapse the rail. (Added 2026-08-12; restates DDR-0001 §15 as a power-policy obligation.)
+
+### INV-PWR-013 — Slow the mission before destroying the mission
+
+When projected energy cannot sustain the configured target through the expected low-energy interval, firmware SHALL lengthen the wake interval while preserving the same core science mission (strengthens INV-PWR-001). (Added 2026-08-12.)
+
+### INV-PWR-014 — GNSS may be shed when its load cannot be admitted
+
+If GNSS cannot be safely supported, firmware SHALL skip it and preserve honest stale/unavailable GNSS provenance (see DDR-0003 / DDR-0023). (Added 2026-08-12; consistent with the droop admission of INV-PWR-002.)
+
+### INV-PWR-015 — Energy adaptation is reversible
+
+Temporary slowing/work shedding SHALL automatically move back toward the configured target as usable energy recovers; it SHALL NOT rewrite configuration (DDR-0014 INV-CONFIG-010). (Added 2026-08-12; complements the trend-driven promotion of INV-PWR-005.)
+
+### INV-PWR-016 — Energy state is continuously re-evaluated
+
+Energy policy SHALL be evaluated repeatedly during normal mission operation. Firmware SHALL NOT require a day/night boundary or sunrise event to leave a conservative state. (Added 2026-08-12.)
+
+### INV-PWR-017 — Adaptation uses hysteresis/stability, not sticky modes
+
+The controller SHOULD avoid rapid oscillation between policies, but SHALL remain capable of moving both toward more conservative and toward more capable operation whenever measured/predicted energy conditions justify it. Hysteresis, filtered trends, or dwell times MAY be used to prevent chatter (the trend-driven promotion of INV-PWR-005 is one such mechanism). (Added 2026-08-12.)
+
+### INV-PWR-018 — Policy is driven by operation capability, not temperature or voltage alone
+
+Illustrative thresholds such as "below −60 °C do not run GNSS" or "below 3.6 V skip GNSS" are examples only. Final admission SHALL be based on characterized evidence that the requested operation can be supported at the current temperature, voltage/state of charge, load history, predicted droop, and charging/solar condition (per INV-PWR-002/003; parameters await OD-PWR-001). (Added 2026-08-12.)
+
+### INV-PWR-019 — Conceptual energy bands are allowed without freezing implementation to four states
+
+The current mental model (added 2026-08-12):
+
+1. **Critical** — insufficient even for useful sensing; return to sleep.
+2. **Conserve** — core low-energy science/logging; GNSS/radio may be withheld.
+3. **Nominal** — execute configured mission target.
+4. **Surplus** — after core mission, permit additional mission-value work.
+
+These bands are conceptual policy bands; implementation MAY use more states or a continuous controller (the existing GOOD/MARGINAL/LOW/CRITICAL tier model of INV-PWR-004 is one valid binding).
+
+### INV-PWR-020 — Critical energy may skip the entire science wake
+
+If available energy is below the characterized minimum required even for low-cost science, firmware MAY perform only minimum state/power checks and return directly to low power. (Added 2026-08-12; consistent with INV-PWR-006 refusal.)
+
+### INV-PWR-021 — Surplus energy funds mission-value work only
+
+Surplus MAY be spent on increased archive/data return, longer application-payload availability, explicitly configured high-energy science, or other approved mission-value work. Battery heating is **not** currently an approved surplus-energy behavior. (Added 2026-08-12.)
+
+### Non-normative engineering note (2026-08-12)
+
+The interviews expect GNSS to be one of the dominant energy consumers and ordinary short radio packets often to be a smaller energy concern, except during large recovery bursts. This is a **hardware hypothesis, not a normative requirement** — battery/load profiling and Otii Ace measurements (OD-PWR-001, DDR-0026) should determine actual relative costs before thresholds or scheduling policy rely on it.
 ---
 
 ## 3. Behavioral Requirements
@@ -125,6 +182,7 @@ Confidence legend:
 | BR-PWR-012 | Tier boundaries, tier count, normalization curve, and droop-model parameters SHALL be configuration bindings set by battery/load profiling over temperature. | CONFIRMED |
 | BR-PWR-013 | Whether tier-to-cadence scaling is a fixed table or a continuous function is an implementation choice. | INFERRED |
 | BR-PWR-014 | After a configured GNSS-outage grace window (default 6 h), firmware SHALL inhibit transmission while continuing science logging and GNSS retry, until a fresh fix clears the silence (INV-PWR-009). | CONFIRMED |
+| BR-PWR-015 | Energy scarcity gates feasibility rather than inventing a new mission: moving into a constrained energy state SHALL reduce cadence or suppress physically unaffordable work according to established policy; it SHALL NOT create an unrelated alternate mission objective. | CONFIRMED — 2026-08-12 interview |
 
 ---
 
@@ -178,6 +236,10 @@ Whether an archive-recovery burst's droop test is per-packet, per-burst, or per-
 ### OD-PWR-003 — Status-byte encoding budget
 
 Whether the compact packet has room for the GNSS skip-cause distinction (BR-PWR-011) depends on the payload format's reserved bits; check the payload format doc before committing the encoding.
+
+### OD-PWR-004 — Anti-chatter mechanism
+
+Choose the concrete stability mechanism(s) for policy transitions: hysteresis band, filtered slope, dwell time, confidence window, or a combination (INV-PWR-017). Trend-driven promotion (INV-PWR-005) is the current default. (Added 2026-08-12.)
 
 ---
 

@@ -38,6 +38,11 @@ Bare references to 0014-0021 are ambiguous across generations; the manifest
 | 0019 | Radio and Payload Policy Bindings | Draft — resolved 2026-08-09 |
 | 0020 | Watchdog and Progress Supervision | Draft — resolved 2026-08-09 |
 | 0021 | GNSS Receiver Configuration Policy | Draft — resolved 2026-08-09 |
+| 0022 | Mission Purpose, Value Hierarchy, and Autonomous Continuity | Draft — added 2026-08-12 (intent interview round 1) |
+| 0023 | Scientific Data Truth, Derived Products, and Onboard Interpretation | Draft — added 2026-08-12 (round 1); amended rounds 2–3 |
+| 0024 | Device Identity, Provisioning, Ownership, and Backend Registry | Draft — added 2026-08-12 (round 2); claim-PIN revision round 3 |
+| 0025 | Firmware Servicing, Bootloader, and Non-OTA Update Policy | Draft — added 2026-08-12 (round 2) |
+| 0026 | Verification, Traceability, Hardware-in-the-Loop CI, and Flight-Readiness Evidence | Draft — added 2026-08-12 (round 2); amended round 3 |
 
 ## Legacy Migration Coverage Matrix
 
@@ -69,6 +74,18 @@ These are places where V2 records intentionally change prior decisions (not docu
 6. **Static profiles replace descriptor discovery** for passive Qwiic peripherals — DDR-0017 (revises legacy 0010).
 7. **Confirmed-packet probe replaces LinkCheckReq-on-compact** — DDR-0019 (revises legacy 0005).
 8. **GNSS cold-lockout removed** — energy droop admission subsumes it; no temperature gate on GNSS attempts — DDR-0021 (supersedes the legacy 0007 lockout consequence).
+9. **Out-of-range configuration scalars are clamped, not rejected** — DDR-0014 INV-CONFIG-011 (2026-08-12 round 3) supersedes the round-2 lean toward outright rejection; rejection now applies only to structurally unrecoverable configuration (INV-CONFIG-012).
+10. **PCB QR random value is a candidate physical-possession claim PIN** — DDR-0024 §7 (2026-08-12 round 3) supersedes the round-2 placeholder "QR is identity material, not authorization material"; the claim security protocol remains open.
+
+## 2026-08-12 Intent Interview Merge (rounds 1–3)
+
+Three interview packages were merged into the corpus on 2026-08-12:
+
+- **New records:** DDR-0022 through DDR-0026 (see table).
+- **Amendments folded into existing records:** DDR-0001 (INV-WAKE-007–011, BR-WAKE-015/016, §5.7), DDR-0002 (§18: pre-commissioning lifecycle, OD-LIFE-006), DDR-0003 (§16 confirmation), DDR-0004 (BR-ARCH-016), DDR-0005 (INV-TX-007/008/009, BR-TX-021/022, OD-TX-009), DDR-0009 (INV-FAIL-009–015, P-FAIL-010), DDR-0010 (INV-PERSIST-008/009), DDR-0011 (INV-STORE-009/010), DDR-0012 (INV-BOOT-008/009), DDR-0014 (INV-CONFIG-008–015, BR-CONFIG-013, OD-CONFIG-004 resolved), DDR-0015 (confirmation + rationale), DDR-0016 (INV-PWR-010–021, BR-PWR-015, OD-PWR-004), DDR-0017 (INV-QWIIC-009–011, BR-QWIIC-016, OD-QWIIC-005), DDR-0018 (BR-COMM-016), DDR-0019 (INV-RADIO-009–011), DDR-0020 (confirmation).
+- **Manifest:** old-generation aliases 0022–0026 retired (they collided with the new canonical records; no live references to the old meaning existed).
+- **Supporting artifacts:** `system-operational-assumptions.md` and `open-intent-questions.md` live in this directory; the engineering requirements specification, requirements traceability matrix, Flight-1 readiness checklist, and firmware conformance worklist live in `../requirements/`.
+- **Interview source packages:** preserved under `../temp/` (git-ignored audit trail).
 
 ## Known Intent-vs-Code Divergences (implementation work queue)
 

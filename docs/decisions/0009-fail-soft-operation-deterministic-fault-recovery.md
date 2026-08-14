@@ -89,6 +89,61 @@ If firmware reaches a core exception, fatal assertion, or equivalent unrecoverab
 
 The product SHALL avoid elaborate ad-hoc behavior inside fatal exception context.
 
+### INV-FAIL-009 — Permanent subsystem loss does not redefine the core mission
+
+A subsystem that remains failed for the remainder of the flight SHALL remove its capability but SHALL NOT cause firmware to abandon otherwise viable mission activity. (Added 2026-08-12.)
+
+Examples:
+
+- permanently dead radio → keep sensing and archiving;
+- permanently dead GNSS → keep environmental science and stale/unavailable-position semantics;
+- permanently dead sensor → keep all unrelated science;
+- permanently dead archive flash → keep live science and live telemetry.
+
+### INV-FAIL-010 — Bounded aggressive recovery is permitted
+
+Firmware MAY perform stronger recovery actions when a subsystem appears wedged, including where applicable peripheral reset, controlled power cycle, bus reinitialization, I2C/SPI recovery clocking, driver reinitialization, and subsystem state reset. (Added 2026-08-12.)
+
+Such recovery SHALL be bounded, preserve the next science-cycle deadline, avoid uncontrolled energy expenditure, and eventually rejoin the ordinary mission path whether recovery succeeds or fails.
+
+### INV-FAIL-011 — Do not invent scientific plausibility faults by default
+
+If a sensor transaction completes normally and the sensor reports no hardware/status error, firmware SHOULD report the measurement received. Surprising values are not silently censored unless a sensor-specific scientific validity rule is explicitly defined (see DDR-0023). (Added 2026-08-12.)
+
+### INV-FAIL-012 — Small bounded sensor-specific retries are allowed
+
+Drivers MAY perform a small bounded number of immediate retries appropriate to that device/bus. Retry policy need not be generic. (Added 2026-08-12.)
+
+### INV-FAIL-013 — Reset cause may be recorded but does not normally select mission policy
+
+Firmware MAY record reset cause for post-flight or bench diagnosis. (Added 2026-08-12.)
+
+Normal product behavior SHOULD NOT branch into long-lived alternate mission policy merely because the preceding reset was caused by watchdog, hard fault, brownout, external reset, or power-on reset. After startup has restored a known state, the ordinary mission path is retried.
+
+### INV-FAIL-014 — Do not add reset-loop complexity merely to mask software defects
+
+The first-flight design SHALL NOT add elaborate "after N watchdog resets, permanently skip subsystem X" behavior solely to compensate for code that can hang on ordinary peripheral faults. (Added 2026-08-12.)
+
+Instead:
+
+- peripheral calls are bounded (DDR-0001 BR-WAKE-016);
+- retries are bounded (INV-FAIL-012);
+- bus/driver recovery is bounded (INV-FAIL-010);
+- the watchdog remains a last-resort escape (DDR-0020).
+
+A repeated reset loop is a fault to be found and fixed, not silently converted into a new mission mode.
+
+### INV-FAIL-015 — Degraded continuation is preferred to stop-and-wait
+
+When persistent or sensor state is partially invalid but enough valid information remains to continue safely, firmware SHOULD: (Added 2026-08-12.)
+
+- mark known stale/unavailable values as such;
+- reconstruct what can be reconstructed;
+- continue unaffected science;
+- retry failed capability later.
+
+"Stop and wait forever" is not an acceptable normal recovery strategy for an unreachable balloon.
+
 ---
 
 ## 3. Behavioral Requirements
@@ -437,6 +492,8 @@ Need to decide whether repeated immediate resets should trigger a reduced recove
 
 This should be designed carefully so reset-loop protection does not accidentally create a permanent mission stop.
 
+**2026-08-12 update:** the first-flight preference is simple retry (INV-FAIL-013/014). What remains open is only whether extreme immediate reset loops require any additional hardware/boot-level protection — see `open-intent-questions.md` item 6.
+
 ---
 
 ## 15. Proof Plan
@@ -520,6 +577,12 @@ Prove the reset still occurs.
 Create established flight/archive state, reset the MCU, and reboot.
 
 Prove required persistent mission state is reconstructed according to the future reset-persistence DDR.
+
+### P-FAIL-010 — Permanent-failure endurance
+
+Hold one subsystem failed for an accelerated multi-day mission. (Added 2026-08-12.)
+
+Prove the rest of the mission continues indefinitely without a failure-history state that eventually disables unrelated work.
 
 ---
 

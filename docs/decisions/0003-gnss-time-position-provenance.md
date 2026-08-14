@@ -592,3 +592,17 @@ That interview should resolve:
 - whether archive recovery ever outranks current compact telemetry.
 
 This is already known to contain meaningful differences between the mental model and current implementation, so it is a high-value next DDR.
+
+---
+
+## 16. Amendment 2026-08-12 (intent interview reconciliation)
+
+The 2026-08-12 interview reaffirmed with no substantive policy change:
+
+- last-known position remains scientifically useful when explicitly stale;
+- scientific uncertainty should normally degrade rather than stop the mission.
+
+Relationship notes:
+
+- The broader raw/calibrated/derived-data and provenance policy that this DDR's freshness semantics participate in is now owned by **DDR-0023** (Scientific Data Truth, Derived Products, and Onboard Interpretation).
+- RF legality derived from stale position remains governed by **DDR-0015**, not by this DDR.

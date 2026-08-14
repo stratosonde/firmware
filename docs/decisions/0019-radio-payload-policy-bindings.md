@@ -66,6 +66,22 @@ If the returned margin satisfies configured thresholds, the burst SHALL continue
 
 Escalation and bursts remain subject to energy admission (DDR-0016), RF authorization (DDR-0006/0020/0028), and current-science priority (DDR-0005 INV-TX-001). Radio opportunity never outranks any of them.
 
+### INV-RADIO-009 — FPort is the primary application-product discriminator
+
+Distinct incompatible product families SHOULD use distinct assigned LoRaWAN FPorts. Examples: compact current science, full-resolution/archive science, GNSS diagnostics, system diagnostics, future event products. (Added 2026-08-12.)
+
+### INV-RADIO-010 — Do not repeat unambiguous transport context
+
+A payload SHALL NOT need a redundant packet-type field solely to repeat an unambiguous FPort assignment. (Added 2026-08-12.)
+
+### INV-RADIO-011 — Incompatible schema evolution remains unambiguous
+
+When a payload changes incompatibly, the decoder SHALL determine the schema unambiguously using a new FPort, an explicit schema/version field, or another documented binding. Deployment date alone is insufficient. (Added 2026-08-12.)
+
+### Diagnostic products under surplus
+
+The default-debug rule of INV-RADIO-001 stands: energy surplus alone SHALL NOT enable a product that is disabled by build or mission configuration. When optional diagnostic/status products are enabled, they MAY consume surplus RF opportunity but remain subordinate to current science and the first-class priorities assigned by DDR-0005/DDR-0022. (Added 2026-08-12.)
+
 ---
 
 ## 3. Behavioral Requirements

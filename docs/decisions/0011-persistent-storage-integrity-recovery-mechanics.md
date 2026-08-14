@@ -73,6 +73,16 @@ The event log is for rare system-level events and transitions.
 
 Reset cause history SHOULD be preserved in the system-event log when practical.
 
+### INV-STORE-009 — Reconstructible metadata is not more authoritative than valid science
+
+If archive metadata is damaged but valid self-checking science records remain recoverable, firmware SHOULD reconstruct state rather than abandon/format the archive solely because header/index metadata is missing. (Added 2026-08-12; strengthens INV-STORE-004.)
+
+### INV-STORE-010 — Prefer last-update loss over whole-object loss
+
+Storage mechanisms SHOULD prefer losing one incomplete update, conservatively advancing a counter, or reconstructing a cursor over destroying the entire credential bank, archive, or configuration object. (Added 2026-08-12.)
+
+Verification consequence: power-cut proof is required around credential, counter, archive-record, and archive-metadata updates (see DDR-0026 fault-injection levels and the Flight-1 readiness checklist §6/§7).
+
 ---
 
 ## 3. Persistent Storage Organization

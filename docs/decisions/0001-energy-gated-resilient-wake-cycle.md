@@ -69,6 +69,39 @@ When fresh information cannot be obtained, downstream records SHALL distinguish 
 
 No fallback value may silently masquerade as a fresh measurement.
 
+### INV-WAKE-007 — Cold boot, fault reset, and ordinary wake converge on the same mission cycle
+
+After the minimum hardware-specific startup required to establish a known state, firmware SHALL enter the same ordinary mission-cycle orchestration regardless of whether execution began from:
+
+- cold power-on;
+- watchdog reset;
+- fault reset;
+- ordinary low-power wake.
+
+The design SHALL avoid separate behavioral implementations for "boot" and "wake" unless the hardware requires a genuine difference. (Startup mechanics are owned by DDR-0012; this invariant fixes the product-level convergence requirement.)
+
+### INV-WAKE-008 — Start from the lowest-power known state
+
+Startup SHALL first establish a known safe/low-power hardware state before enabling expensive subsystems.
+
+### INV-WAKE-009 — Energy truth precedes expensive work
+
+Before admitting GNSS, radio, or optional application work, the orchestrator SHALL establish enough current energy/power state to decide which work is physically admissible for that cycle. This strengthens BR-WAKE-001: the admission decision must be based on the *current* cycle's measured state, not on stale or assumed conditions.
+
+### INV-WAKE-010 — The orchestrator owns the wake deadline
+
+The Stratosonde core SHALL own the wake-cycle timing budget.
+
+Peripheral or application work SHALL NOT extend the wake indefinitely. Application payload time/resource requests remain subordinate to this deadline (see DDR-0017).
+
+### INV-WAKE-011 — Wake duration should be minimized
+
+The implementation SHOULD overlap independent activity when doing so is safe and materially reduces awake time.
+
+Example:
+
+> Environmental sensors may be sampled while GNSS acquisition is in progress rather than serially waiting for GNSS first.
+
 ---
 
 ## 3. Behavioral Requirements
@@ -95,6 +128,8 @@ Confidence legend:
 | BR-WAKE-012 | The power policy MAY use modest hysteresis to prevent threshold chatter, but SHALL remain understandable as resource-driven degradation rather than as a failure-history state machine. | **INFERRED — needs wording review** |
 | BR-WAKE-013 | When GNSS is intentionally skipped for energy reasons, the archived record SHALL explicitly identify that fresh GNSS was not obtained. Whether it should carry last-known position or no position is not yet settled by this interview. | **OPEN** |
 | BR-WAKE-014 | Energy shedding SHALL follow the product priority hierarchy: battery ADC → temperature → other sensors → full-resolution logging → archive recovery → compact heartbeat → GNSS, ordered from least expensive/highest preservation priority to most expensive/first shed. | **CONFIRMED** |
+| BR-WAKE-015 | Current science delivery outranks archive recovery. If energy or time permits current compact science transmission but not both current transmission and historical archive recovery, firmware SHALL attempt the current science product and defer archive recovery. | **CONFIRMED — 2026-08-12 interview** |
+| BR-WAKE-016 | Every peripheral operation used in the mission path SHALL have either a timeout, a bounded retry count, a bounded execution budget, or another deterministic completion bound. "No response forever" is not a valid runtime state. | **CONFIRMED — 2026-08-12 interview** |
 
 ---
 
@@ -127,6 +162,12 @@ The ordering represents expected energy cost and intended preservation priority.
 Execution order may differ where one inexpensive or prerequisite action determines whether a later action is useful. In particular, bulk archive recovery may depend on first establishing that a useful backhaul opportunity exists, even though archive recovery and heartbeat occupy different positions in the energy-cost hierarchy.
 
 A marginal-energy cycle may therefore skip GNSS and bulk archive recovery while still attempting the compact heartbeat.
+
+**Priority clarification (2026-08-12 interview):** the energy-cost/preservation hierarchy above orders *shedding under scarcity*; it SHALL NOT be read as making historical archive recovery more mission-important than delivery of current science.
+
+> **Current science acquisition, durable preservation, and the compact current-science transmission product SHALL be protected ahead of historical archive recovery. Archive recovery and other secondary communication are surplus/opportunistic work. GNSS and other expensive loads remain individually admitted by DDR-0016.**
+
+The exact total ordering between GNSS and all communication subclasses does not need to be frozen in this DDR (see DDR-0022 for the mission-value hierarchy and DDR-0005 for transmission policy).
 
 ---
 
@@ -176,6 +217,14 @@ The hardware contains subsystems with different minimum operating voltages. The 
 Therefore the power policy is not merely about preventing an MCU reset. It must also protect **measurement and peripheral validity**.
 
 The design intent is to maintain enough battery and load-transient margin that normal operation stays well above those peripheral limits. A full supply collapse may reset the MCU and should be recoverable, but such a reset is exceptional and must not be used as a normal energy-management technique.
+
+### 5.7 Energy margin exists to sustain the mission, not the hardware
+
+Added from the 2026-08-12 intent interview:
+
+> Energy is not conserved to protect an economically valuable piece of recoverable hardware. Once launched, the sonde is effectively expendable. Energy margin exists to preserve predictable recurring science, maintain valid peripheral operation, avoid uncontrolled brownout, and permit subsequent mission cycles. The desired outcome is sustained information production, not maximum battery reserve.
+
+This is the wake-cycle expression of DDR-0022 INV-MISSION-003/004 (hardware preservation is instrumental; a recurring mission outranks a heroic single cycle).
 
 ## 6. Product Behavior Model
 

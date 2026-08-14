@@ -65,6 +65,22 @@ During fast ascent operation, current high-resolution science is more valuable t
 
 The product MAY remain awake and transmit current full-resolution records directly at the fast cadence.
 
+### INV-TX-007 — Fresh transmitted science outranks secondary traffic
+
+When RF opportunity is limited to one useful current-cycle transmission, firmware SHALL prioritize the current science product ahead of historical archive recovery, ordinary diagnostic traffic, best-effort objects, and optional status traffic.
+
+(Added 2026-08-12; reaffirms the interview answer: *if only one useful transmission can occur, fresh/current science wins.*)
+
+### INV-TX-008 — Surplus communication opportunity should return more information
+
+Once the current science obligation is protected, available RF opportunity and energy MAY be used to return additional enabled information, including recent full-resolution science, historical archive science, derived/event products, system status, GNSS diagnostics, and other configured diagnostic data.
+
+Secondary traffic SHALL remain preemptible by a due current science cycle. (Added 2026-08-12; see DDR-0022 INV-MISSION-009.)
+
+### INV-TX-009 — Recovery opportunity does not create a special mission mode
+
+A good link after a long outage SHALL NOT convert the sonde into an archive-dump appliance. The science wake remains authoritative. (Added 2026-08-12.)
+
 ---
 
 ## 3. Float-Mode Transmission Sequence
@@ -118,6 +134,8 @@ Confidence legend:
 | BR-TX-018 | During ascent / fast dynamic flight, the device MAY remain awake between closely spaced samples when doing so is more efficient than repeated sleep/wake transitions. | **CONFIRMED** |
 | BR-TX-019 | Transition back from fast/ascent behavior to float behavior SHALL occur automatically when pressure/altitude stability returns according to the mission-lifecycle cadence controller. | **CONFIRMED** |
 | BR-TX-020 | Archive recovery SHALL resume later from the stored recovery watermark when a new suitable float-mode opportunity occurs. | **CONFIRMED** |
+| BR-TX-021 | Current packet wins under a one-packet budget: if policy admits exactly one transmission during a wake, that transmission SHALL represent the current science cycle unless a higher regulatory/safety rule prohibits RF. | **CONFIRMED — 2026-08-12 interview** |
+| BR-TX-022 | Recovery resumes newest-first after an outage: normal recovery SHALL begin from the newest eligible retained record and proceed backward under the configured recovery budget. | **CONFIRMED — 2026-08-12 interview** |
 
 ---
 
@@ -497,6 +515,10 @@ Need to decide whether ascent-mode live full-resolution transmissions are:
 - conditionally confirmed.
 
 The intent is to minimize overhead while preserving as much live science as practical.
+
+### OD-TX-009 — Secondary product priority
+
+The exact ordering among archive science, event products, high-rate science, diagnostics, and system status remains open (2026-08-12). Fresh/current science is unequivocally first (INV-TX-007); the remaining secondary classes need mission-specific policy. Tracked jointly with DDR-0022 OD-MISSION-002 and DDR-0023 OD-DATA-004.
 
 ---
 

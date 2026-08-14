@@ -83,6 +83,26 @@ If persistent state shows that the mission had already entered flight, reboot SH
 
 After restoration and initialization, firmware SHALL use the same ordinary wake/sense/log/transmit/sleep behavior as normal operation.
 
+### INV-BOOT-008 — Startup establishes a known state, then rejoins the normal mission cycle
+
+Startup SHALL proceed in this order (added 2026-08-12):
+
+1. establish safe/low-power hardware defaults (DDR-0001 INV-WAKE-008);
+2. restore/validate required persistent mission state;
+3. establish current energy/power admissibility (DDR-0001 INV-WAKE-009);
+4. initialize only capabilities required for admitted mission work;
+5. enter ordinary wake-cycle orchestration.
+
+After reset, firmware SHALL NOT attempt instruction-level or task-level resumption of the interrupted wake (restates INV-BOOT-001); it starts a fresh ordinary cycle from restored persistent state.
+
+### INV-BOOT-009 — Reset cause is observable but not normally policy-driving
+
+Reset cause MAY be logged and surfaced diagnostically (BR-BOOT-015). The normal first-flight product SHALL NOT maintain separate long-term behavior based solely on historical reset cause. (Added 2026-08-12; see DDR-0009 INV-FAIL-013/014.)
+
+### Servicing versus reset recovery
+
+Normal reset recovery (this DDR) is distinct from intentional firmware servicing: changing the application image requires physical access and follows DDR-0025. An ordinary reflash preserves provisioned identity/credentials; boot recovery after servicing is the same ordinary path defined here. (Cross-reference added 2026-08-12.)
+
 The boot path should disappear into the regular mission path as soon as practical.
 
 ---

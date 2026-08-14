@@ -100,6 +100,42 @@ This DDR does not mandate:
 
 Those are implementation decisions provided that the product-level recovery behavior is satisfied.
 
+### INV-PERSIST-008 — Durability effort scales with mission consequence
+
+Each persistent item SHALL be assigned to a consequence class, and SHALL define its maximum acceptable rollback/loss. Small loss is acceptable only where explicitly bounded. (Added 2026-08-12.)
+
+**Mission-threatening/protocol-critical:**
+- permanent identity (DDR-0024);
+- LoRaWAN credentials/session material whose loss cannot be repaired in flight;
+- frame counters where rollback violates protocol/security;
+- commissioning/flight one-way state.
+
+**Mission-continuity critical:**
+- mission configuration;
+- archive identity/frontier or reconstructible equivalent;
+- archive-delivery watermark;
+- navigation/time anchors where required;
+- adapted cadence state where loss would materially change reboot behavior.
+
+**Recoverable limited loss:**
+- a small number of newest science records;
+- transient diagnostics;
+- interrupted current wake execution.
+
+Reset still begins a fresh wake rather than resuming mid-cycle execution (INV-PERSIST-001).
+
+### INV-PERSIST-009 — Persistent mission state makes wake behavior independent of RAM history
+
+Mission behavior after power removal/reset SHALL be determined by persistent state and current inputs, not by unpersisted RAM history that only happened to survive a particular low-power path. (Added 2026-08-12.)
+
+This supports the product mental model:
+
+> An ordinary sleep/wake cycle should be as close as practical to a clean power-cycle/restart from a mission-state perspective.
+
+At minimum, strong persistence/recovery guarantees apply to per-region LoRaWAN session/credential state, frame counters and other anti-replay/protocol-continuity state, commissioned configuration, flight/mission latch or equivalent lifecycle state, and archive metadata or a reconstructible equivalent.
+
+Archive writes SHOULD be atomic/self-validating (see DDR-0011). A brownout/fault may tolerate losing a small bounded number of the newest records if older committed records remain intact, the archive remains reconstructible, the loss is bounded, and failure does not cascade into whole-archive loss.
+
 ---
 
 ## 3. Reset Recovery Model

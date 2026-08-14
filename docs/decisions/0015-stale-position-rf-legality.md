@@ -254,3 +254,19 @@ The queued high-value topics are:
 
 These are independent topics and may be interviewed in any order.
 
+
+---
+
+## Amendment 2026-08-12 (intent interview reconciliation)
+
+The 2026-08-12 interviews (rounds 1 and 2) independently reaffirmed the existing design — a strong match between intent and this DDR:
+
+- stale position remains scientifically useful;
+- RF may continue only inside the configured regulatory staleness allowance;
+- beyond the allowance RF stops because regulatory certainty is insufficient;
+- science/logging/GNSS attempts continue;
+- a fresh valid fix automatically restores RF eligibility.
+
+Added rationale:
+
+> The staleness budget is a regulatory-confidence bound, not a declaration that the old position has stopped being scientifically useful.

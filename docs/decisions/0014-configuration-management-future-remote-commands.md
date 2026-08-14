@@ -83,6 +83,53 @@ A remotely writable parameter SHALL have explicit:
 - default/fallback policy;
 - persistence behavior.
 
+### INV-CONFIG-008 — Autonomous execution does not imply autonomous policy creation
+
+Firmware SHALL autonomously execute configured mission policy. (Added 2026-08-12.)
+
+The baseline product SHALL NOT autonomously learn new mission policy, persist self-selected changes to mission priorities, alter configuration through an opaque adaptation mechanism, or replace deterministic configured behavior with self-modifying policy.
+
+Persistent behavioral changes shall result only from validated configuration, explicit firmware revision, or an authenticated future ground command defined by this or a narrower DDR. (See DDR-0022 INV-MISSION-006.)
+
+### INV-CONFIG-009 — Configuration expresses operator target intent
+
+Validated configuration represents the operator's desired mission target. Firmware attempts to meet it whenever physical/regulatory conditions permit. (Added 2026-08-12.)
+
+### INV-CONFIG-010 — Temporary degradation does not rewrite configuration
+
+Energy or authorization policy may temporarily slow cadence, skip GNSS, suppress optional work, or reduce recovery. These adaptations SHALL NOT silently persist a new operator target. When constraints clear, operation returns toward the configured target (see DDR-0016). (Added 2026-08-12.)
+
+### INV-CONFIG-011 — Bounded scalar values are clamped, not rejected
+
+For scalar configuration parameters with well-defined physical/operational limits, firmware SHALL normalize requested values into the permitted range. (Added 2026-08-12; **supersedes the earlier round-2 lean toward outright rejection of out-of-range values**.)
+
+```text
+requested interval < minimum feasible interval
+    -> effective interval = minimum feasible interval
+```
+
+This refines INV-CONFIG-003 / BR-CONFIG-006: out-of-range bounded scalars are clamped; rejection now applies only to structurally unrecoverable configuration (INV-CONFIG-012).
+
+### INV-CONFIG-012 — Structural impossibility may still require rejection
+
+Clamping is appropriate for values with meaningful ordered bounds. A malformed or structurally inconsistent configuration that cannot be made meaningful by bounded normalization SHALL be rejected in favor of the previous valid configuration. (Added 2026-08-12.)
+
+Examples: invalid schema version; failed CRC/integrity; impossible cross-field structure with no deterministic normalization rule.
+
+### INV-CONFIG-013 — Configuration changes are events
+
+A successful configuration change SHOULD create a diagnostic/configuration event sufficient to establish that the configuration changed and which generation became active. The product does NOT require a separate event for every individual clamping operation. (Added 2026-08-12; strengthens BR-CONFIG-011.)
+
+### INV-CONFIG-014 — Configuration changes take effect on the next wake boundary
+
+A newly accepted configuration SHALL NOT restructure the currently executing wake mid-cycle. The new effective configuration becomes authoritative at the next ordinary wake-cycle boundary. (Added 2026-08-12; resolves OD-CONFIG-004.)
+
+### INV-CONFIG-015 — All configuration sources share one validation/normalization path
+
+Current bench/commissioning configuration and any future downlink configuration SHALL pass through the same semantic validation and clamping rules. (Added 2026-08-12.)
+
+Future downlinks may change validated configuration; they do not install firmware (DDR-0025).
+
 ---
 
 ## 3. Configuration Classes
@@ -399,6 +446,7 @@ Confidence legend:
 | BR-CONFIG-010 | Future one-shot actions SHOULD be modeled separately from persistent configuration. | **CONFIRMED** |
 | BR-CONFIG-011 | Configuration changes SHOULD generate persistent diagnostic events when practical. | **INFERRED** |
 | BR-CONFIG-012 | Mission configuration SHALL be versioned. | **INFERRED — strongly recommended architectural requirement** |
+| BR-CONFIG-013 | Same configuration means same policy: given equivalent inputs and persistent state, the same firmware/configuration combination SHOULD make reproducible policy decisions. | **CONFIRMED — 2026-08-12 interview** |
 
 ---
 
@@ -423,12 +471,7 @@ Possible future approaches include:
 
 ### OD-CONFIG-004 — Activation timing
 
-Need to decide whether an accepted configuration update becomes active:
-
-- immediately;
-- on next wake;
-- after reboot;
-- per-field.
+**Resolved 2026-08-12:** an accepted configuration update becomes active at the next ordinary wake-cycle boundary (INV-CONFIG-014).
 
 ### OD-CONFIG-005 — Factory reset
 

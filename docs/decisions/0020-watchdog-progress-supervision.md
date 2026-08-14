@@ -192,3 +192,13 @@ One queued topic remains from the corpus review:
 
 Beyond that, the corpus review found no further coverage gaps; remaining work is implementation conformance and the legacy-record retirements.
 
+
+---
+
+## Amendment 2026-08-12 (intent interview reconciliation)
+
+No substantive amendment required. The 2026-08-12 interview (round 2) independently reconfirmed:
+
+- commissioning may be exempt/relaxed;
+- mission flight must have watchdog/progress supervision enabled;
+- a hang should return through reset/startup (see also DDR-0009 INV-FAIL-013/014: reset cause is diagnostic, and reset loops are faults to fix, not new mission modes).

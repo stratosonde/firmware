@@ -100,6 +100,22 @@ Passive profiled sensors are cheap enough that they SHALL run whenever their cyc
 
 Application activity SHALL NOT bypass data honesty (stale marking), persistence rules, regional RF compliance, energy policy, or transmit scheduling. Service acceptance means Stratosonde has accepted responsibility under the declared data class; it does not imply network delivery.
 
+### INV-QWIIC-009 — Stratosonde core is the resource orchestrator
+
+Application payloads/controllers SHALL NOT independently decide that they may consume additional power, awake time, or radio airtime. (Added 2026-08-12; strengthens INV-QWIIC-001 for the resource dimension.)
+
+### INV-QWIIC-010 — Applications may request; core decides
+
+A future application interface MAY expose energy state/surplus indication, requests for extended powered time, requests for radio delivery, and requests for higher-cost science work. The core SHALL accept, defer, clamp, or deny those requests according to mission policy. (Added 2026-08-12.)
+
+### INV-QWIIC-011 — Application work cannot extend the absolute wake deadline
+
+If an application has not completed inside its granted time budget, its work SHALL be deferred/terminated according to the application contract. The core mission sleep deadline remains authoritative (DDR-0001 INV-WAKE-010). (Added 2026-08-12; restates the hard-deadline rule of INV-QWIIC-004 from the orchestrator side.)
+
+### Derived science relationship
+
+First-class application-published science MAY contain raw measurements, calibrated observations, and deterministic derived/event products; derived products SHALL satisfy DDR-0023 provenance and versioning rules (BR-QWIIC-016). Debug or opaque best-effort objects remain lower priority unless deliberately promoted to a defined first-class scientific product. (Added 2026-08-12.)
+
 
 ---
 
@@ -128,6 +144,7 @@ Confidence legend:
 | BR-QWIIC-013 | Passive profiled sensors SHALL run per ordinary science policy without application-session energy gating. | CONFIRMED |
 | BR-QWIIC-014 | An Application Controller SHALL be able to publish both data classes within one session. | INFERRED |
 | BR-QWIIC-015 | The session budget value, claim-window duration, and spool bounds SHALL be configuration bindings. | CONFIRMED |
+| BR-QWIIC-016 | Derived science can be first class: a valid schema-versioned derived/event product from an Application Controller MAY be accepted as first-class science when its provenance satisfies DDR-0023. | CONFIRMED — 2026-08-12 interview |
 
 ---
 
@@ -192,6 +209,10 @@ Whether the best-effort spool lives in serial flash, internal flash, or RAM-only
 ### OD-QWIIC-004 — Multiple simultaneous peripherals
 
 Whether the static profile may define several passive peripherals on one bus, and any address-collision policy, was not explored.
+
+### OD-QWIIC-005 — Application resource request API
+
+Define the future request interface of INV-QWIIC-010: request types, grant duration, energy-surplus indication, cancellation/deadline behavior, radio semantics, and application persistence permissions. (Added 2026-08-12.)
 
 ---
 

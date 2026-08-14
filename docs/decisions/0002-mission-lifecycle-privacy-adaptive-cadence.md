@@ -553,3 +553,49 @@ Flight-entry and cadence semantics changed after the 2026-08-10/11 flight-readin
 - **STAB-07 amendment (#154, stability review FINDING 7):** the flat-window latch additionally requires (a) accumulated ascent since launch >= 20 hPa below the bounded launch reference (`MISSION_FLOAT_MIN_ASCENT_DP_HPA` — a bench-armed unit at ground pressure can never latch the terminal state), and (b) small NET displacement over the window (<= 25% of the band — a slow 0.5-1 m/s climb stays inside the wide range band but keeps moving; a float wobbles around a mean). The window is 900 s (was 300) so ascent stalls of 1-10 min cannot latch. Detection policy lives in the pure, host-tested `Core/Src/mission_logic.c`.
 - **STAB-06 amendment (#153, review FINDING 6):** the launch reference maximum ages out after `MISSION_LAUNCH_REF_WINDOW_S` (2 h) — a high-pressure weather system can no longer serve as the launch baseline hours later.
 - **ASCENT cadence (10 s) keeps GNSS continuously powered/tracking**; cycles run nearly back-to-back with little STOP2 sleep by design (ascent is ~2 h; float is weeks).
+
+---
+
+## 18. Amendment 2026-08-12 (intent interviews, rounds 1–3)
+
+### Mission-purpose clarification
+
+> Mission continuity is maintained for the purpose of producing future science and information return. Physical preservation of the sonde is not an independent objective after launch.
+
+The existing lifecycle intent — one-way commissioning → flight, no ordinary mission-end state, automatic continued operation while hardware and energy permit — was directly reconfirmed. See DDR-0022 for the full mission-purpose/value-hierarchy record.
+
+### OD-LIFE-006 — Day/night cadence versus atmospheric-dynamics cadence
+
+The 2026-08-12 interview described the desired steady-state mental model as approximately a predictable nighttime cadence (stored-energy operation), a predictable daytime cadence (solar generation), and potentially additional work during energy-surplus periods. This DDR's existing dynamics-based cadence policy (INV-LIFE-005) was not explicitly rejected.
+
+A dedicated follow-up shall determine whether day/night and atmospheric dynamics are independent inputs to one cadence controller, separate configured target sets, alternatives, or first-flight versus later-flight policies. Until then, the existing cadence requirements remain normative. This open decision is tracked as **DDR-0022 OD-MISSION-001** (kept here as a pointer to avoid dual maintenance).
+
+### New lifecycle condition — MANUFACTURING / PRE-COMMISSIONING
+
+Round 3 added an explicit pre-commissioning lifecycle condition describing hardware that:
+
+- physically exists;
+- may already have a permanent DevEUI/PCB identity (DDR-0024);
+- may already be present in the backend registry;
+- has not yet completed device commissioning (DDR-0018);
+- is not yet mission-ready.
+
+Conceptual lifecycle:
+
+```text
+MANUFACTURING / PRE-COMMISSIONING
+    -> COMMISSIONING
+    -> PRE-FLIGHT / ARMED
+    -> ASCENT
+    -> FLOAT
+```
+
+#### INV-LIFE-009 — Pre-commissioning is not a flight mode
+
+Pre-commissioning exists to describe manufacturing/provisioning state. It SHALL NOT introduce a second autonomous mission implementation.
+
+#### INV-LIFE-010 — First power-on before commissioning is safe and inert with respect to flight
+
+A never-commissioned device SHALL NOT silently behave as an already commissioned flight unit solely because power was applied.
+
+The exact first-power-on behavior for a never-commissioned board (radio, sensors, sleep, indication) remains an open question — see `open-intent-questions.md` item 10.

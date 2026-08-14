@@ -111,6 +111,7 @@ Confidence legend:
 | BR-ARCH-013 | The archive SHALL continue operating indefinitely through logical record-ID wrap, provided wrap handling preserves unambiguous ordering within the retained window. | **CONFIRMED — wrap mechanism open** |
 | BR-ARCH-014 | Physical flash addresses SHALL remain an implementation detail and SHALL NOT form part of the external archive protocol. | **CONFIRMED** |
 | BR-ARCH-015 | The backend MAY infer permanent loss of a requested record when firmware returns a later earliest-available record. | **CONFIRMED** |
+| BR-ARCH-016 | A long communications outage SHALL NOT change storage behavior: regardless of outage duration, the archive SHALL continue accepting new science and overwriting the oldest retained record when necessary. | **CONFIRMED — 2026-08-12 interview** |
 
 ---
 

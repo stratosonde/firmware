@@ -106,6 +106,7 @@ Confidence legend:
 | BR-COMM-013 | Bench recovery from a confused state is a manual re-commissioning action, not a firmware path. | CONFIRMED |
 | BR-COMM-014 | Copy count, margin value, N (persist interval), and integrity-check algorithm SHALL be configuration/implementation bindings. | CONFIRMED |
 | BR-COMM-015 | Network-server-side frame-counter expectations for the margin-jump case SHALL be documented for operations; firmware does not rely on NS "reset counters" features. | INFERRED |
+| BR-COMM-016 | Commissioned identity survives ordinary application servicing: supported firmware service under DDR-0025 SHALL preserve provisioned credential identity unless an explicit factory reprovision operation is invoked. | CONFIRMED — 2026-08-12 interview |
 
 ---
 
@@ -128,6 +129,8 @@ Confidence legend:
 - **DDR-0012 (boot):** boot restores session state per the degrade ladder; the flight latch participates in boot's commissioning-vs-flight determination.
 - **DDR-0006/0020/0028 (RF authorization):** a stored session is capability, not permission (INV-COMM-008); region silence for unrecoverable credentials composes with region/restricted/staleness silence.
 - **DDR-0009 (fail-soft):** missing credentials never stop sensing/logging; invalid security material is never replaced with fabricated credentials.
+- **DDR-0024 (device identity):** regional LoRaWAN provisioning is performed before distribution/flight; end users should not manage keys; credentials belong to the physical hardware across flights (added 2026-08-12).
+- **DDR-0025 (firmware servicing):** ordinary application reflash preserves the commissioned identity (BR-COMM-016); only an explicit factory reprovision replaces it.
 - **Retired legacy session-integrity record:** absorbed in full (see header).
 
 

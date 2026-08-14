@@ -1,0 +1,136 @@
+# Stratosonde Requirements Traceability Matrix
+
+**Date:** 2026-08-12 (merges the round-2 and round-3 interview matrices into one living V-model artifact)
+**Purpose:** Link product intent to DDR ownership, implementation responsibility, and objective proof.
+
+Every flight-critical row should answer:
+
+1. Why must the product behave this way? → intent/DDR
+2. Where is it implemented? → module/function/config binding
+3. How is it proved? → test/analysis/inspection ID
+4. Where is this release's proof? → CI/HIL/environmental artifact tied to the binary
+
+If a link is missing, the requirement is not fully closed.
+
+---
+
+## 1. Flight-Critical System Requirements (round 3)
+
+| Requirement | Intent | DDR | Implementation binding | Proof |
+|---|---|---|---|---|
+| SYS-BOOT-001 | Boot/reset/wake converge | DDR-0001 / 0012 | startup + mission scheduler | cold boot/reset equivalence |
+| SYS-BOOT-002 | Start from safe low-power state | DDR-0001 / 0012 | board/peripheral init | power trace/state inspection |
+| SYS-BOOT-004 | Power truth before expensive work | DDR-0001 / 0016 | power arbiter | low-voltage startup HIL |
+| SYS-BOOT-006 | Reset cause diagnostic, not policy | DDR-0009 / 0012 | reset handling | reset-cause matrix |
+| SYS-ORCH-001 | Core owns time/power/radio | DDR-0001 / 0017 | central orchestrator | app request denial tests |
+| SYS-ORCH-002 | All operations bounded | DDR-0001 / 0009 | drivers/state machines | timeout/retry audit |
+| SYS-ORCH-004 | Safe overlap minimizes awake time | DDR-0001 | scheduler | RTT/power timeline |
+| SYS-PWR-003 | Continuous energy reevaluation | DDR-0016 | power model | changing-profile HIL |
+| SYS-PWR-004 | Reversible adaptation | DDR-0016 | power/cadence state | low→high recovery |
+| SYS-PWR-005 | Anti-chatter | DDR-0016 | hysteresis/filtering | threshold dither test |
+| SYS-PWR-009 | Critical energy may sleep immediately | DDR-0016 | wake admission | critical-energy test |
+| SYS-CFG-003 | Clamp scalar out-of-range config | DDR-0014 | config validator | min/max boundary tests |
+| SYS-CFG-004 | Reject unrecoverably malformed config | DDR-0014 | validator | CRC/schema corruption |
+| SYS-CFG-006 | Config change logged | DDR-0014 | event logger | config event test |
+| SYS-CFG-008 | Config applies next wake | DDR-0014 | config generation/latch | mid-wake update test |
+| SYS-DATA-001 | Preserve protocol-valid surprising value | DDR-0009 / 0023 | sensor pipeline | unusual-value injection |
+| SYS-DATA-004 | No generalized confidence score | DDR-0023 | schemas | schema inspection |
+| SYS-DATA-008 | Preserve raw observable | DDR-0023 | archive/payload schema | golden vectors |
+| SYS-DATA-010 | Historical raw reprocessable | DDR-0023 / 0024 | backend calibration | recalibration replay |
+| SYS-GNSS-003 | Old fix never appears fresh after failed acquire | DDR-0003 / 0009 | GNSS acquire/merge | forced wake-failure test |
+| SYS-GNSS-005 | RF stops after stale regulatory limit | DDR-0015 | RF authorization | boundary test |
+| SYS-GNSS-007 | Fresh fix restores RF | DDR-0015 | RF authorization | stale→fresh test |
+| SYS-RF-002 | Archive recovery never starves science | DDR-0005 / 0022 | TX scheduler | large-backlog HIL |
+| SYS-RF-003 | Archive recovery newest-first | DDR-0004 / 0005 | archive traversal | ordering test |
+| SYS-NVM-005 | Torn write causes bounded newest loss | DDR-0011 | flash log | randomized power cuts |
+| SYS-NVM-006 | Recover archive despite metadata damage | DDR-0011 | flash recovery | header corruption test |
+| SYS-NVM-008 | Frame counter never prohibited rollback | DDR-0010 / 0018 | LoRaWAN persistence | counter power-cut campaign |
+| SYS-ID-006 | Claim uses authenticated user + physical possession | DDR-0024 | backend claim flow | claim integration test |
+| SYS-ID-007 | Already claimed means no silent transfer | DDR-0024 | ownership backend | duplicate-claim test |
+| SYS-FW-004 | Reflash preserves identity/credentials | DDR-0025 | linker/NVM/service | before/after service test |
+| SYS-VER-010 | First flight has explicit validation checklist | DDR-0026 | release process | completed checklist artifact |
+
+
+## 2. Mission / Product Intent Coverage (round 2)
+
+Round-2 "action" dispositions are now **merged** into the corpus (2026-08-12); the DDR columns below cite the merged items.
+
+| ID | Requirement | DDR owner | Primary implementation binding | Verification/evidence |
+|---|---|---|---|---|
+| TR-MISSION-001 | Fresh science is the primary product. | DDR-0022 / 0005 | science scheduler/TX state machine | backlog-starvation test |
+| TR-MISSION-002 | Radio outage does not change science mission. | DDR-0022 / 0009 | mission orchestration | multi-day no-link run |
+| TR-MISSION-003 | Archive is circular; overwrite oldest. | DDR-0004 | archive layer | fill/wrap tests |
+| TR-MISSION-004 | Recovery after outage is newest-first. | DDR-0004 / 0005 (BR-TX-022) | recovery traversal | ordering test |
+| TR-MISSION-005 | Config is target; temporary adaptation returns toward it. | DDR-0014 / 0016 (INV-CONFIG-010, INV-PWR-015) | mission/power scheduler | low-energy recovery test |
+| TR-POWER-001 | Brownout is a fault, not a strategy. | DDR-0016 (INV-PWR-012) | power arbiter | declining-voltage HIL |
+| TR-POWER-002 | Slow cadence when energy projection cannot sustain target. | DDR-0016 (INV-PWR-013) | cadence/power policy | night-profile test |
+| TR-POWER-003 | Skip GNSS when load cannot be safely admitted; mark stale. | DDR-0016 / 0003 (INV-PWR-014) | GNSS admission | GNSS refusal HIL |
+| TR-DATA-001 | Protocol-valid sensor values are not censored merely for being surprising. | DDR-0009 / 0023 (INV-FAIL-011) | sensor drivers | unusual-value test |
+| TR-DATA-002 | Sensor/bus retries are small, bounded, and sensor-specific. | DDR-0009 (INV-FAIL-012) | drivers | injected I2C faults |
+| TR-DATA-003 | Preserve raw observable where practical. | DDR-0023 (INV-DATA-011) | payload/archive schema | golden vectors |
+| TR-DATA-004 | Backend may own calibration bound to physical sensor identity. | DDR-0023 / 0024 (INV-DATA-012) | backend calibration registry | reprocessing test |
+| TR-RF-001 | One-packet budget goes to fresh science before archive/debug. | DDR-0005 / 0022 (BR-TX-021) | TX planner | one-packet test |
+| TR-RF-002 | Excessive GNSS staleness forces RF silence for regulatory confidence. | DDR-0015 | RF authorization | staleness boundary test |
+| TR-RF-003 | Fresh GNSS automatically restores RF eligibility. | DDR-0015 | RF authorization | stale→fresh test |
+| TR-RF-004 | FPort identifies incompatible application product families. | DDR-0019 (INV-RADIO-009) | encoder/router | FPort golden vectors |
+| TR-RF-005 | Do not repeat packet type when FPort is unambiguous. | DDR-0019 (INV-RADIO-010) | payload schema | inspection |
+| TR-RF-006 | Incompatible schemas remain explicitly decodable. | DDR-0019 (INV-RADIO-011) | schema/FPort assignment | compatibility tests |
+| TR-FAULT-001 | Peripheral failure degrades only dependent capability. | DDR-0009 | orchestration/drivers | fault injection |
+| TR-FAULT-002 | HardFault/core fatal state resets. | DDR-0009 | exception handlers | injected fatal fault |
+| TR-FAULT-003 | Bounded bus/peripheral recovery is allowed. | DDR-0009 (INV-FAIL-010) | drivers | retry/escalation test |
+| TR-FAULT-004 | Watchdog required in flight; commissioning may be exempt. | DDR-0020 | watchdog/deadman | mission/commissioning stall |
+| TR-PERSIST-001 | Mission-critical state survives reset or is reconstructible. | DDR-0010 | NVM/session/archive | reset-boundary matrix |
+| TR-PERSIST-002 | Identity/credentials are highest durability; small recent log loss may be acceptable. | DDR-0010 / 0011 (INV-PERSIST-008) | storage policy | power-cut campaign |
+| TR-ID-001..005 | DevEUI belongs to hardware; flights/ownership are backend metadata; per-region provisioning before flight; recovery keeps identity. | DDR-0024 / 0018 | backend/NVM | recovery/reflight, backend acceptance |
+| TR-ID-006 | QR random-value security semantics — claim PIN intent confirmed, protocol open. | DDR-0024 (INV-ID-010, OD-ID-001) | claim flow | threat-model interview |
+| TR-FW-001 | No OTA executable firmware update. | DDR-0025 (INV-FW-001) | command surface | reachability review |
+| TR-FW-002 | Future downlink changes validated config only. | DDR-0014 / 0025 (INV-FW-002) | config downlink | validation/auth tests |
+| TR-FW-003 | Current local service uses ST-Link/SWD. | DDR-0025 (INV-FW-003) | service tooling | service procedure |
+| TR-FW-004 | Reflash preserves DevEUI and credentials. | DDR-0025 / 0024 (INV-FW-004, BR-COMM-016) | linker/NVM/tooling | automated reflash |
+| TR-FW-005 | Custom field bootloader not first-flight requirement. | DDR-0025 (INV-FW-007) | architecture | inspection |
+| TR-CONFIG-001 | Configuration is operator target intent. | DDR-0014 (INV-CONFIG-009) | config object | semantic tests |
+| TR-CONFIG-002 | Out-of-range scalars clamped; structurally invalid config rejected. | DDR-0014 (INV-CONFIG-011/012) | validator | boundary tests |
+| TR-CONFIG-003 | Runtime degradation never silently rewrites target config. | DDR-0014 / 0016 (INV-CONFIG-010) | config/power state | persistence comparison |
+| TR-HW-001 | One hardware revision now; avoid speculative complexity. | ../decisions/open-intent-questions.md #19 | HAL/build structure | architecture review |
+| TR-VER-001 | Every flight-critical requirement maps to implementation and proof. | DDR-0026 (INV-VER-001) | CI metadata | traceability audit |
+| TR-VER-002 | Keep fast host CI. | DDR-0026 | host tests | CI |
+| TR-VER-003 | Add actual target HIL. | DDR-0026 | lab runner | hardware CI |
+| TR-VER-004 | Initial HIL needs no PCB mods: ST-Link/RTT + programmable power. | DDR-0026 (BR-VER-004) | lab rack | rack smoke |
+| TR-VER-005 | Otii Ace provides current/power evidence where automatable. | DDR-0026 (BR-VER-005) | lab automation | power traces |
+| TR-VER-006 | Power cuts at dangerous moments become regressions. | DDR-0026 (INV-VER-006) | lab runner | fault campaign |
+| TR-VER-007 | RTT and RTT-quiet/off runs establish instrumentation equivalence. | DDR-0026 (INV-VER-003) | build variants | equivalence test |
+| TR-VER-008 | Exact production/release image receives hardware evidence. | DDR-0026 (INV-VER-004) | release pipeline | release qualification |
+| TR-VER-009 | Cold chamber validates energy model, not just boot survival. | DDR-0026 / 0016 | chamber + Otii | temp/load campaign |
+
+---
+
+## 3. Highest-Priority Implementation Checks (round 3)
+
+1. Confirm startup code converges reset and wake paths as intended.
+2. Confirm no reset-cause branch changes long-term mission policy.
+3. Audit every driver/blocking call for bounded execution.
+4. Reconcile current config behavior with the explicit **clamp** policy.
+5. Verify config changes apply at wake boundary.
+6. Verify power model supports reversible reevaluation without chatter.
+7. Confirm app/Qwiic code cannot independently hold power/radio/wake time.
+8. Add GNSS failed-wake provenance regression.
+9. Fix/prove archive newest-first and science-preemption behavior.
+10. Audit persistent objects against the must-never-lose/bounded-loss hierarchy.
+11. Define the backend QR/PIN claim security protocol.
+12. Complete the Flight-1 checklist with actual evidence.
+
+## 4. Immediate Conformance Priorities (round 2)
+
+1. Guarantee fresh science preempts archive recovery.
+2. Fix GNSS wake-failure provenance so old coordinates cannot appear fresh.
+3. Bring archive recovery to newest-first/current-science-preemptive behavior.
+4. Move power policy toward measured operation-level droop admission.
+5. Verify stale-position RF timeout and automatic fresh-fix recovery.
+6. Verify fatal exception handlers reset.
+7. Verify watchdog/deadman is armed across all flight paths.
+8. Add bounded driver/bus retries.
+9. Verify reflash preserves identity/credential banks.
+10. Formalize FPort/schema bindings and decoder golden vectors.
+11. Verify archive reconstruction under metadata corruption/power cuts.
+12. Build the first target-HIL lane and retain evidence.
+
