@@ -1,143 +1,56 @@
-# LoRaWAN Region Lookup Module
+# Region Lookup (H3)
 
 ## Overview
 
-The LoRaWAN Region Lookup module determines the appropriate frequency plan based on the device's current position. It integrates with the H3-lite library to efficiently map GPS coordinates to LoRaWAN regions and handles special cases like over-ocean operation and restricted areas.
+Region detection maps a GNSS position to a LoRaWAN region using the **in-tree
+H3Lite** hexagon index (`h3lite.h`): `latLngToRegion(lat, lon)` → H3Lite
+`RegionId` → `LoRaMacRegion_t`. The module is `Core/Src/multiregion_h3.c` +
+`Core/Inc/multiregion_h3.h`; session storage per region is the multiregion
+context bank (see MultiRegionSupport.md).
 
-## Integration with H3-lite Library
+## API (actual)
 
-- **External Library**: H3-lite (to be provided separately)
-- **Interface**: Simple API to get closest regions from latitude/longitude
-- **Distance Calculation**: Returns distance in kilometers to each region
+| Function | Purpose |
+|----------|---------|
+| `MultiRegion_DetectFromGPS_H3(lat, lon)` | Full detect: H3 lookup + nearest-neighbor fallback |
+| `MultiRegion_DetectFromH3Region(h3Region, lat, lon)` | Detect from an already-resolved RegionId (#77: resolve once per cycle; lat/lon only for fallback + logs) |
+| `H3Region_ToLoRaMacRegion(h3Region)` | Name→enum mapping (exposed for tests) |
 
-## Region Determination Process
+The old `Region_*` API in the previous version of this document never existed.
 
-```mermaid
-flowchart TD
-    A[Get GPS Coordinates] --> B[Check if in Restricted Area]
-    B -->|Yes| C[Block Transmission]
-    B -->|No| D[Query H3-lite Library]
-    D --> E[Get List of Regions with Distances]
-    E --> F{Over Land?}
-    F -->|Yes| G[Use Region for Current Location]
-    F -->|No| H[Select Closest Region]
-    H --> I{Multiple Close Regions?}
-    I -->|Yes| J[Prepare List of Alternative Regions]
-    I -->|No| K[Use Single Closest Region]
-    J --> L[Return Primary and Alternative Regions]
-    K --> L
-    G --> L
-```
+## Region Map
 
-## Supported LoRaWAN Regions
+14 name→region entries (`_Static_assert`-pinned against drift). AS923
+sub-plans (AS923-1, -1B, -1C, -2, -3, -4) all map to `LORAMAC_REGION_AS923`;
+CN470 and EU433 are detectable but have **no session-bank slot**.
 
-| Region Code | Frequency Band | Countries/Areas |
-|-------------|----------------|-----------------|
-| EU868       | 863-870 MHz    | Europe          |
-| US915       | 902-928 MHz    | United States   |
-| AU915       | 915-928 MHz    | Australia       |
-| AS923-1     | 920-923 MHz    | Asia Group 1    |
-| AS923-2     | 923-925 MHz    | Asia Group 2    |
-| AS923-3     | 915-921 MHz    | Asia Group 3    |
-| KR920       | 920-923 MHz    | South Korea     |
-| IN865       | 865-867 MHz    | India           |
-| RU864       | 864-870 MHz    | Russia          |
+**Session bank (MAX_REGION_CONTEXTS = 7):** US915, EU868, AS923, AU915, IN865,
+KR920, RU864 (SP-05/#246 added the RU864 slot; H-07/#274 captured RU864 OTAA
+evidence). A detected region outside the bank can be detected but not joined.
 
-## Restricted Areas
+## Fallbacks and the Geofence
 
-- **North Korea**: No transmission allowed
-- Other restricted areas can be defined as needed
+- **Outside all known regions** (ocean): nearest-neighbor ring search selects
+  exactly **one** closest region — the previous doc's "transmit to the closest
+  region or two" never existed.
+- **Restricted** (`REGION_RESTRICTED`): `GeofenceRestricted()` →
+  `GEO_PERMISSION_RESTRICTED` → `VETO_RESTRICTED_REGION` RF silence.
+- **Invalid coordinates**: `GEO_PERMISSION_UNKNOWN` — the documented policy is
+  "cannot be known restricted → transmit", chosen explicitly rather than
+  inherited from a failed validation.
+- **Stale position** (F-3/#178, DDR-0015): may **inhibit** (the geofence runs
+  on the backup-register last-known position when GNSS is off) but never
+  **switch** region.
 
-## Over-Ocean Strategy
+## Who Calls It
 
-- When over ocean, transmit to the closest region or two
-- Prioritize regions by distance
-- Consider signal propagation characteristics over water
+Only the transmit cycle, and only on a fresh, token-present fix
+(`GNSS_HasPosition`): detect → compare with the active region → transactional
+switch with rollback on failure (LT-02/H-04/H-06, #272). Detection never runs
+on fabricated coordinates.
 
-## Key Functions
+## Cross-References
 
-### Initialization
-
-```c
-RegionStatus_t Region_Init(void);
-```
-- Initializes the region lookup module
-- Prepares interface with H3-lite library
-
-### Region Lookup
-
-```c
-RegionStatus_t Region_GetForCoordinates(float latitude, float longitude, LoRaWAN_Region_t *region);
-```
-- Determines the appropriate LoRaWAN region for given coordinates
-- Returns region code for use by Transmission Module
-
-### Distance Calculation
-
-```c
-RegionStatus_t Region_GetDistances(float latitude, float longitude, RegionDistance_t *distances, uint8_t maxRegions);
-```
-- Returns distances to all regions from given coordinates
-- Sorted by proximity (closest first)
-
-### Restricted Area Check
-
-```c
-bool Region_IsRestricted(float latitude, float longitude);
-```
-- Checks if coordinates are in a restricted transmission area
-- Returns true if transmission should be blocked
-
-### Alternative Regions
-
-```c
-RegionStatus_t Region_GetAlternatives(float latitude, float longitude, LoRaWAN_Region_t *regions, uint8_t maxRegions);
-```
-- Gets alternative regions for over-ocean operation
-- Returns multiple options sorted by proximity
-
-## Data Structures
-
-### Region Distance
-
-```c
-typedef struct {
-    LoRaWAN_Region_t region;      // Region code
-    float distance;               // Distance in kilometers
-} RegionDistance_t;
-```
-
-### Region Definition
-
-```c
-typedef struct {
-    LoRaWAN_Region_t code;        // Region code
-    char name[16];                // Region name
-    uint32_t frequency;           // Base frequency in Hz
-    uint8_t datarates;            // Supported data rates bitmap
-    uint8_t max_tx_power;         // Maximum TX power
-} RegionDefinition_t;
-```
-
-## Error Handling
-
-1. **Library Integration Errors**:
-   - Graceful fallback if H3-lite library fails
-   - Default to most common region if lookup fails
-
-2. **No Valid Region**:
-   - Handle cases where no suitable region is found
-   - Implement fallback strategy based on last known good region
-
-3. **Restricted Areas**:
-   - Clear indication when in restricted area
-   - Provide status to Transmission Module to block transmission
-
-## Implementation Notes
-
-- Integration with the H3-lite library (to be provided externally)
-- Efficient lookup mechanism to minimize processing time
-- Compact storage of region boundaries
-- Support for distance-based region selection
-- Handling of over-ocean scenarios by selecting multiple nearby regions
-- Geo-fencing implementation for restricted areas
+- `docs/MultiRegionSupport.md` — the session bank, switching, persistence
+- `docs/H3LiteIntegration.md` — the H3Lite library binding
+- DDR-0006 (region selection), DDR-0015 (staleness + RF legality)
