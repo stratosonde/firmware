@@ -169,6 +169,16 @@ bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region);
 bool MultiRegion_IsProvisioningComplete(void);
 
 /**
+ * @brief LT-02/H-04 (#272): after a FAILED MultiRegion_SwitchToRegion /
+ *        AutoSwitch*, reports whether the rollback restored a working
+ *        session on the previous region. True before any failed switch and
+ *        whenever no teardown happened (validation/busy early returns).
+ * @retval bool: false only when a switch failed AND the rollback failed
+ *         (radio sessionless, SYS_CAP_RADIO marked failed)
+ */
+bool MultiRegion_LastSwitchRollbackOk(void);
+
+/**
  * @brief Auto-switch based on GPS location (if enabled)
  * @param lat: Latitude in decimal degrees
  * @param lon: Longitude in decimal degrees

@@ -25,6 +25,7 @@
 #include "config.h"           /* R12 (#197): frame_counter_save_interval is config-authoritative */
 
 #include "reset_cause.h"      /* S-03 (#227): boot-attempt gate for the commit-back */
+#include "sys_caps.h"         /* LT-02/H-04 (#272): radio-degraded marking on rollback failure */
 #include "stm32wlxx_hal.h"
 #include "SEGGER_RTT.h"
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */
@@ -735,19 +736,34 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
      * radio params (airtime and link-budget drift). Persistence contract:
      * Model B - Tier-1/2 own credentials + counters + these radio params;
      * everything else is LoRaMac NVM's job. */
+    /* H-06 (#272): these four writes ARE the airtime/link-budget contract -
+     * a failed write must abort the restore like every other required step,
+     * not silently run defaults (the R11/#196 defect class). */
     mib.Type = MIB_CHANNELS_DATARATE;
     mib.Param.ChannelsDatarate = (int8_t)ctx->datarate;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: MIB_CHANNELS_DATARATE set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     mib.Type = MIB_CHANNELS_TX_POWER;
     mib.Param.ChannelsTxPower = (int8_t)ctx->tx_power;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: MIB_CHANNELS_TX_POWER set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     mib.Type = MIB_ADR;
     mib.Param.AdrEnable = (ctx->adr_enabled != 0);
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: MIB_ADR set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
     mib.Type = MIB_RX2_CHANNEL;
     mib.Param.Rx2Channel.Frequency = ctx->rx2_frequency;
     mib.Param.Rx2Channel.Datarate = ctx->rx2_datarate;
-    LoRaMacMibSetRequestConfirm(&mib);
+    if (LoRaMacMibSetRequestConfirm(&mib) != LORAMAC_STATUS_OK) {
+        SONDE_LOG_STR("  ERROR: MIB_RX2_CHANNEL set failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
 
     // STEP 10: Verify DevAddr and session keys landed in the secure element
     MibRequestConfirm_t verify_mib;
@@ -778,6 +794,30 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     }
 
     return LORAMAC_HANDLER_SUCCESS;
+}
+
+/* ------------------------------------------------------------------ */
+/* LT-02/H-04/H-06 (#272): rollback outcome query for the caller        */
+/* ------------------------------------------------------------------ */
+static bool g_last_switch_rollback_ok = true;  /* no failed switch yet */
+
+bool MultiRegion_LastSwitchRollbackOk(void)
+{
+    return g_last_switch_rollback_ok;
+}
+
+/**
+ * @brief LT-02/H-04 (#272): roll back to the previously-active region after
+ *        a failed switch. Re-runs the restore ritual for the old context;
+ *        RestoreSessionToMac's STEP 10 DevAddr/key verification makes the
+ *        rollback self-verifying (success means the session really landed).
+ */
+static LmHandlerErrorStatus_t RollbackToRegion(uint8_t slot, LoRaMacRegion_t region)
+{
+    MinimalRegionContext_t *ctx = &g_storage.contexts[slot];
+    SONDE_LOG("Rolling back to previous region %s (slot %d)\r\n",
+              RegionToString(region), slot);
+    return RestoreSessionToMac(ctx, region);
 }
 
 /**
@@ -836,8 +876,43 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
     /* F-R2 (#75): the restore ritual lives in RestoreSessionToMac() so the
      * commissioning join paths (#73) can share it. Fixed HAL_Delay()s there
      * are intentional — no ready-predicate exists for stack/radio settling. */
+    /* LT-02/H-04 (#272): capture the current view BEFORE the restore tears
+     * the MAC down (STEP 1's reinit de-initialises the MAC and moves
+     * LmHandlerParams.ActiveRegion to the NEW region) - on failure these are
+     * what the rollback must restore, and what the two views must be
+     * re-synced to. Default the rollback flag true: every early return above
+     * leaves the working session untouched. */
+    uint8_t old_slot = g_storage.active_slot;
+    LoRaMacRegion_t old_region = MultiRegion_GetActiveRegion();
+    g_last_switch_rollback_ok = true;
+
     LmHandlerErrorStatus_t status = RestoreSessionToMac(ctx, region);
     if (status != LORAMAC_HANDLER_SUCCESS) {
+        /* The MAC is de-initialised and LmHandlerParams.ActiveRegion names
+         * the NEW region while active_slot still names the OLD one. Try to
+         * roll back to the previous session. */
+        bool rollback_ok = false;
+        if (old_slot < MAX_REGION_CONTEXTS &&
+            ValidateContextCRC(&g_storage.contexts[old_slot]) &&
+            ValidateContextSemantics(&g_storage.contexts[old_slot])) {
+            rollback_ok = (RollbackToRegion(old_slot, old_region) == LORAMAC_HANDLER_SUCCESS);
+        }
+        /* Re-sync the MAC's view either way: rollback success means the old
+         * session is really loaded; rollback failure means the name at least
+         * matches the bank the policy gates read. */
+        LmHandlerParams.ActiveRegion = old_region;
+        if (!rollback_ok) {
+            /* Sessionless radio: say so where telemetry can see it. Sticky
+             * by design (sys_caps never forgets) - a failed rollback means
+             * no known-good session exists to transmit on. */
+            g_last_switch_rollback_ok = false;
+            SysCaps_MarkFailed(SYS_CAP_RADIO);
+            SONDE_LOG_STR("SESSION LOST: rollback failed - radio degraded\r\n");
+            APP_LOG(TS_ON, VLEVEL_H, "MultiRegion: SESSION LOST - rollback failed\r\n");
+        } else {
+            SONDE_LOG("Rollback to %s succeeded - previous session restored\r\n",
+                      RegionToString(old_region));
+        }
         return status;
     }
     g_storage.active_slot = slot;

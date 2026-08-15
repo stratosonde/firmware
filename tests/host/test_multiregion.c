@@ -36,6 +36,7 @@
 #include "multiregion_h3.h"
 #include "mission_state.h"
 #include "multiregion_context.h"
+#include "sys_caps.h"
 
 /* ------------------------------------------------------------------ */
 /* Fake LoRaMac state + fault-injection knobs                          */
@@ -65,6 +66,10 @@ static struct {
     bool fail_configure;            /* LmHandlerConfigure fails */
     bool fail_setdeveui;            /* LmHandlerSetDevEUI fails */
     bool fail_setkey;               /* LmHandlerSetKey fails */
+    /* LT-02/H-04/H-06 (#272): one-shot knobs - fail N times then succeed, so
+     * the injected fault kills the attempted switch but NOT the rollback. */
+    int  fail_mib_set_devaddr_once;   /* next N MIB_DEV_ADDR sets fail */
+    int  fail_mib_radio_param_once;   /* next N MIB_CHANNELS_TX_POWER sets fail */
 } g_mac;
 
 LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
@@ -72,6 +77,10 @@ LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
     switch (mib->Type) {
     case MIB_DEV_ADDR:
         if (g_mac.fail_mib_set_devaddr) return LORAMAC_STATUS_ERROR;
+        if (g_mac.fail_mib_set_devaddr_once > 0) {
+            g_mac.fail_mib_set_devaddr_once--;
+            return LORAMAC_STATUS_ERROR;
+        }
         g_mac.dev_addr = mib->Param.DevAddr;
         return LORAMAC_STATUS_OK;
     case MIB_NETWORK_ACTIVATION:
@@ -82,6 +91,10 @@ LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
         g_mac.channels_datarate = mib->Param.ChannelsDatarate;
         return LORAMAC_STATUS_OK;
     case MIB_CHANNELS_TX_POWER:
+        if (g_mac.fail_mib_radio_param_once > 0) {
+            g_mac.fail_mib_radio_param_once--;
+            return LORAMAC_STATUS_ERROR;
+        }
         g_mac.channels_tx_power = mib->Param.ChannelsTxPower;
         return LORAMAC_STATUS_OK;
     case MIB_ADR:
@@ -209,6 +222,14 @@ LmHandlerErrorStatus_t LoRaApp_ReInitStack(LoRaMacRegion_t region)
 
 bool g_erase_nvm_ok = true;
 bool LoRaApp_EraseNvmSlots(void) { return g_erase_nvm_ok; }
+
+/* LT-02/H-04 (#272): the rollback-failure path marks the radio degraded.
+ * Sticky like the real sys_caps (never forgotten); tests clear it between
+ * legs via g_syscaps_failed = 0. */
+static uint8_t g_syscaps_failed = 0;
+void SysCaps_MarkFailed(sys_cap_t cap) { g_syscaps_failed |= (uint8_t)cap; }
+bool SysCaps_Available(sys_cap_t cap) { return (g_syscaps_failed & (uint8_t)cap) == 0; }
+uint8_t SysCaps_Raw(void) { return g_syscaps_failed; }
 
 LoRaMacRegion_t g_h3_region = LORAMAC_REGION_US915;
 LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon) { (void)lat; (void)lon; return g_h3_region; }
@@ -481,6 +502,87 @@ static void test_f01_restore_steps123_fail_closed(void)
     st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
     CHECK_REGRESSION(st == LORAMAC_HANDLER_SUCCESS, "F-01e-recovery");
     CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_EU868, "F-01e-active");
+}
+
+/* ========================================================================== */
+/* LT-02/H-04/H-06 (P1) — a failed switch must roll back, not strand the MAC   */
+/* ========================================================================== */
+/* RestoreSessionToMac STEP 1 de-initialises the MAC and moves
+ * LmHandlerParams.ActiveRegion to the NEW region; at HEAD every later
+ * failure returned ERROR with no rollback, leaving ActiveRegion (new) and
+ * g_storage.active_slot (old) disagreeing, and the caller logging "staying
+ * on current region" over a sessionless radio. H-06: the four radio-param
+ * MIB writes discarded their return values.
+ *
+ * These legs use only pre-existing symbols so the suite COMPILES pre-fix and
+ * the assertions go red for the right reason (the structural LT scans
+ * LT-02-rollback-exists / LT-02-honest-log are the other red-first gate). */
+static void test_lt02_failed_switch_rolls_back(void)
+{
+    printf("-- LT-02/H-04/H-06 (P1): failed switch rolls back; radio params checked\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: initial switch\n"); exit(2);
+    }
+
+    /* Leg A: one-shot post-teardown failure (STEP 4 DevAddr set) - the fault
+     * kills the EU868 restore but NOT the rollback. */
+    g_syscaps_failed = 0;
+    g_mac.fail_mib_set_devaddr_once = 1;
+    LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    printf("   one-shot fault: switch rc=%d, slot=%s, ActiveRegion=%s\n",
+           st, RegionToString(MultiRegion_GetActiveRegion()),
+           RegionToString(LmHandlerParams.ActiveRegion));
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "LT-02a-switch-fails");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "LT-02a-slot-old");
+    /* H-04: the MAC's view must be re-synced to the old region (pre-fix it
+     * stays EU868 after the torn-down restore). */
+    CHECK_REGRESSION(LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915, "LT-02a-view-resynced");
+    /* Rollback succeeded -> the radio is NOT marked degraded... */
+    CHECK_REGRESSION(SysCaps_Available(SYS_CAP_RADIO), "LT-02a-radio-not-degraded");
+    /* ...and the session is actually loaded, not just the slot: the
+     * already-on-region fast path reports success immediately. */
+    CHECK_REGRESSION(MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) == LORAMAC_HANDLER_SUCCESS,
+                     "LT-02a-session-live");
+
+    /* Leg B: sticky fault - the rollback fails too -> radio degraded. */
+    g_syscaps_failed = 0;
+    g_mac.fail_mib_set_devaddr = true;
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    printf("   sticky fault: switch rc=%d, ActiveRegion=%s, caps=0x%02X\n",
+           st, RegionToString(LmHandlerParams.ActiveRegion), SysCaps_Raw());
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "LT-02b-switch-fails");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "LT-02b-slot-old");
+    CHECK_REGRESSION(LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915, "LT-02b-view-resynced");
+    CHECK_REGRESSION(!SysCaps_Available(SYS_CAP_RADIO), "LT-02b-radio-degraded");
+    /* Recovery once the fault clears: the bank was never invalidated. */
+    mac_reset();
+    g_syscaps_failed = 0;
+    CHECK_REGRESSION(MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868) == LORAMAC_HANDLER_SUCCESS,
+                     "LT-02b-recovery");
+
+    /* Leg C (H-06): a failed radio-parameter write must abort the restore.
+     * Pre-fix the switch SUCCEEDED on default radio params. */
+    mac_reset();
+    g_syscaps_failed = 0;
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: re-switch\n"); exit(2);
+    }
+    g_mac.fail_mib_radio_param_once = 1;  /* kills MIB_CHANNELS_TX_POWER */
+    st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    printf("   radio-param fault: switch rc=%d (want !=0), ActiveRegion=%s\n",
+           st, RegionToString(LmHandlerParams.ActiveRegion));
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "LT-02c-radio-param-checked");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915, "LT-02c-slot-old");
+    CHECK_REGRESSION(LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915, "LT-02c-view-resynced");
+    CHECK_REGRESSION(MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) == LORAMAC_HANDLER_SUCCESS,
+                     "LT-02c-session-live");
 }
 
 /* ========================================================================== */
@@ -858,6 +960,9 @@ int main(void)
 printf("\n");
 test_r1_restore_fail_closed();
 test_f01_restore_steps123_fail_closed();
+    printf("\n");
+    test_lt02_failed_switch_rolls_back();
+    printf("\n");
 test_sp05_all_seven_regions_supported();
     printf("\n");
     test_c01_provisioning_latch();

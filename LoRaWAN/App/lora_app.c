@@ -1472,9 +1472,15 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
       } else if (switch_status == LORAMAC_HANDLER_BUSY_ERROR) {
         SONDE_LOG_STR("MultiRegion: Switch deferred (MAC busy)\r\n");
       } else {
-        /* F-01 (#245): the fail-closed restore left the working session
-         * intact - stay on the current region and SAY SO (was silent). */
-        SONDE_LOG_STR("MultiRegion: Switch FAILED (restore error) - staying on current region\r\n");
+        /* LT-02/H-04 (#272): a failed switch now attempts rollback to the
+         * previous region. Only claim to be staying when the rollback
+         * actually restored a working session (was unconditional, and false,
+         * #245's line); otherwise the radio is sessionless and degraded. */
+        if (MultiRegion_LastSwitchRollbackOk()) {
+          SONDE_LOG_STR("MultiRegion: Switch FAILED - rollback restored the previous region session\r\n");
+        } else {
+          SONDE_LOG_STR("MultiRegion: Switch FAILED and rollback FAILED - radio degraded\r\n");
+        }
       }
       }
     }
