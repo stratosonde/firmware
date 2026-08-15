@@ -96,6 +96,14 @@ Confidence legend:
 | BR-RF-013 | Future satellite/LEO LoRaWAN capability MAY be added specifically to no-region behavior. | **CONFIRMED** |
 | BR-RF-014 | Future alternate-bearer behavior SHALL require an explicit policy decision for restricted regions rather than inheriting permission automatically. | **CONFIRMED** |
 
+### Implementation-status note (2026-08-15, after the 2026-08-14 review)
+
+The CONFIRMED column records product intent, not code state. Current conformance:
+
+- **BR-RF-002/003/004/012** — implemented but **inert**: the shipped h3lite table contains zero `REGION_RESTRICTED` cells (firmware#257 / SP-02, GEO-01). Owner will mark selected territories RESTRICTED in the dataset; h3lite#1 (GEO-04) adds the init self-check + generator guard so the enforcement set can never silently be empty again.
+- **BR-RF-007/008** — **not implemented**: the ring-search bound is hardcoded (500 km / 3 rings, `multiregion_h3.c:30/:112`). Tracked firmware#299 (GEO-05), deferred post-first-flight.
+- **BR-RF-009** — **reconciled by owner disposition 2026-08-15** (GEO-03 / firmware#258): with zero ring candidates, keep-current-and-transmit is the sanctioned behavior. BR-RF-009's strict reading (silence when no candidate inside the bound) would darken ocean crossings — the failure mode BUG 1.3 / F-006 deliberately removed. The strict no-TX outcome remains available via the RegionAuth rework recorded in firmware#258 if a future policy decision wants it; `VETO_NO_REGION` would consume codepoint 7, the last free value in the 3-bit archived veto field.
+
 ---
 
 ## 4. Three RF Authorization Outcomes

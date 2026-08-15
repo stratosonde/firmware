@@ -89,7 +89,7 @@ For each first-flight sensor:
 - [ ] Current science preempts recovery — host: burst suite + LT-01/#269
 - [ ] Torn newest record detected — host: flight suite (F-006/#51)
 - [ ] Corrupt metadata/header recovery preserves valid records where feasible — host: R3-07/#221; caveat: double-header loss triggers a full-ring boot scan → #289
-- [ ] Power interruption causes only bounded loss — open: power-cut campaign (#282 related)
+- [ ] Power interruption causes only bounded loss — open: power-cut campaign (store atomicity fixed: #282 closed 2026-08-15, FR-02 `3b800d7`; campaign evidence still open)
 
 ---
 
@@ -101,7 +101,7 @@ For each supported region:
 - [ ] Session/credential persistence verified — host: multiregion suite + NVM store (#109); open: target reset matrix
 - [ ] Frame-counter checkpoint/recovery verified — code: #109 + restore-after-`Config_Init` (H-02/#273); open: target power-cut
 - [ ] Reset cannot cause prohibited frame-counter rollback/reuse — code: #273; open: power-cut campaign (#282)
-- [ ] Region switch does not damage other region state — host: multiregion suite; code: rollback on failure (#272); caveat: middleware `CtxRestoreDone` stickiness → #283
+- [ ] Region switch does not damage other region state — host: multiregion suite; code: rollback on failure (#272); ~~caveat: middleware `CtxRestoreDone` stickiness → #283~~ closed 2026-08-15 (FR-16, `3b800d7`); new caveat: mask-MIB failure handling verified (FR-17, `fd5262d`)
 - [ ] Ordinary application reflash preserves required credential state — code: backup registers (STAB-11/#158); open: automated reflash proof
 
 ---
@@ -149,6 +149,8 @@ Section note (2026-08-15): all open — cold-chamber campaign (#261/#262); resul
 - [ ] Sensor behavior characterized cold
 - [ ] Low-energy recovery characterized
 - [ ] Power thresholds/model reviewed against measurements
+- [ ] Cold full-pack mode selection verified against flight-pack data — **FAILS today:** #297 (PWR-02: fixed 4300 mV raw floor selects SURVIVAL below −62.3 °C for a fully charged pack; red-gated host suite `test_pwr`; fix = bench-derived floor(T) + monotonic comp table from the #261 campaign, also ungates LT-06/#248)
+- [ ] RESTRICTED enforcement set present and probed — open: dataset population #257 (owner), init/generator guards h3lite#1 (GEO-04); red-gated host suite `test_geo`
 
 ---
 

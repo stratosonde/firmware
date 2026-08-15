@@ -10,6 +10,15 @@
 >
 > Status lines name issues/commits/tests only — the finding detail lives in the
 > issue, not here. Review-sweep trackers: #269-#289 (see docs/temp/LT_C01_HANDOFF.md).
+>
+> **2026-08-15 second pass (2026-08-14 flight-readiness reviews):** the FR wave
+> closed #282, #283, #290, #292-#296 (commits `fd5262d`/`25a35a4`/`3b800d7`; host
+> red-first, ARM +368 B flash / +2048 B bss). The second 2026-08-14 review
+> (GEO/PWR/MAC) triaged to: #297 (PWR-02, bench-gated P0 — see FW-CONF-005),
+> #298 (MAC-01, post-flight), #299 (GEO-05, post-flight), #257 + h3lite#1
+> (GEO-01/04 dataset + guards, owner), #258 (GEO-03 disposition: no rework,
+> recorded). New gated host suites: `test_pwr`, `test_geo` (EXPECT_UNFIXED until
+> the bench data / dataset land).
 
 ## P0/P1 — Mission correctness
 
@@ -37,7 +46,7 @@ Newest eligible retained record first, then backward under bounded opportunity.
 ### FW-CONF-005 — Predictive energy degradation, not intentional brownout
 **Intent:** DDR-0016.  
 Reduce work/cadence before an admitted load collapses the rail.
-**Status:** 🟡 IMPLEMENTED — `DecideTransmitPlan` + `power_model.c` predictions; caveats: −40→−50 compensation-table non-monotonicity #248 (LT-06), FULL/SLEEP admission gap #288 (H-12).
+**Status:** 🟡 IMPLEMENTED — `DecideTransmitPlan` + `power_model.c` predictions; caveats: −40→−50 compensation-table non-monotonicity #248 (LT-06), FULL/SLEEP admission gap #288 (H-12), cold full-pack false SURVIVAL #297 (PWR-02: fixed 4300 mV raw floor fires below −62.3 °C; red-gated `test_pwr`; bench-derived floor(T) pending #261).
 
 ### FW-CONF-006 — GNSS load admission
 If GNSS cannot be supported, skip it, preserve stale provenance, retry later.

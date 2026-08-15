@@ -1427,16 +1427,19 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
-        /* F-006 (#208, 2026-08-11 review disposition): the review warned that
-         * UNKNOWN conflates "open ocean" with "unmapped land", making
-         * continuation a regulatory hazard. DISPOSITION (documented product
-         * decision): the h3lite dataset maps ALL land - every terrestrial
-         * cell resolves to a region or to REGION_RESTRICTED - so UNKNOWN can
-         * only mean ocean/uncovered water BY CONSTRUCTION, which is exactly
-         * the case this keep-current-region-and-transmit policy exists for
-         * (blocking UNKNOWN darkened every ocean crossing). DEPENDENCY: if
-         * unmapped land ever enters the dataset, this policy must be
-         * revisited before flight. */
+        /* F-006 (#208) / GEO-02/03 (2026-08-14 review, owner disposition
+         * 2026-08-15): UNKNOWN conflates "open ocean" with "unmapped land".
+         * ACTUAL POLICY (replaces the earlier, false "dataset maps ALL land"
+         * justification): selected territories are marked RESTRICTED in the
+         * h3lite dataset (#257) and silenced above; every other UNKNOWN cell
+         * - ocean AND any land not so marked - transmits on the held region.
+         * That is a deliberate product decision: blocking UNKNOWN darkened
+         * every ocean crossing (BUG 1.3). The residual laundering risk
+         * (unmapped land adopts a neighbour's plan via the ring search,
+         * multiregion_h3.c:110) is mitigated by the dataset edit, not by a
+         * RegionAuth rework (#258); BR-RF-009's no-candidate silence is
+         * reconciled in DDR-0007 against this disposition. DEPENDENCY: if
+         * the dataset policy changes, revisit before flight. */
         SONDE_LOG_STR("UNKNOWN REGION (ocean/uncovered): Keeping current region, transmitting normally\r\n");
         // Do NOT return — continue with current region
       }

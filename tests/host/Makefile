@@ -61,6 +61,15 @@ CONFIG_SRCS := test_config.c
 # DR-03 behavioural against the real transmit_plan.c, DR-02c source scan.
 DR_SRCS := test_dr_20260812.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/sys_caps.c
 
+# 2026-08-14 review (docs/temp/stratosonde-review-20260814.md):
+# GEO-01 (dataset) / GEO-04 (guards) against the real h3lite submodule sources;
+# PWR-02 behavioural against the real power_model.c. Both red-gated until the
+# owner's RESTRICTED dataset and the bench characterization land.
+GEO_SRCS := test_geo_20260814.c
+GEO_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
+
+PWR_SRCS := test_pwr_20260814.c ../../Core/Src/power_model.c
+
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
 # DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
@@ -119,8 +128,29 @@ test_sp0813$(EXE): $(SP_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.
 test_lt0813$(EXE): $(LT_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/atgm336h.c ../../Core/Src/multiregion_context.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/main.c ../../Core/Src/mission_state.c ../../Core/Inc/multiregion_context.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(LT_SRCS) -lm
 
+test_geo$(EXE): $(GEO_SRCS) $(wildcard ../../Middlewares/Third_Party/h3lite/src/*.c)
+	$(CC) $(CFLAGS) $(GEO_INCLUDES) -o $@ $(GEO_SRCS) ../../Middlewares/Third_Party/h3lite/src/*.c -lm
+
+test_pwr$(EXE): $(PWR_SRCS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(PWR_SRCS) -lm
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
+
+# 2026-08-14 review (PWR-02 bench-gated; GEO-01 dataset, GEO-04 guards):
+# pwr/geo run red until the Nichicon characterization and the RESTRICTED
+# dataset land; in `all` (the CI gate) they run as green pre-fix gates.
+pwr: test_pwr$(EXE)
+	./test_pwr$(EXE)
+
+geo: test_geo$(EXE)
+	./test_geo$(EXE)
+
+pwr-gate: test_pwr$(EXE)
+	EXPECT_UNFIXED=1 ./test_pwr$(EXE)
+
+geo-gate: test_geo$(EXE)
+	EXPECT_UNFIXED=1 ./test_geo$(EXE)
 
 deep: test_deepreview$(EXE)
 	./test_deepreview$(EXE)
@@ -148,7 +178,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -175,7 +205,7 @@ timerif: test_timerif$(EXE)
 # Pre-fix gate: passes while the documented FR-xx regressions are still open,
 # but fails on any NEW breakage. Use this until the fixes land so CI stays
 # meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE)
+baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE)
 	EXPECT_UNFIXED=1 ./test_runner$(EXE)
 	EXPECT_UNFIXED=1 ./test_flight$(EXE)
 	EXPECT_UNFIXED=1 ./test_findings$(EXE)
@@ -189,6 +219,8 @@ baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EX
 	EXPECT_UNFIXED=1 ./test_dr$(EXE)
 	EXPECT_UNFIXED=1 ./test_sp0813$(EXE)
 	EXPECT_UNFIXED=1 ./test_lt0813$(EXE)
+	EXPECT_UNFIXED=1 ./test_geo$(EXE)
+	EXPECT_UNFIXED=1 ./test_pwr$(EXE)
 
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
@@ -201,7 +233,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_sanitize$(EXE)
