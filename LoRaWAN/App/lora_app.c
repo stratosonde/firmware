@@ -58,6 +58,7 @@
 #include "first_flight_policy.h"
 #include "packet_queue.h"      /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
 #include "nvm_slot.h"          /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
+#include "region_policy.h"     /* refactor stage 3: geofence/region policy extracted to Core/Src/region_policy.c */
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -1346,39 +1347,20 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
  * SAME restricted-region test as the live-fix path. Pure computation (h3lite),
  * no hardware. Inhibit only — callers on a stale position must NOT auto-switch
  * regions (switching on a days-old fix may be worse than holding). */
-/* DR-02 (#237): tri-state, not boolean. An implausible last-known position is
- * UNKNOWN, not "permitted" - the old `return false` let a validation failure
- * silently read as permission on the one policy with regulatory consequences.
- * Callers map UNKNOWN to the documented "no fix ever -> transmit" policy
- * EXPLICITLY (same outcome, different reasoning - F10/#175, DDR-0015). */
-typedef enum {
-  GEO_PERMISSION_PERMITTED = 0,
-  GEO_PERMISSION_RESTRICTED,
-  GEO_PERMISSION_UNKNOWN
-} GeoPermission_t;
-
+/* DR-02 (#237): GeoPermission_t moved to Core/Inc/region_policy.h (refactor
+ * stage 3) with its tri-state rationale; the DR-02c scan anchor
+ * GEO_PERMISSION_UNKNOWN deliberately remains in THIS file. */
 static GeoPermission_t GeofenceRestricted(float lat, float lon)
 {
   if (!GNSS_ValidateCoordinates(lat, lon)) {
     return GEO_PERMISSION_UNKNOWN;
   }
-  return (latLngToRegion(lat, lon) == REGION_RESTRICTED)
-         ? GEO_PERMISSION_RESTRICTED : GEO_PERMISSION_PERMITTED;
+  return RegionPolicy_GeoPermission(true, latLngToRegion(lat, lon));
 }
 
-/* DR-06 (#241): ONE silence helper for every RF-silence path, so the archive
- * always records WHY a cycle went dark (DDR-0003 §6a), not just THAT. First
- * veto wins (the existing DecideTransmitPlan rule). Previously only the
- * no-session veto reached plan.veto; the restricted-region, GPS-loss and
- * pre-launch quiet-watch paths archived as VETO_NONE - indistinguishable
- * from a normal cycle on recovery. */
-static void Silence(TransmitPlan_t *plan, bool *rf_silence, TransmitVeto_t why)
-{
-  *rf_silence = true;
-  if (plan->veto == VETO_NONE) {
-    plan->veto = why;
-  }
-}
+/* DR-06 (#241): the silence plan-mutator moved as-is to region_policy.c as
+ * RegionPolicy_Silence (refactor stage 3); its "one helper, first veto
+ * wins" rationale moved with it. */
 
 static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
 {    /* Perform H3lite region lookup if we have a valid fix */
@@ -1398,6 +1380,16 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
       /* Calculate elapsed time for H3 lookup */
       uint32_t h3_elapsed = HAL_GetTick() - h3_start;
       (void)h3_elapsed;  /* FR-19: log-only in flight */
+
+      /* Refactor stage 3: the policy decision is computed once, from explicit
+       * validated inputs, by the pure module (region_policy.c). The getters
+       * are side-effect-free RAM reads (multiregion_context.c:278/290), so
+       * evaluating them here instead of inside the branches below changes no
+       * observable behaviour. */
+      const RegionDecision_t region_decision = RegionPolicy_Decide(h3_region_id,
+          detected_region != MultiRegion_GetActiveRegion(),
+          MultiRegion_IsRegionJoined(detected_region),
+          EnvSensors_GnssIsStale());
       
       /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
        * NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
@@ -1415,13 +1407,13 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
        * radio-silent on stale position risks the whole mission. The DDR-0003
        * GPS-stale bit governs SCIENCE DATA HONESTY, not region selection.
        * Do not "fix" this without revisiting DDR-0015. */
-      if (h3_region_id == REGION_RESTRICTED) {
+      if (region_decision.silence_restricted) {
         /* R11 (#56): don't RETURN here — that discarded the sample entirely.
          * The archive exists precisely for data that can't be transmitted:
          * use the rf_silence pattern (DDR-0018) — GPS + re-read + flash write
          * proceed below; only the TX state machine is skipped. */
         SONDE_LOG_STR("RESTRICTED REGION: RF silence — archiving locally, radio dark\r\n");
-        Silence(plan, rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
+        RegionPolicy_Silence(plan, rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
       }
       
       if (h3_region_id == REGION_UNKNOWN) {
@@ -1464,10 +1456,9 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
        * HAL_Delay). This enforces in code what the F-06/DDR-0015 comment
        * above already argues: HOLD the last region across a GPS gap; never
        * snap region on stale data. */
-      if (EnvSensors_GnssIsStale()) {
+      if (!region_decision.switch_allowed) {
         SONDE_LOG_STR("MultiRegion: position STALE - auto-switch inhibited (never switch on stale)\r\n");
-      } else if (detected_region != MultiRegion_GetActiveRegion() &&
-                 !MultiRegion_IsRegionJoined(detected_region)) {
+      } else if (region_decision.silence_unjoined) {
         /* FR-03 (#290): FAIL CLOSED. AutoSwitchToRegion reports SUCCESS for
          * "target not joined - staying" (SP-16), so a boundary crossing into
          * a region with no banked session used to fall through to the TX
@@ -1477,7 +1468,7 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
          * next fix re-evaluates. */
         SONDE_LOG("MultiRegion: detected %s has no session - RF silence, archiving locally\r\n",
                   RegionToString(detected_region));
-        Silence(plan, rf_silence, VETO_RF_SILENCE);
+        RegionPolicy_Silence(plan, rf_silence, VETO_RF_SILENCE);
       } else {
       /* Production: Auto-switch region based on H3lite lookup.
        * SP-16 (#254): SUCCESS covers switched / same-region / not-joined-stay
@@ -2227,7 +2218,7 @@ static void SendTxData(void)
       LmHandlerJoin(ActivationType, true);
       return; /* Exit - will send data after join succeeds */
     }
-    Silence(&plan, &rf_silence, VETO_RF_SILENCE);  /* DR-06 (#241): same veto DecideTransmitPlan set; first wins */
+    RegionPolicy_Silence(&plan, &rf_silence, VETO_RF_SILENCE);  /* DR-06 (#241): same veto DecideTransmitPlan set; first wins */
     SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
 
@@ -2237,7 +2228,7 @@ static void SendTxData(void)
    * Entry to ASCENT is by arming (button hook) or launch detection.
    * Unjoined commissioning is untouched above (join retry path). */
   if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
-    Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
+    RegionPolicy_Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
     /* Quiet watch still samples pressure above for launch detection, but it
      * is not a science observation and must not create an incomplete record. */
     ResetCause_ClearBootAttempts();
@@ -2306,7 +2297,7 @@ static void SendTxData(void)
     }
     if (!MissionState_IsCommissioning() &&
         (utc_now_s - ref_s) > GPS_LOSS_SILENCE_S) {
-      Silence(&plan, &rf_silence, VETO_GPS_LOSS);  /* DR-06 (#241) */
+      RegionPolicy_Silence(&plan, &rf_silence, VETO_GPS_LOSS);  /* DR-06 (#241) */
       /* Admission already enforced the electrical floor. Keep trying GNSS on
        * every admitted wake until a fresh result can restore RF eligibility. */
       gps_enabled_by_power_mgmt = true;
@@ -2363,7 +2354,7 @@ static void SendTxData(void)
        * "cannot be known restricted -> transmit" policy by choice, not by
        * inheriting the outcome of a failed validation. */
       if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
-        Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
+        RegionPolicy_Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
         SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GPS off): RF silence\r\n");
       }
     }
@@ -2411,7 +2402,7 @@ static void SendTxData(void)
     /* DR-02 (#237): explicit RESTRICTED only; UNKNOWN -> transmit (same
      * policy as the GPS-skip path above). */
     if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
-      Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
+      RegionPolicy_Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
       SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
     }
   }

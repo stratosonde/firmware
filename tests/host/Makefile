@@ -81,6 +81,11 @@ PQ_SRCS := test_packet_queue.c ../../Core/Src/packet_queue.c
 # race with wraparound, torn-write selection scenarios.
 NVM_SRCS := test_nvm_slot.c ../../Core/Src/nvm_slot.c
 
+# Refactor stage 3: module contract for the extracted geofence/region policy
+# (Core/Src/region_policy.c). h3lite include path for RegionId/REGION_*.
+REGION_SRCS := test_region_policy.c ../../Core/Src/region_policy.c
+REGION_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
+
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
 # DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
@@ -163,6 +168,12 @@ test_nvm$(EXE): $(NVM_SRCS) ../../Core/Inc/nvm_slot.h
 nvm: test_nvm$(EXE)
 	./test_nvm$(EXE)
 
+test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h
+	$(CC) $(CFLAGS) $(REGION_INCLUDES) -o $@ $(REGION_SRCS) -lm
+
+region: test_region$(EXE)
+	./test_region$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -207,7 +218,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -262,7 +273,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_sanitize$(EXE)
