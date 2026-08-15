@@ -26,7 +26,7 @@ Rule: nothing is marked ✅ DONE without a linked verification artifact (bench l
 | Per-finding verification detail | **GitHub issues** — each finding's evidence + fix is reproduced in its issue body (#22–#289) |
 | Historical ledgers, reviews, audits | **Git history only** — deleted from the tree 2026-08-04; last commit containing them is `eaaa1db` |
 | Review sources for the 2026-08-15 sweep | `docs/temp/` (git-ignored): LT_REVIEW_20260813.md, stratosonde-firmware-stability-review-5930294.md, LT_C01_HANDOFF.md |
-| Wire formats | `docs/PayloadFormats.md` (heartbeat v2 LE, archive v1-v4 with v4 current, golden vectors from CI); `docs/LoRaWANApplicationProtocol.md` §6/§7 normative |
+| Wire formats | `docs/PayloadFormats.md` (heartbeat v2 LE, archive v1-v6 with **v6 current**, golden vectors from CI); `docs/LoRaWANApplicationProtocol.md` §6/§7 normative |
 | Expansion / Qwiic architecture | `docs/QwiicApplicationArchitecture.md` (package index) |
 | Docs index | `docs/README.md` |
 

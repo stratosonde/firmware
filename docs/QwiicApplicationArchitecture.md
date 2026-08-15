@@ -7,10 +7,14 @@ This package introduces a bounded Qwiic application architecture while preservin
 
 ## Architecture decisions
 
-- `decisions/0009-stratosonde-remains-mission-orchestrator.md`
-- `decisions/0010-qwiic-bus-ownership-and-peripheral-discovery.md`
-- `decisions/0011-heartbeat-and-scientific-archive.md`
-- `decisions/0012-mission-data-classes.md`
+- `decisions/0017-qwiic-expansion-application-services.md` — absorbs the retired
+  legacy records this package previously cited by pre-merge filenames
+  (orchestrator role, bus ownership/discovery, mission data classes)
+- `decisions/0019-radio-payload-policy-bindings.md` — FPort bindings (heartbeat/archive side)
+
+> **Status (2026-08-15):** design package only — there is **no Qwiic firmware
+> implementation** in the tree (post-flight, issue #41). These documents are
+> the agreed design; treat API/framing claims as intent, not as-built.
 
 ## Protocol specifications
 
