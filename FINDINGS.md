@@ -17,6 +17,7 @@ red-first commits — never inside a refactor commit.
 | flight (flight-readiness) | 66,428 | 0 | |
 | findings | 113 | 0 | |
 | burst | 113 | 0 | scan-configured FSM replay model, extended (stage 5 step 1) to a full TX-FSM characterisation: LT-07 stale-wait forcing, R3-01 yield/deadline arithmetic, R3-03 ascent gate, T1/F-5 silence park, abort, bulk failure paths |
+| txshadow | 734,060 | 0 | stage 5 steps 2-3: pure `tx_fsm.c` step module shadow-run against the burst model - scripted scenarios + 200k randomized events, per-event state/action agreement |
 | stability | 49 | 0 | |
 | multiregion | 98 | 0 | |
 | timerif | 31 | 0 | |
