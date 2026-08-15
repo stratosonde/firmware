@@ -1,3 +1,8 @@
+/* ARCHIVE — regression record for the flight-readiness campaign (R2/R3 era).
+ * Module contracts live in test_<module>.c (see R2_TEST_MAP.md). Do not
+ * extend; extend the contract suite for the owning module instead.
+ * (Refactor stage 7.) */
+
 /**
   ******************************************************************************
   * @file    test_flightreadiness.c

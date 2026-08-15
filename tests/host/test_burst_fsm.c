@@ -1,3 +1,9 @@
+/* ARCHIVE — regression record for the 2026-08-11 review (BURST-01/02), plus
+ * the stage-5 TX-FSM characterisation model. NOTE: this file's scan-locked
+ * replay model is LOAD-BEARING — test_tx_fsm_shadow.c includes it to prove
+ * tx_fsm.c agrees with it on 200k randomized events. Module contracts live
+ * in test_<module>.c (see R2_TEST_MAP.md). (Refactor stage 7.) */
+
 /**
   ******************************************************************************
   * @file    test_burst_fsm.c

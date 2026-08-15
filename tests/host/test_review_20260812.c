@@ -1,3 +1,7 @@
+/* ARCHIVE — regression record for the 2026-08-12 review. Module contracts
+ * live in test_<module>.c (see R2_TEST_MAP.md). Do not extend; extend the
+ * contract suite for the owning module instead. (Refactor stage 7.) */
+
 /**
   ******************************************************************************
   * @file    test_review_20260812.c

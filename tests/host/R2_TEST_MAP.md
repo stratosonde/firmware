@@ -7,6 +7,48 @@ undocumented "trust me" fixes are not allowed either.
 
 Run: `make -C tests/host baseline` (EXPECT_UNFIXED=1 — green while fixes are
 pending, fails only on NEW breakage). Post-fix gate: `make -C tests/host all`.
+Module contracts only: `make -C tests/host contracts`.
+
+---
+
+# Stage-7 two-axis map — "what is proven about X?"
+
+The suites below the line are organised by review session (an archaeological
+record of where the campaign dug). Each is labelled ARCHIVE in its header.
+The CONTRACT suites are organised by module and are the readable statement of
+what each pure module promises.
+
+## Axis 1 — module → contract suite
+
+| module | contract suite | checks | notes |
+|---|---|---:|---|
+| `Core/Src/packet_queue.c` | `test_packet_queue.c` | 45 | stage 1 |
+| `Core/Src/nvm_slot.c` | `test_nvm_slot.c` | 34 | stage 2 |
+| `Core/Src/region_policy.c` | `test_region_policy.c` | 2,071 | stage 3 (incl. exhaustive EU row polygon rasterisation) |
+| `Core/Src/gnss_acquire.c` | `test_gnss_acquire.c` | 17 | stage 4 (one check = exhaustive 1970–2100 civil-date proof, ~47k days) |
+| `Core/Src/tx_fsm.c` | `test_tx_fsm_shadow.c` | 734,060 | stage 5: step module shadow-run against the scan-locked characterisation model in `test_burst_fsm.c` (scripted + 200k randomized events) |
+| `Core/Src/first_flight_policy.c` | `test_first_flight_policy.c` | 35 | commit A + stage 6 (admission, package, rail conversion, GNSS-package gate) |
+| `Core/Src/power_model.c` | host-compiled in `test_main.c` / `test_flightreadiness.c` | — | pre-refactor pure module; behavioural coverage lives in the core suites |
+| `Core/Src/atgm336h.c` | host-compiled in `test_main.c` / `test_dr_20260812.c` / others | — | pre-refactor; NMEA parser behavioural coverage in core + DR suites |
+
+## Axis 2 — finding/review session → archive suite
+
+| session | archive suite(s) |
+|---|---|
+| 2026-08-09 R2 review | `test_main.c`, `test_flightreadiness.c` (see per-finding table below) |
+| 2026-08-11 review (BURST-01/02) | `test_burst_fsm.c` (also the stage-5 FSM characterisation model — load-bearing for the shadow suite) |
+| 2026-08-12 reviews | `test_review_20260812.c`, `test_deepreview_20260812.c`, `test_dr_20260812.c` |
+| 2026-08-13 reviews | `test_sp_20260813.c`, `test_lt_20260813.c` |
+| 2026-08-14 reviews | `test_geo_20260814.c`, `test_pwr_20260814.c` |
+| cross-review findings | `test_review_findings.c`, `test_stability_review.c` |
+| feature suites (not session archives) | `test_multiregion.c`, `test_config.c`, `test_timerif.c` |
+
+Red-by-design gates (owner-gated, EXPECT_UNFIXED=1): LT-06 ×2
+(`test_lt_20260813.c`), GEO-01/04 ×3 (`test_geo_20260814.c`), PWR-02 ×3
+(`test_pwr_20260814.c`).
+
+---
+
 
 ## Host-provable - ALL FIXED 2026-08-09 (tests now green under make all)
 
