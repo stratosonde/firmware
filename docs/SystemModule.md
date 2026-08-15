@@ -2,188 +2,72 @@
 
 ## Overview
 
-The System Module serves as the central orchestrator for all firmware operations in the Stratosonde. It implements a state machine that manages the device's lifecycle, coordinates all other modules, and ensures reliable operation through watchdog management and error handling.
+There is no `System_*` API module — system orchestration is **main.c plus the
+wake cycle in `lora_app.c`**, held together by four small, real mechanisms:
+the mission lifecycle (`mission_logic.c`/`mission_state.c`), the STOP2
+low-power path (`stm32_lpm_if.c`), the capability ledger (`sys_caps.h`), and
+the backup-domain ownership map (`backup_regs.h`). This document describes
+that actual architecture; an earlier version described a fictional
+`System_Init`/`System_SetState`/`System_HandleError` module.
 
-## Responsibilities
+## Lifecycle (one-way, SI-002)
 
-- System initialization and hardware setup
-- Coordination of all other modules
-- Management of the main operational state machine
-- Watchdog initialization and refreshing
-- RTC-driven sleep and wake scheduling
-- Error detection and handling
-
-## State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> Initialization
-    Initialization --> AscendingMode: Init Complete
-    AscendingMode --> FloatMode: Altitude Plateau Detected
-    AscendingMode --> LowPowerMode: Low Battery
-    FloatMode --> LowPowerMode: Low Battery
-    LowPowerMode --> FloatMode: Battery Recharged
-    LowPowerMode --> [*]: Critical Battery
+```
+PRE-COMMISSIONED → COMMISSIONED_PRE-FLIGHT → ASCENT → FLOAT
 ```
 
-### State Descriptions
+Every transition is one-way and latch-based (provisioning latch C-01/#270;
+pressure launch detector STAB-06/#153 + R3-10/#222 two-evidence latch; float
+latch). **Float is terminal** (DDR-0002 §19 INV-LIFE-011) — the reversible
+Ascending/Float/LowPower triangle in the old doc never existed. Low power is
+not a lifecycle state; it is the power model's mode (see PowerManagement.md),
+orthogonal to lifecycle.
 
-| State | Description | Activities |
-|-------|-------------|------------|
-| **Initialization** | System boot and setup | Hardware initialization, module setup, configuration loading |
-| **AscendingMode** | Balloon is ascending | Regular sensor readings, frequent transmissions, GPS active |
-| **FloatMode** | Balloon has reached float altitude | Regular sensor readings, scheduled transmissions, GPS duty-cycled |
-| **LowPowerMode** | Battery voltage is low | Reduced sensor readings, minimal transmissions, GPS minimized |
+## Boot Order (main.c — order is load-bearing)
 
-## Operational Flow
+1. RTT buffer + build marker (F12/#173: the marker is genuinely referenced so
+   `--gc-sections` can't strip it)
+2. `ResetCause_CaptureBoot` — classify this reset, record fault codes
+3. `Config_Init` **before** `MX_LoRaWAN_Init` (H-02/#273: the frame-counter
+   restore margin must follow the configured save interval)
+4. `MX_LoRaWAN_Init` → `MultiRegion_Init` (Tier-1/2 restore)
+5. `leds_boot_seq()` — commissioning-only boot blink (R09/DDR-0002)
+6. Sequencer start → the wake cycle runs as tasks, not a superloop
 
-```mermaid
-sequenceDiagram
-    participant Main as Main Loop
-    participant PM as Power Management
-    participant GNSS as GNSS Module
-    participant Sensors as Environmental Sensors
-    participant Flash as Flash Logging
-    participant TX as Transmission Module
-    
-    Main->>PM: Check Power State
-    
-    alt Normal Power State
-        Main->>GNSS: Acquire Position
-        GNSS-->>Main: Position Data
-        Main->>Sensors: Read Sensors
-        Sensors-->>Main: Sensor Data
-        Main->>Flash: Log Data
-        Flash-->>Main: Storage Status
-        Main->>TX: Transmit Data
-        TX-->>Main: Transmission Status
-        Main->>PM: Enter Sleep
-        PM-->>Main: Wake Event
-    else Low Power State
-        Main->>GNSS: Quick Position Check
-        GNSS-->>Main: Position Data
-        Main->>Sensors: Essential Readings Only
-        Sensors-->>Main: Sensor Data
-        Main->>Flash: Log Data
-        Flash-->>Main: Storage Status
-        Main->>TX: Transmit if Critical
-        TX-->>Main: Transmission Status
-        Main->>PM: Enter Deep Sleep
-        PM-->>Main: Wake Event
-    else Critical Power State
-        Main->>Sensors: Minimal Readings
-        Sensors-->>Main: Sensor Data
-        Main->>Flash: Log Essential Data
-        Flash-->>Main: Storage Status
-        Main->>PM: Enter Hibernation
-        PM-->>Main: Wake Event
-    end
-```
+## The Wake Cycle
 
-## Key Functions
+Each scheduled wake is one early admission decision and one bounded epoch:
+plan (power model + veto) → GNSS (if enabled) → post-acquisition env re-sample
+(LT-03/#271) → archive → probe/burst (see TransmissionModule.md) → sleep.
+Opportunistic archive work yields to live science epochs (SI-012). Sleep is
+STOP2 via `stm32_lpm_if.c` with the wakeup timer; LT-05/#275 degraded
+capability handling on STOP2 re-init failure.
 
-### Initialization
+## Supervision
 
-```c
-SystemStatus_t System_Init(void);
-```
-- Initializes all hardware peripherals
-- Sets up all modules in the correct sequence
-- Loads configuration from flash
-- Performs self-test of critical components
+- **IWDG** independent watchdog (fault code F6/#171 if init fails)
+- **Deadman** (`Deadman_Check` in lora_app.c, run pre-sleep): resets the unit
+  if no productive work cycle completed within the derived timeout
+  (`ConfigGetDeadmanTimeoutS` = max(3 h, 3 × survival cadence), S-04/#228);
+  **no-op in COMMISSIONING** (DDR-0020)
+- **Reset cause + fault codes** (`reset_cause.h`): boot classification,
+  fault codes in a backup register (magic 0xF17B), boot-attempt counter
 
-### State Management
+## Capability Degrade (sys_caps.h, F-014/#207)
 
-```c
-SystemStatus_t System_SetState(SystemState_t state);
-SystemState_t System_GetState(void);
-SystemStatus_t System_UpdateState(void);
-```
-- Transitions between system states
-- Retrieves current system state
-- Updates state based on sensor data and conditions
+Four capabilities — FLASH, GNSS, SENSORS, RADIO. `SysCaps_MarkFailed` /
+`SysCaps_Available`: a subsystem that fails its bounded recovery degrades
+**only its dependent capability** (SI-013); everything else continues. This
+replaced speculative "limp mode" designs — there is no limp mode.
 
-### Module Coordination
+## Persistent-State Ownership
 
-```c
-SystemStatus_t System_AcquirePosition(void);
-SystemStatus_t System_ReadSensors(void);
-SystemStatus_t System_LogData(void);
-SystemStatus_t System_TransmitData(void);
-```
-- Coordinates operations between modules
-- Manages data flow through the system
-- Handles error conditions from module operations
+`backup_regs.h` is the backup-domain ownership map (R01/R02 Gate-1): every
+backup register has exactly one writer, documented in one table, mirrored by
+the internal-flash page map in `config.h` (FR-21/#102: new users update both).
 
-### Watchdog Management
+## Cross-References
 
-```c
-void System_InitWatchdog(void);
-void System_RefreshWatchdog(void);
-```
-- Initializes independent watchdog timer
-- Refreshes watchdog to prevent system reset
-- Implements safe refresh strategy
-
-### Sleep and Wake Management
-
-```c
-SystemStatus_t System_EnterSleep(uint32_t duration);
-SystemStatus_t System_HandleWakeup(WakeupSource_t source);
-```
-- Coordinates system sleep through Power Management module
-- Handles different wake-up sources
-- Restores system state after wake-up
-
-### Error Handling
-
-```c
-SystemStatus_t System_HandleError(ErrorType_t error, uint32_t data);
-bool System_IsErrorActive(ErrorType_t error);
-```
-- Centralized error handling
-- Implements recovery strategies
-- Logs errors for later analysis
-
-## Watchdog Implementation
-
-The System Module implements an independent watchdog timer (IWDG) to ensure system recovery in case of software failures:
-
-- **Timeout**: Configured for 10 seconds
-- **Refresh Strategy**: Refreshed only after successful completion of main loop
-- **Recovery**: Automatic system reset if watchdog times out
-
-## RTC Implementation
-
-The System Module uses the RTC for precise timing and wake-up events:
-
-- **Time Synchronization**: Synchronized with GPS time when available
-- **Wake-up Alarms**: Configured based on power state and required activities
-- **Timestamp Generation**: Provides accurate timestamps for telemetry data
-
-## Configuration Management
-
-The System Module manages system-wide configuration parameters:
-
-- **Storage**: Parameters stored in dedicated flash sector
-- **Default Values**: Fallback to default values if configuration is invalid
-- **Runtime Updates**: Support for updating configuration during operation
-
-## Error Recovery Strategies
-
-| Error Type | Recovery Strategy |
-|------------|-------------------|
-| Hardware Failure | Attempt reset of affected peripheral, disable if persistent |
-| Communication Error | Retry with backoff, switch to alternative interface if available |
-| Sensor Error | Use last valid reading, mark data as potentially invalid |
-| Flash Error | Enter limp mode, prioritize transmission of current data |
-| Critical Error | Perform system reset via watchdog |
-
-## Implementation Notes
-
-- Uses STM32 HAL for hardware abstraction
-- Implements independent watchdog for system recovery
-- Manages RTC for precise timing and wake-up events
-- Coordinates power states with Power Management module
-- Implements graceful degradation for component failures
-- Prioritizes mission-critical functions during resource constraints
+- `docs/ARCHITECTURE-OVERVIEW.md` — the system-level narrative
+- `docs/SYSTEM-INVARIANTS.md` — the contract this orchestration serves
+- DDR-0002 (lifecycle), DDR-0010 (persistence), DDR-0020 (supervision)
