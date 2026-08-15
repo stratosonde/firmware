@@ -44,6 +44,41 @@ static uint8_t CfgFrameCounterSaveInterval(void)
     return c ? c->frame_counter_save_interval : FRAME_COUNTER_SAVE_INTERVAL;
 }
 
+/* F-R3 (#73): per-region identity + radio defaults as ONE table — replaces
+ * the two copy-pasted DevEUI switches (JoinRegion and
+ * InitializeRegionFromNetworkServer). H-07 (#274): hoisted above the
+ * capture path, which now uses it too - the local switch there omitted
+ * RU864, and two lists can never drift again. */
+typedef struct {
+    LoRaMacRegion_t region;
+    uint8_t dev_eui[8];
+    uint8_t datarate;
+    uint32_t rx2_frequency;
+    uint8_t rx2_datarate;
+} RegionIdentity_t;
+
+static const RegionIdentity_t kRegionIdentities[] = {
+    { LORAMAC_REGION_US915, {LORAWAN_DEVICE_EUI_US915}, DR_2, 923300000, DR_8 },
+    { LORAMAC_REGION_EU868, {LORAWAN_DEVICE_EUI_EU868}, DR_0, 869525000, DR_0 },
+    { LORAMAC_REGION_AS923, {LORAWAN_DEVICE_EUI_AS923}, DR_2, 923200000, DR_2 },
+    { LORAMAC_REGION_AU915, {LORAWAN_DEVICE_EUI_AU915}, DR_2, 923300000, DR_8 },
+    { LORAMAC_REGION_IN865, {LORAWAN_DEVICE_EUI_IN865}, DR_0, 866550000, DR_2 },
+    { LORAMAC_REGION_KR920, {LORAWAN_DEVICE_EUI_KR920}, DR_0, 921900000, DR_0 },
+    /* SP-05 (#246): RU864 in-band (864-868 MHz). EU433/CN470 stay unmapped -
+     * outside the radio's 850-950 MHz band (lorawan_conf.h keeps them out). */
+    { LORAMAC_REGION_RU864, {LORAWAN_DEVICE_EUI_RU864}, DR_0, 869100000, DR_0 },
+};
+
+static const RegionIdentity_t *FindRegionIdentity(LoRaMacRegion_t region)
+{
+    for (uint32_t i = 0; i < (sizeof(kRegionIdentities) / sizeof(kRegionIdentities[0])); i++) {
+        if (kRegionIdentities[i].region == region) {
+            return &kRegionIdentities[i];
+        }
+    }
+    return NULL;
+}
+
 /* Private defines -----------------------------------------------------------*/
 /* Two-tier session storage (FW-1 / DDR-0018).
  * Flash map (2KB pages; reserved region is now pages 120-127 = 16KB):
@@ -385,37 +420,17 @@ bool MultiRegion_ForceSaveCurrentContext(void)
         SONDE_LOG("  Set ctx->dev_addr = 0x%08lX\r\n", ctx->dev_addr);
         
         // Set DevEUI based on region (safer than querying MAC during join)
-        const uint8_t deveui_us915[] = {LORAWAN_DEVICE_EUI_US915};
-        const uint8_t deveui_eu868[] = {LORAWAN_DEVICE_EUI_EU868};
-        const uint8_t deveui_as923[] = {LORAWAN_DEVICE_EUI_AS923};
-        const uint8_t deveui_au915[] = {LORAWAN_DEVICE_EUI_AU915};
-        const uint8_t deveui_in865[] = {LORAWAN_DEVICE_EUI_IN865};
-        const uint8_t deveui_kr920[] = {LORAWAN_DEVICE_EUI_KR920};
-        
-        switch (current_region) {
-            case LORAMAC_REGION_US915:
-                memcpy(ctx->dev_eui, deveui_us915, 8);
-                break;
-            case LORAMAC_REGION_EU868:
-                memcpy(ctx->dev_eui, deveui_eu868, 8);
-                break;
-            case LORAMAC_REGION_AS923:
-                memcpy(ctx->dev_eui, deveui_as923, 8);
-                break;
-            case LORAMAC_REGION_AU915:
-                memcpy(ctx->dev_eui, deveui_au915, 8);
-                break;
-            case LORAMAC_REGION_IN865:
-                memcpy(ctx->dev_eui, deveui_in865, 8);
-                break;
-            case LORAMAC_REGION_KR920:
-                memcpy(ctx->dev_eui, deveui_kr920, 8);
-                break;
-            default:
-                SONDE_LOG_STR("  ERROR: Unknown region for DevEUI\r\n");
-                return false;
+        /* H-07 (#274): from the identity table - the local switch omitted
+         * RU864 (#246), so a session captured on RU864 returned false and
+         * that bank could never become usable. */
+        const RegionIdentity_t *ident = FindRegionIdentity(current_region);
+        if (!ident) {
+            SONDE_LOG("  ERROR: region %s has no identity row - cannot capture\r\n",
+                      RegionToString(current_region));
+            return false;
         }
-        SONDE_LOG_STR("  Set ctx->dev_eui from region constant\r\n");
+        memcpy(ctx->dev_eui, ident->dev_eui, 8);
+        SONDE_LOG_STR("  Set ctx->dev_eui from region identity table\r\n");
         
         // CRITICAL FIX: Get session keys from ACTIVE crypto context using LmHandler API
         // After OTAA join, keys exist in active session but may not be in NVM yet
@@ -560,38 +575,9 @@ static void ApplyRegionChannelMask(LoRaMacRegion_t region)
         return;
     }
 }
-/* F-R3 (#73): per-region identity + radio defaults as ONE table — replaces
- * the two copy-pasted DevEUI switches (JoinRegion and
- * InitializeRegionFromNetworkServer). */
-typedef struct {
-    LoRaMacRegion_t region;
-    uint8_t dev_eui[8];
-    uint8_t datarate;
-    uint32_t rx2_frequency;
-    uint8_t rx2_datarate;
-} RegionIdentity_t;
-
-static const RegionIdentity_t kRegionIdentities[] = {
-    { LORAMAC_REGION_US915, {LORAWAN_DEVICE_EUI_US915}, DR_2, 923300000, DR_8 },
-    { LORAMAC_REGION_EU868, {LORAWAN_DEVICE_EUI_EU868}, DR_0, 869525000, DR_0 },
-    { LORAMAC_REGION_AS923, {LORAWAN_DEVICE_EUI_AS923}, DR_2, 923200000, DR_2 },
-    { LORAMAC_REGION_AU915, {LORAWAN_DEVICE_EUI_AU915}, DR_2, 923300000, DR_8 },
-    { LORAMAC_REGION_IN865, {LORAWAN_DEVICE_EUI_IN865}, DR_0, 866550000, DR_2 },
-    { LORAMAC_REGION_KR920, {LORAWAN_DEVICE_EUI_KR920}, DR_0, 921900000, DR_0 },
-    /* SP-05 (#246): RU864 in-band (864-868 MHz). EU433/CN470 stay unmapped -
-     * outside the radio's 850-950 MHz band (lorawan_conf.h keeps them out). */
-    { LORAMAC_REGION_RU864, {LORAWAN_DEVICE_EUI_RU864}, DR_0, 869100000, DR_0 },
-};
-
-static const RegionIdentity_t *FindRegionIdentity(LoRaMacRegion_t region)
-{
-    for (uint32_t i = 0; i < (sizeof(kRegionIdentities) / sizeof(kRegionIdentities[0])); i++) {
-        if (kRegionIdentities[i].region == region) {
-            return &kRegionIdentities[i];
-        }
-    }
-    return NULL;
-}
+/* F-R3 (#73) / H-07 (#274): the identity table + lookup live at the top of
+ * the file, shared by JoinRegion, InitializeRegionFromNetworkServer AND the
+ * capture path. */
 
 /**
  * @brief F-R2 (#75): restore a banked session context into the MAC — the

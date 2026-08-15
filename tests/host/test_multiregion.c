@@ -590,6 +590,47 @@ static void test_lt02_failed_switch_rolls_back(void)
 }
 
 /* ========================================================================== */
+/* H-07 (P1) — OTAA capture on RU864 must succeed (identity table lookup)      */
+/* ========================================================================== */
+/* The capture path's hand-written DevEUI switch covered six regions; RU864
+ * (enabled in #246) fell into the default error, so its session could never
+ * be captured into a bank. Red-first: the capture returns false pre-fix. */
+static void test_h07_ru864_capture(void)
+{
+    printf("-- H-07 (P1): OTAA-capture must work on RU864\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED\n"); exit(2); }
+
+    /* Fresh OTAA session live on RU864 (same shape as the F-008 guard). */
+    g_mac.activation = ACTIVATION_TYPE_OTAA;
+    g_mac.dev_addr = 0x26017777;
+    LmHandlerParams.ActiveRegion = LORAMAC_REGION_RU864;
+    memset(g_mac.keys[APP_S_KEY], 0x42, 16);
+    memset(g_mac.keys[NWK_S_KEY], 0x43, 16);
+
+    bool ok = MultiRegion_ForceSaveCurrentContext();
+    printf("   capture on RU864: %s\n", ok ? "ok" : "FAILED");
+    CHECK_REGRESSION(ok, "H-07-ru864-capture");
+    CHECK_REGRESSION(MultiRegion_IsRegionJoined(LORAMAC_REGION_RU864), "H-07-ru864-joined");
+
+    /* The banked DevEUI must come from the identity table row. */
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_RU864) { slot = (int8_t)i; break; }
+    }
+    CHECK_REGRESSION(slot >= 0, "H-07-ru864-slot");
+    if (slot >= 0) {
+        const uint8_t expected[] = {LORAWAN_DEVICE_EUI_RU864};
+        CHECK_REGRESSION(memcmp(g_storage.contexts[slot].dev_eui, expected, 8) == 0,
+                         "H-07-ru864-deveui");
+    }
+}
+
+/* ========================================================================== */
 /* SP-05 (#246) — all seven compiled regions are bankable and enterable        */
 /* ========================================================================== */
 /* IN865/KR920 had identity rows but sat under never-compiled REGION_* macros;
@@ -1023,6 +1064,8 @@ test_r1_restore_fail_closed();
 test_f01_restore_steps123_fail_closed();
     printf("\n");
     test_lt02_failed_switch_rolls_back();
+    printf("\n");
+    test_h07_ru864_capture();
     printf("\n");
 test_sp05_all_seven_regions_supported();
     printf("\n");
