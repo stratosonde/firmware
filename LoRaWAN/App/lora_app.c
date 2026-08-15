@@ -1465,6 +1465,18 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
        * snap region on stale data. */
       if (EnvSensors_GnssIsStale()) {
         SONDE_LOG_STR("MultiRegion: position STALE - auto-switch inhibited (never switch on stale)\r\n");
+      } else if (detected_region != MultiRegion_GetActiveRegion() &&
+                 !MultiRegion_IsRegionJoined(detected_region)) {
+        /* FR-03 (#290): FAIL CLOSED. AutoSwitchToRegion reports SUCCESS for
+         * "target not joined - staying" (SP-16), so a boundary crossing into
+         * a region with no banked session used to fall through to the TX
+         * state machine on the PREVIOUS region's plan - wrong channels/DR
+         * for where the sonde actually is. Same DDR-0018 semantics as the
+         * no-session veto in SendTxData: archive locally, radio dark; the
+         * next fix re-evaluates. */
+        SONDE_LOG("MultiRegion: detected %s has no session - RF silence, archiving locally\r\n",
+                  RegionToString(detected_region));
+        Silence(plan, rf_silence, VETO_RF_SILENCE);
       } else {
       /* Production: Auto-switch region based on H3lite lookup.
        * SP-16 (#254): SUCCESS covers switched / same-region / not-joined-stay
@@ -2880,7 +2892,14 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   /* USER CODE BEGIN OnRestoreContextRequest_1 */
 
   /* USER CODE END OnRestoreContextRequest_1 */
-  /* Newest valid slot wins; validate magic + length + payload CRC */
+  /* FR-02 (#282): validate the WHOLE slot (header + payload CRC) before it
+   * can win the generation race. Previously selection looked at the header
+   * only; the winner's payload was then read straight into the caller's nvm
+   * and CRC'd there - a torn newest slot left torn bytes in the live MAC NVM
+   * and the older fully valid slot was never tried, which is exactly the
+   * torn-write case this function exists to recover from. Stage every
+   * candidate in scratch, CRC it there, copy out only after selection. */
+  static uint8_t scratch[FLASH_PAGE_SIZE];  /* boot-path only; never reentrant */
   const uint32_t slots[2] = { (uint32_t)NVM_SLOT_A_ADDR, (uint32_t)NVM_SLOT_B_ADDR };
   int best = -1;
   NvmSlotHeader_t best_hdr = {0};
@@ -2890,6 +2909,8 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
     if (hdr.magic != NVM_SLOT_MAGIC) continue;
     if (hdr.length != nvm_size) continue;
     if (hdr.length + sizeof(hdr) > FLASH_PAGE_SIZE) continue;
+    if (FLASH_IF_Read(scratch, (void *)(slots[i] + sizeof(NvmSlotHeader_t)), hdr.length) != FLASH_IF_OK) continue;
+    if (FlashLog_CRC32(scratch, hdr.length) != hdr.crc32) continue;  /* torn slot: try the other */
     if (best >= 0 && (int32_t)(hdr.generation - best_hdr.generation) <= 0) continue;
     best = i;
     best_hdr = hdr;
@@ -2898,14 +2919,14 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
     SONDE_LOG_STR("NVM restore: no valid slot (fresh start)\r\n");
     return;  /* leave nvm untouched — MAC treats as no context */
   }
-  if (FLASH_IF_Read(nvm, (void *)(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK) {
-    SONDE_LOG_STR("NVM restore: payload read FAILED\r\n");
+  /* Re-stage the winner (scratch may hold the losing slot's bytes) and
+   * re-validate before touching the caller's buffer. */
+  if (FLASH_IF_Read(scratch, (void *)(slots[best] + sizeof(NvmSlotHeader_t)), nvm_size) != FLASH_IF_OK ||
+      FlashLog_CRC32(scratch, nvm_size) != best_hdr.crc32) {
+    SONDE_LOG_STR("NVM restore: winning slot re-read FAILED\r\n");
     return;
   }
-  if (FlashLog_CRC32((const uint8_t *)nvm, nvm_size) != best_hdr.crc32) {
-    SONDE_LOG_STR("NVM restore: payload CRC FAILED\r\n");
-    return;
-  }
+  memcpy(nvm, scratch, nvm_size);
   g_nvm_generation = best_hdr.generation;
   /* USER CODE BEGIN OnRestoreContextRequest_Last */
 

@@ -374,6 +374,10 @@ LmHandlerErrorStatus_t LmHandlerDeInit( void )
         LmHandlerCallbacks = NULL;
         memset1( ( uint8_t * )&LoRaMacPrimitives, 0, sizeof( LoRaMacPrimitives_t ) );
         memset1( ( uint8_t * )&LoRaMacCallbacks, 0, sizeof( LoRaMacCallback_t ) );
+        /* FR-16 (#283): the file-scope restore-done flag survived DeInit, so
+         * every re-init (stack reset, region switch) ran with a stale
+         * CtxRestoreDone. Clear it with the rest of the handler state. */
+        CtxRestoreDone = false;
         return LORAMAC_HANDLER_SUCCESS;
     }
     else

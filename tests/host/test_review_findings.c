@@ -706,6 +706,131 @@ static void test_f13_f14_w25q_hardening(void)
     free(src);
 }
 
+/* ========================================================================== */
+/* FR-19 (#296) - failed ADC calibration must return 0, not convert live     */
+/* ========================================================================== */
+/* adc_if.c ADC_ReadBattery: a failed HAL_ADCEx_Calibration_Start calls the
+ * nonfatal Error_Handler and FALLS THROUGH to ConfigChannel/Start/PollFor-
+ * Conversion, returning a live conversion from an uncalibrated ADC - an
+ * out-of-envelope battery voltage that drives the power-mode state machine.
+ * The R10 (#195) pattern already returns 0 for ConfigChannel/Start failures;
+ * calibration must fail the same way. */
+static void test_fr19_adc_calibration_failure_returns_zero(void)
+{
+    printf("-- FR-19 (#296): failed ADC calibration returns 0 before ConfigChannel\n");
+
+    char *src = slurp("../../Core/Src/adc_if.c");
+    const char *cal = strstr(src, "HAL_ADCEx_Calibration_Start");
+    CHECK(cal != NULL);   /* anchor: calibration call still present */
+    if (cal) {
+        const char *cfg = strstr(cal, "HAL_ADC_ConfigChannel");
+        CHECK(cfg != NULL);
+        const char *ret = strstr(cal, "return 0");
+        CHECK_REGRESSION(ret != NULL && cfg != NULL && ret < cfg, "FR-19");
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* FR-16 (#283) - LmHandlerDeInit must clear CtxRestoreDone                  */
+/* ========================================================================== */
+/* CtxRestoreDone is a file-scope flag set at :417/:436 once a context
+ * restore has run, but LmHandlerDeInit() never clears it. Every re-init
+ * (stack reset, region switch) then runs with a stale restore-done flag.
+ * LT_C01 closeout (2026-08-14) explicitly deferred this to the next pass. */
+static void test_fr16_deinit_clears_ctx_restore_done(void)
+{
+    printf("-- FR-16 (#283): LmHandlerDeInit clears CtxRestoreDone\n");
+
+    char *src = slurp("../../Middlewares/Third_Party/LoRaWAN/LmHandler/LmHandler.c");
+    const char *deinit = strstr(src, "LmHandlerErrorStatus_t LmHandlerDeInit");
+    CHECK(deinit != NULL);   /* anchor */
+    if (deinit) {
+        const char *end = strstr(deinit, "return LORAMAC_HANDLER_SUCCESS");
+        CHECK(end != NULL);
+        const char *clr = strstr(deinit, "CtxRestoreDone = false");
+        CHECK_REGRESSION(clr != NULL && end != NULL && clr < end, "FR-16");
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* FR-02 (#282) - NVM restore must select the newest FULLY VALID slot        */
+/* ========================================================================== */
+/* OnRestoreContextRequest selects the slot by GENERATION ONLY, then reads
+ * the payload straight into the caller's nvm and CRCs it there: a torn
+ * newest slot both rejects (leaving torn bytes in the live NVM) and never
+ * tries the older fully valid slot. Fix contract: read each candidate into
+ * a scratch buffer, CRC it there, pick the newest fully valid generation,
+ * and copy into the caller's nvm only after selection. */
+static void test_fr02_restore_selects_newest_fully_valid_slot(void)
+{
+    printf("-- FR-02 (#282): restore CRCs each slot in scratch, copies after select\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    const char *proto = strstr(src, "static void OnRestoreContextRequest");
+    CHECK(proto != NULL);   /* anchor: prototype */
+    const char *fn = proto ? strstr(proto + 1, "static void OnRestoreContextRequest") : NULL;
+    CHECK(fn != NULL);   /* anchor: definition (prototype-vs-definition trap) */
+    if (fn) {
+        const char *end = strstr(fn, "LoRaApp_EraseNvmSlots");
+        CHECK(end != NULL && end > fn);   /* function body bound */
+        const char *scratch = strstr(fn, "uint8_t scratch[");
+        const char *copy = strstr(fn, "memcpy(nvm,");
+        CHECK_REGRESSION(scratch != NULL && end != NULL && scratch < end, "FR-02-scratch");
+        CHECK_REGRESSION(copy != NULL && end != NULL && copy < end, "FR-02-copy-after-select");
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* FR-03 (#290) - detected-but-unjoined region must silence, not transmit    */
+/* ========================================================================== */
+/* SelectRegionAndSession: when the H3-detected region differs from the
+ * active one, MultiRegion_AutoSwitchToRegion returns SUCCESS for a region
+ * that has no banked session ("no join needed"), and the gate transmits on
+ * the PREVIOUS region's plan. Fail closed instead: detected != active and
+ * the detected region is not joined -> VETO_RF_SILENCE (no new wire value). */
+static void test_fr03_unjoined_detected_region_silences(void)
+{
+    printf("-- FR-03 (#290): detected region without a session -> VETO_RF_SILENCE\n");
+
+    char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    const char *fn = strstr(src, "SelectRegionAndSession");
+    CHECK(fn != NULL);   /* anchor */
+    if (fn) {
+        /* The fail-closed check must appear inside the function body. */
+        const char *chk = strstr(fn, "MultiRegion_IsRegionJoined(detected_region)");
+        CHECK_REGRESSION(chk != NULL, "FR-03");
+    }
+    free(src);
+}
+
+/* ========================================================================== */
+/* FR-18 (#295) - commissioning switch-back result must be checked           */
+/* ========================================================================== */
+/* MultiRegion_PreJoinAllRegions switches back to US915 after the join loop
+ * but ignores the result: a failed switch-back still sets the PROVISIONED
+ * latch while the MAC sits on the wrong session. The result must feed
+ * all_success. (The full ceremony is not host-harness-runnable - the fake
+ * LmHandlerJoin never completes a join; strengthening that mock is #262.) */
+static void test_fr18_switch_back_result_checked(void)
+{
+    printf("-- FR-18 (#295): commissioning switch-back failure blocks the latch\n");
+
+    char *src = slurp("../../Core/Src/multiregion_context.c");
+    const char *fn = strstr(src, "bool MultiRegion_PreJoinAllRegions(void)");
+    CHECK(fn != NULL);   /* anchor: definition (a comment mention precedes it) */
+    if (fn) {
+        const char *end = strstr(fn, "VerifyAndSetProvisioningLatch");
+        CHECK(end != NULL && end > fn);   /* the switch-back precedes the latch */
+        const char *chk = strstr(fn,
+            "if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS)");
+        CHECK_REGRESSION(chk != NULL && end != NULL && chk < end, "FR-18");
+    }
+    free(src);
+}
+
 int main(void)
 {
     printf("=== 2026-08-10/11 review findings — source-scan regressions ===\n\n");
@@ -738,6 +863,12 @@ int main(void)
     test_vcom_resume_gated();
     test_nvm_store_task_is_set();
     test_battery_reading_is_gated();
+
+    test_fr19_adc_calibration_failure_returns_zero();
+    test_fr16_deinit_clears_ctx_restore_done();
+    test_fr02_restore_selects_newest_fully_valid_slot();
+    test_fr03_unjoined_detected_region_silences();
+    test_fr18_switch_back_result_checked();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

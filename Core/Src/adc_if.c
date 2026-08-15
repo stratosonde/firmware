@@ -338,6 +338,13 @@ static uint32_t ADC_ReadChannels(uint32_t channel)
       /* #136: do NOT mark the ADC ready after a failed calibration — the old
        * code set s_adc_ready anyway and used an uncalibrated ADC silently for
        * the rest of the wake cycle. Retry init+calibrate on the next read. */
+      /* FR-19 (#296): and do NOT convert with it either - Error_Handler is
+       * nonfatal (R10), so without this return the read falls through to
+       * ConfigChannel/Start and reports a LIVE conversion from an
+       * uncalibrated ADC: an out-of-envelope battery voltage driving the
+       * power-mode state machine. Fail like the R10 ConfigChannel/Start
+       * paths below. */
+      return 0;
     }
     else
     {
