@@ -121,8 +121,9 @@ requested-record lookup is not yet implemented, see the conformance worklist).
 `FlashLog_DeferHeaderSync()` / `FlashLog_FlushHeaderSync()` batch the watermark
 persist across a bulk burst (Finding #8): `MarkRecoverySent` skips the sector
 erase per packet and the caller flushes once at burst end. The
-`pending_tx_committed` gate (C-01/#270) keeps a post-send reset from
-double-committing the watermark ahead of the ACK.
+`pending_tx_committed` gate (C-01/#270) keeps a reset between send and
+watermark persist from double-committing — the reset-edge duplicate lands on
+the backend, which dedups (SI-018).
 
 ## API (actual — `flash_log.h`)
 

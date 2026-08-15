@@ -26,19 +26,17 @@ It records both the existing production formats and the proposed Qwiic extension
 
 Port meaning must not be changed in place. Incompatible changes require a payload version or a new port.
 
-## 3. Canonical encoding warning
+## 3. Canonical encoding warning — RESOLVED (D9, 2026-08)
 
-The current firmware sends packed C structures by casting them directly to byte buffers. On STM32WL this produces little-endian multibyte fields.
+~~The existing `PayloadFormats.md` decoder examples describe many fields as big-endian.~~
+**Little-endian is wire truth** for all current production formats (D9):
+heartbeat v2 is documented LE, the v6 archive record is explicitly
+LE-serialized (no struct casting), and checked-in golden vectors (§13) are
+regenerated from the real encoder by the host suite on every run — firmware,
+this document, `PayloadFormats.md`, and the vectors agree.
 
-The existing `PayloadFormats.md` decoder examples describe many fields as big-endian. That is a compatibility discrepancy that must be resolved before declaring a stable wire protocol.
-
-Required release gate:
-
-1. Generate one golden packet from actual firmware.
-2. Capture the exact transmitted FRMPayload.
-3. Decode it independently.
-4. Make firmware, this document, `PayloadFormats.md`, and backend tests agree.
-5. Replace native-structure transmission with explicit serialization in the next incompatible payload version.
+Standing policy for any future incompatible version: explicit serialization
+from the start, golden vectors before deployment.
 
 For proposed FPorts 12 and 13, all multibyte values are explicitly little-endian.
 
@@ -48,10 +46,17 @@ LoRaWAN does not provide exactly-once delivery.
 
 Stratosonde uses:
 
-- **At-least-once** delivery for first-class archive data.
+- **Confirmed, ACK-gated** delivery for the opportunity-probe heartbeat
+  (SI-016): no ACK, no archive opportunity this wake.
+- **Unconfirmed one-pass** delivery for first-class archive data
+  (R3-04/#218, DDR-0005 BR-TX-009..012): no per-record ACK is awaited, a lost
+  frame is never retried autonomously, and the delivery watermark advances
+  **at send time**, newest-first. The backend owns gap repair (BR-TX-012;
+  the explicit-request path is deferred, #125).
 - **Best-effort** delivery for application objects.
-- Stable packet, record, producer, and object identifiers for backend deduplication.
-- No irreversible archive acknowledgement based only on `LmHandlerSend()` success or radio TX completion.
+- Stable packet, record, producer, and object identifiers for backend
+  deduplication — a reset between send and watermark persist produces a
+  duplicate the backend must dedup (never a fabricated gap or record).
 
 A confirmed uplink acknowledgement consumes no FRMPayload byte. A `LinkCheckReq` is a MAC command carried in FOpts and does consume part of the LoRaWAN frame budget, even though it is not part of application FRMPayload.
 
@@ -69,10 +74,11 @@ A confirmed uplink acknowledgement consumes no FRMPayload byte. A `LinkCheckReq`
 After a confirmed long-range heartbeat is acknowledged:
 
 1. Switch to the region-correct high-throughput data rate, initially SF7.
-2. Select the oldest eligible first-class archive data.
-3. Send one confirmed archive packet.
+2. Select the **newest** eligible first-class archive data (the one-pass
+   walker serves newest-to-oldest, SI-017).
+3. Send one archive packet (**unconfirmed**, R3-04/#218).
 4. Attach `LinkCheckReq` to that packet.
-5. Keep all included archive records pending.
+5. Commit the watermark for the included records at send time.
 
 The network response may contain both:
 
@@ -91,9 +97,11 @@ Continue the burst only if:
 
 During the burst:
 
-- First-class packets are confirmed unless a later ADR explicitly changes delivery evidence.
+- Archive packets are **unconfirmed** (R3-04/#218): no per-record ACK, no
+  autonomous retry — the backend owns gap repair.
 - Core and extension science are scheduled before best-effort data.
-- A periodic heartbeat deadline may preempt the burst.
+- A periodic heartbeat deadline may preempt the burst; the burst itself runs
+  under a hard deadline with no timer re-arm (LT-07/#277).
 - Link check may be repeated periodically, not necessarily on every packet.
 - Thresholds and maximum burst length are configurable.
 
@@ -113,15 +121,18 @@ Return to LONG_RANGE_HEARTBEAT for the next opportunity.
 
 ### 5.5 Delivery commit
 
-A first-class packet remains pending until the required network evidence is received.
+The confirmed **probe** is the only ACK-gated element: no probe ACK, no
+archive opportunity.
 
-If an acknowledgement is lost but the backend received the packet:
+Archive records commit **at send time** (BR-TX-009/010): the watermark
+advances per packed record, newest-first. Consequences:
 
-- Stratosonde retransmits it later.
-- The backend deduplicates it.
-- Data is duplicated, not lost.
-
-This is intentional.
+- A lost archive frame is a **gap** — never autonomously retried. The backend
+  repairs gaps (BR-TX-012; explicit requests deferred, #125).
+- A reset between send and watermark persist produces a **duplicate** on the
+  next walk — the backend deduplicates on (DevEUI, sequence).
+- Data may be duplicated or gapped, never lost silently or fabricated
+  (SI-018). This is intentional.
 
 ## 6. FPort 10 — mission heartbeat v2
 
@@ -190,7 +201,7 @@ stale), offset 31 = `veto_reason` (TransmitVeto_t at write time, 0 = none),
 CRC16/MODBUS at offset 32 over bytes 0-31. In v6 the flags byte's power-mode
 field (b5-b7) is the HISTORICAL mode from the flash record (STAB-05/#152).
 
-The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many oldest complete records as fit. Records cut by the budget remain pending with stable identity (§4, §7.3).
+The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many complete records as fit, walking newest-to-oldest. Records cut by the budget remain pending with stable identity (§4, §7.3).
 
 ### 7.1a Archive v4/v5 (SUPERSEDED — never deployed)
 
@@ -243,7 +254,7 @@ Legacy packet type `0x01` used 222 bytes and is retained only for backend compat
 
 ### 7.3 Core archive identity requirement
 
-**Realized (2026-08-06, #34; current form FR-07/#87 + STAB-04/#151):** every archive record carries its own flash sequence explicitly (v6, §7.1) — identity holds for ANY subset of the archive. The backend deduplicates on (DevEUI, sequence). The firmware commits the delivery watermark only on confirmed-uplink ACK (§4), so a lost ACK produces a duplicate retransmission that the backend must dedup — never a gap.
+**Realized (2026-08-06, #34; current form R3-04/#218 + FR-07/#87 + STAB-04/#151):** every archive record carries its own flash sequence explicitly (v6, §7.1) — identity holds for ANY subset of the archive. The backend deduplicates on (DevEUI, sequence). The firmware advances the delivery watermark **at send time** (BR-TX-009/010), so a reset-edge re-walk produces a duplicate the backend must dedup, and a lost frame is a gap the backend repairs (BR-TX-012) — never silent loss, never fabrication (SI-018).
 
 ## 8. FPort 12 — proposed extension science archive v1
 
@@ -407,8 +418,8 @@ The desired strategy differs from the current implementation in several importan
 
 - ~~Current code requests `LinkCheckReq` on the SF10 heartbeat itself~~ — LinkCheck now rides the first archive packet (#34).
 - ~~Current heartbeat send is unconfirmed~~ — the opportunity-probe heartbeat is confirmed (#34).
-- ~~Current bulk packets are unconfirmed~~ — archive packets are confirmed (#34).
-- ~~Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement~~ — commit requires `McpsConfirm.AckReceived` (#34).
+- ~~Current bulk packets are unconfirmed~~ — archive packets were confirmed under #34; **re-superseded by R3-04/#218**: archive recovery is deliberately *unconfirmed* one-pass (BR-TX-011), watermark at send time.
+- ~~Current flash delivery marking occurs after successful radio TX callback, not confirmed network acknowledgement~~ — #34 required `McpsConfirm.AckReceived`; **R3-04/#218** replaced ACK-commit with send-time watermark advance (BR-TX-009/010).
 - ~~Current queue handling and count-based record marking require transactional repair~~ — archive records carry explicit per-record sequence identity (v5 FR-07/#87, now v6 STAB-04/#151); count commit maps to contiguous monotonic sequences (#34).
 
 Resolved by the heartbeat v2 / archive v3 rework (#33):
@@ -422,10 +433,11 @@ These are implementation tasks, not merely documentation changes.
 
 - Confirmed heartbeat ACK opens exactly one archive probe.
 - No ACK leaves the data rate in long-range mode.
-- First SF7 packet includes LinkCheckReq and remains pending without response.
+- First SF7 packet includes LinkCheckReq (burst link gate: margin/gateway thresholds, else heartbeat-only fallback — `test_burst_fsm.c` T-B4b).
 - Good ACK plus LinkCheckAns enters burst.
 - Poor margin or gateway count returns immediately to heartbeat.
-- Lost ACK causes duplicate retransmission and backend deduplication.
+- Reset between send and watermark persist causes a duplicate retransmission; backend deduplication absorbs it.
+- Lost archive frames surface as gaps, never autonomous retries (R3-04/#218).
 - Region change aborts burst.
 - FOpts reduces payload packing correctly.
 - Port 12 never splits a first-class record.
