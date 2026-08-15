@@ -396,6 +396,18 @@ static PacketQueue_t g_packet_queue = {0};
 /* Adaptive transmission strategy state */
 static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
 static uint8_t g_bulk_packets_sent = 0;
+/* LT-07 (#277): burst-scoped deadline state (HAL_GetTick ms, the same time
+ * base UTIL_TIMER uses; 0 = not open). BURST_MAX_OPEN_MS bounds how long the
+ * FSM may sit in a network-wait state (probe ACK or burst train) without
+ * progress. It is a BOUND, not a measurement: a confirmed probe is answered
+ * inside RX1/RX2 (~1-2 s) and a full packet train (<= CfgMaxBulkPkts()
+ * packets incl. RX windows) completes in tens of seconds; 60 s never
+ * exceeds the science interval of any mode in which a burst can open
+ * (bursts are ASCENT-inhibited, R3-03; the shortest burst-eligible interval
+ * is MODE_NORMAL's 300 s). */
+#define BURST_MAX_OPEN_MS  60000U
+static uint32_t g_burst_opened_ms = 0;
+static uint32_t g_probe_sent_ms = 0;
 /* R3-04 (#218): g_bulk_commit_through DELETED - DDR-0005 one-pass recovery
  * advances the watermark AT SEND TIME (FlashLog_MarkRecoverySent); there is
  * no commit-on-ACK and no autonomous retry (BR-TX-009/010/011). */
@@ -1632,6 +1644,30 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
   
+  /* LT-07 (#277): burst-scoped deadline. The FSM used to lean on the science
+   * deadline (SendTxData's entry ScienceIsDue yield) to unstick - a missing
+   * LinkCheckAns parked it in BULK_TRANSFER with nothing scheduled, and an
+   * early TxTimer fire (OnTxTimerEvent's redundant re-arm on a stale
+   * ReloadValue - now removed) then skipped GPS + archive for the cycle,
+   * silently losing one science record. Force COMPLETE when a network-wait
+   * state outlives its bound, logging which one fired; the stale-state
+   * reset below then flushes the deferred header sync like any completed
+   * cycle. */
+  uint32_t now_ms = HAL_GetTick();
+  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && g_probe_sent_ms != 0 &&
+      (uint32_t)(now_ms - g_probe_sent_ms) > BURST_MAX_OPEN_MS) {
+    SONDE_LOG_STR("LT-07: probe-ACK wait exceeded BURST_MAX_OPEN_MS - forcing TX_STATE_COMPLETE\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
+    g_probe_sent_ms = 0;
+  }
+  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_burst_opened_ms != 0 &&
+      (uint32_t)(now_ms - g_burst_opened_ms) > BURST_MAX_OPEN_MS) {
+    SONDE_LOG_STR("LT-07: burst open longer than BURST_MAX_OPEN_MS - forcing TX_STATE_COMPLETE\r\n");
+    g_tx_state = TX_STATE_COMPLETE;
+    g_burst_opened_ms = 0;
+    g_bulk_packets_sent = 0;
+  }
+
   /* C2 FIX: Reset stale TX states so every timer cycle sends actual data.
    * If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
    * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
@@ -1714,6 +1750,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
+          g_probe_sent_ms = HAL_GetTick();  /* LT-07 (#277): bound the wait */
           g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /* Wait for the confirmed-uplink ACK (OnTxData) */
           SONDE_LOG_STR("Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
@@ -2407,10 +2444,12 @@ static void OnTxTimerEvent(void *context)
   /* USER CODE END OnTxTimerEvent_1 */
   UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
 
-  /*Wait for next tx slot*/
-  UTIL_TIMER_Start(&TxTimer);
+  /* LT-07 (#277): NO bare UTIL_TIMER_Start(&TxTimer) here - it was a second
+   * arming path next to RescheduleScienceTimer and fired on a stale partial
+   * ReloadValue; an early fire ran a cycle with neither GPS nor archive and
+   * silently cost a science record. The period is owned solely by
+   * RescheduleScienceTimer, computed from the science deadline. */
   /* USER CODE BEGIN OnTxTimerEvent_2 */
-  SONDE_LOG_STR("Timer restarted for next cycle\r\n");
   /* USER CODE END OnTxTimerEvent_2 */
 }
 
@@ -2469,6 +2508,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
   /* DDR-0005 (#34): the confirmed probe heartbeat opens the archive opportunity.
    * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
+    g_probe_sent_ms = 0;  /* LT-07 (#277): the wait is resolved one way or the other */
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       /* F-8 (#183): the cycle's one conversion, not a fresh one mid-burst. */
       uint16_t battery_mv = s_cycle_batt_mv;
@@ -2488,6 +2528,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
         /* Finding #8: defer header persistence for the whole burst — one
          * sector erase at flush instead of one per ACKed packet. */
         FlashLog_DeferHeaderSync(&hflashlog);
+        g_burst_opened_ms = HAL_GetTick();  /* LT-07 (#277): bound the burst */
         g_tx_state = TX_STATE_BULK_TRANSFER;
         g_bulk_packets_sent = 0;
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
