@@ -62,8 +62,10 @@ a reset may create a gap, never a fake completed observation.
 
 Recovery is **aggressive, bounded, and forgetful**: attempt normal operation,
 exercise deterministic recovery actions, bound them by the wake budget,
-degrade only dependent capability, sleep normally, retry next wake. No
-stateful escalation machinery is added merely because it is possible —
+degrade only dependent capability, sleep normally, retry next wake. Fatal
+faults always breadcrumb and reset; the boot-attempt counter is diagnostic and
+never creates a fifth-boot escape. No stateful escalation machinery is added
+merely because it is possible —
 complexity must protect an explicit invariant or a measured failure mode.
 
 ## Cross-References

@@ -55,9 +55,8 @@ uint8_t ResetCause_Get(void);
  *        Incremented in ResetCause_CaptureBoot; cleared at successful cycle
  *        COMPLETION (end of SendTxData; F-6/#181 - clearing at cycle entry
  *        let an in-cycle fault erase its own evidence on every boot).
- *        Error_Handler_Fatal()
- *        uses it to break reset loops (FR-23/#104: boot-time fatals degrade
- *        instead of resetting past 5 consecutive unproductive boots).
+ *        Error_Handler_Fatal() records and resets independently of this
+ *        diagnostic counter; the counter never selects recovery behavior.
  */
 uint32_t ResetCause_GetBootAttempts(void);
 

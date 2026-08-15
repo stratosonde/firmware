@@ -984,17 +984,17 @@ static void test_s03_tier2_commit_back_bounded(void)
            (unsigned long)e0, (unsigned long)g_flash_erase_count);
     CHECK_REGRESSION(g_flash_erase_count > e0, "S-03-normal");
 
-    /* B. Sustained reset loop (boot attempts > 4): commit-back skipped -
-     *    the flash page must not be touched. */
+    /* B. Reset history is diagnostic only: commit-back still protects the
+     *    LoRaWAN counter reservation on every boot. */
     g_host_boot_attempts = 5;
     e0 = g_flash_erase_count;
     g_initialized = false;
     g_unsaved_tx_count = 0;
     memset(&g_storage, 0, sizeof(g_storage));
     MultiRegion_Init();
-    printf("   reset loop (attempts=5): erase count %lu -> %lu (want unchanged)\n",
+    printf("   reset loop (attempts=5): erase count %lu -> %lu (want advanced)\n",
            (unsigned long)e0, (unsigned long)g_flash_erase_count);
-    CHECK_REGRESSION(g_flash_erase_count == e0, "S-03-loop");
+    CHECK_REGRESSION(g_flash_erase_count > e0, "S-03-loop");
     g_host_boot_attempts = 1;
 }
 
@@ -1349,4 +1349,3 @@ static void test_r11_capture_restore_symmetry(void)
     CHECK_REGRESSION(after->rx2_datarate == DR_2, "R11-rx2dr");
     (void)before;
 }
-

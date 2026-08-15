@@ -369,40 +369,26 @@ static void test_no_uart_it_receive_on_gps_uart(void)
 }
 
 /* ========================================================================== */
-/* STAB-02 (#149) — fatal degrade escape scoped to degradable faults only      */
+/* First-flight policy: fatal reset behavior is unconditional                */
 /* ========================================================================== */
-/* Error_Handler_Fatal returns after 5 boot attempts for ANY code >= 16, but
- * the only real call sites (CLOCK_CONFIG x2, PAYLOAD_FORMAT) have NO designed
- * degraded continuation - execution falls into mission code with a broken
- * clock tree or an unvalidated wire format. The escape must be conditioned on
- * an explicit per-code degradable predicate. */
-static void test_fatal_escape_scoped(void)
+/* Reset history is diagnostic only. A fatal path must breadcrumb and keep
+ * requesting reset; it must never return into a partly initialized mission. */
+static void test_fatal_reset_unconditional(void)
 {
-    printf("-- STAB-02/#149: Error_Handler_Fatal degrade escape is per-code gated\n");
+    printf("-- first-flight fatal policy: Error_Handler_Fatal never returns\n");
 
     char *src = slurp("../../Core/Src/main.c");
     CHECK(strstr(src, "Error_Handler_Fatal") != NULL);          /* anchor */
-    CHECK_REGRESSION(strstr(src, "FatalIsDegradable") != NULL, "STAB-02");
-    /* the escape return must be conditioned on the predicate */
-    const char *esc = strstr(src, "ResetCause_GetBootAttempts() >= 5U");
-    CHECK_REGRESSION(esc != NULL, "STAB-02-esc");
-    if (esc) {
-        /* the predicate must appear within the escape condition (~200 chars) */
-        char window[240];
-        memset(window, 0, sizeof(window));
-        strncpy(window, esc, 200);
-        CHECK_REGRESSION(strstr(window, "FatalIsDegradable") != NULL, "STAB-02-gate");
-    }
-    /* the predicate body must NOT list the non-degradable codes */
-    const char *pred = strstr(src, "FatalIsDegradable(uint16_t code)");
-    CHECK_REGRESSION(pred != NULL, "STAB-02-pred");
-    if (pred) {
-        char body[400];
-        memset(body, 0, sizeof(body));
-        strncpy(body, pred, 360);
-        CHECK(strstr(body, "FAULT_CODE_FLASH_INIT") != NULL);       /* the designed case */
-        CHECK_REGRESSION(strstr(body, "FAULT_CODE_CLOCK_CONFIG") == NULL, "STAB-02-clock");
-        CHECK_REGRESSION(strstr(body, "FAULT_CODE_PAYLOAD_FORMAT") == NULL, "STAB-02-payload");
+    CHECK(strstr(src, "FatalIsDegradable") == NULL);
+    CHECK(strstr(src, "ResetCause_GetBootAttempts() >= 5U") == NULL);
+    const char *fatal = strstr(src, "void Error_Handler_Fatal(uint16_t code)");
+    CHECK(fatal != NULL);
+    if (fatal) {
+        CHECK(strstr(fatal, "HAL_RTCEx_BKUPWrite") != NULL);
+        const char *loop = strstr(fatal, "for (;;)");
+        CHECK(loop != NULL);
+        CHECK(loop != NULL && strstr(loop, "NVIC_SystemReset()") != NULL);
+        CHECK(strstr(fatal, "return;") == NULL);
     }
     free(src);
 }
@@ -848,7 +834,7 @@ int main(void)
     test_protocol_docs_match_code();
     test_ts_wrap_persistence_wiring();
     test_position_age_persistence_wiring();
-    test_fatal_escape_scoped();
+    test_fatal_reset_unconditional();
     test_silence_force_respects_floor();
     test_ci_runs_all_suites();
     test_no_uart_it_receive_on_gps_uart();

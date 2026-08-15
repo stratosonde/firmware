@@ -271,10 +271,8 @@ int main(void)
   }
   
   // Initialize external flash (W25Q16JV) for logging
-  /* F-03 (#65): retry then fly degraded. A cold-stuck flash chip must not
-   * reset-loop the sonde at altitude — a missing archive is recoverable,
-   * a dead radio is total mission loss. This REVERSES the R29 (#36) "never
-   * fly with a dead data store" policy by maintainer decision (see #65). */
+  /* First-flight policy: retry the device locally, then breadcrumb and reset.
+   * A science mission without durable records is not a valid degraded mode. */
   SONDE_LOG_STR("Initializing external flash (W25Q16JV)...\r\n");
   W25Q_StatusTypeDef w25q_status = W25Q_ERROR;
   for (int flash_attempt = 0; flash_attempt < 3; flash_attempt++) {
@@ -291,17 +289,10 @@ int main(void)
       SONDE_LOG_STR("W25Q16JV initialized but JEDEC ID read failed\r\n");
     }
   } else {
-    /* Degraded: no archive this flight, but the radio flies. Every FlashLog_*
-     * API guards !hlog->initialized, so downstream code is safe. */
+    /* Keep the capability failure visible in the final pre-reset diagnostics. */
     SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
-    SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — flying WITHOUT archive\r\n", w25q_status);
-    /* SP-07 (#247): route through the FR-23 (#104) fatal path. Attempts 1-4
-     * breadcrumb + reset - a transient dead flash (cold power ramp, contact
-     * glitch) gets retried; on the 5th consecutive failed boot the escape
-     * early-returns and we continue in the designed degraded mode above
-     * (capability already marked). This is the call FatalIsDegradable() was
-     * written for and, until now, never received. */
-    Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);  /* may return: degrade path */
+    SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — resetting to retry\r\n", w25q_status);
+    Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
   }
   
   // Initialize flash logging system
@@ -320,14 +311,10 @@ int main(void)
                         used_records, total_capacity, free_records);
     } else {
       SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
-      SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — flying WITHOUT archive\r\n", flashlog_status);
-      /* F-03 (#65): degrade, not reset. hflashlog.initialized stays false;
-       * all FlashLog_* APIs guard on it, so the TX path runs normally. */
-      /* SP-07 (#247): live W25Q + failed log init is likely systematic (header
-       * corruption). FR-23 (#104): breadcrumb + reset x4 lets FlashLog_Init's
-       * own reconstruction healing (R3-07 #221) try again across boots; on the
-       * 5th failure the escape returns and the degraded mode above continues. */
-      Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);  /* may return: degrade path */
+      SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — resetting to retry\r\n", flashlog_status);
+      /* Fatal path records the fault and resets; a later boot retries normal
+       * initialization. */
+      Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
     }
   }
   /* F-014 (#207): boot-visible capability summary (0 = all available). */
@@ -1067,49 +1054,19 @@ void Error_Handler(void)
  * architecture a chance; a hang or a zombie does not.
  * Codes: 0-4 = CPU fault handlers (stm32wlxx_it.c; 0 = NMI), 6 = deadman
  * (lora_app.c), 16+ = boot-time fatal errors below. */
-/* STAB-02 (#149): which boot-time fatals have a DESIGNED degraded
- * continuation? FLASH_INIT does (archive unusable -> flight continues with
- * science in RAM only, watchdog/deadman still supervising). CLOCK_CONFIG and
- * PAYLOAD_FORMAT do not: continuing would run the mission on a broken clock
- * tree or a malformed wire format — that is accidental continuation, not a
- * degraded mode. Keep this list explicit; adding a code requires a designed
- * degraded path at its call site.
- * SP-07 (#247): FLASH_INIT is wired at both boot flash sites (W25Q_Init and
- * FlashLog_Init failure) - before that, this escape was unreachable dead
- * code because nothing passed FAULT_CODE_FLASH_INIT at all. */
-static bool FatalIsDegradable(uint16_t code)
-{
-  return code == FAULT_CODE_FLASH_INIT;
-}
-
 void Error_Handler_Fatal(uint16_t code)
 {
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_RTCAPB_CLK_ENABLE();
 
-  /* FR-23 (#104): the F-03 boot-attempts counter finally acts. A
-   * DETERMINISTIC fatal condition (dead hardware, persistently bad config)
-   * otherwise reset-loops forever — burning power, never recovering, and the
-   * counter documented for exactly this sat inert. After 5 consecutive boots
-   * without a proven work cycle, boot-time fatals (codes >= 16) stop
-   * resetting and fall through to the caller's degraded path instead
-   * (DDR-0009: forward progress, degrade and keep flying). CPU-fault and
-   * deadman codes (<16) always reset — there is no meaningful degraded
-   * continuation from a crashed context.
-   *
-   * STAB-02 (#149): the escape is ONLY for faults with a designed degraded
-   * continuation. CLOCK_CONFIG (no RTC/clock tree) and PAYLOAD_FORMAT
-   * (unvalidated wire format) have none — their callers simply fall into
-   * mission code, so they always breadcrumb + reset, every boot. */
-  if (code >= 16U && ResetCause_GetBootAttempts() >= 5U && FatalIsDegradable(code)) {
-    SONDE_LOG("FATAL_ERROR %u: 5+ consecutive boots - DEGRADING, no reset\r\n", code);
-    return;
-  }
-
+  /* Boot-attempt history is diagnostic only. Every fatal invocation records
+   * its breadcrumb and resets, indefinitely. */
   SONDE_LOG("FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
   HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                       RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
-  NVIC_SystemReset();
+  for (;;) {
+    NVIC_SystemReset();
+  }
 }
 #ifdef USE_FULL_ASSERT
 /**

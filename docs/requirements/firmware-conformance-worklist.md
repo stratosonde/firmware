@@ -74,7 +74,7 @@ Reconstruct from valid self-checking records where possible.
 
 ### FW-CONF-011 — Fatal exception path resets
 Inject HardFault/fatal assertion/deadman and prove deterministic reset + clean boot.
-**Status:** 🟡 IMPLEMENTED — per-code degrade escape (STAB-02/#149), deadman supervision (DDR-0020); host stability suite. Injection proof open.
+**Status:** 🟡 IMPLEMENTED — every fatal invocation breadcrumbs and resets; deadman supervision (DDR-0020); host structural suite. Target fault-injection proof remains open.
 
 ### FW-CONF-012 — Sensor-specific bounded retries
 Each driver defines retryable faults, count/time budget, and optional bus/peripheral recovery. No infinite local recovery.
@@ -246,7 +246,7 @@ on radio/stack reset paths.
 ### FW-CONF-041 — No reset-count or failure-history escalation anywhere
 **Intent:** DDR-0009 `OD-FAIL-006` resolved, DDR-0020 · **Proof:** `P-FAIL-012`.  
 Audit for any repeated-reset adaptation and remove/disable it for first flight.
-**Status:** 🟡 IMPLEMENTED — boot-attempt counter resets on a completed work cycle; the FR-23/#104 degrade escape replaces the 6th reset. Formal audit open.
+**Status:** 🟡 IMPLEMENTED — boot-attempt evidence is diagnostic only. `Error_Handler_Fatal` breadcrumbs and resets on every invocation; no reset-count escalation or Tier-2 commit-back suppression selects behavior. Fault-injection proof remains open.
 
 ## P2 — archive delivery and gap repair
 

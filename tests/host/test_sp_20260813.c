@@ -368,24 +368,21 @@ static void test_sp05_structural(const char *conf, const char *app, const char *
 }
 
 /* ========================================================================== */
-/* SP-07 (#247) - structural: the FR-23 escape must be REACHABLE                */
+/* SP-07 - structural: fatal path is unconditional and non-returning           */
 /* ========================================================================== */
 static void test_sp07_fatal_escape_wired(const char *mainc)
 {
-    printf("-- SP-07 (#247) structural: deterministic-fatal escape reachable\n");
+    printf("-- SP-07 structural: deterministic-fatal path always resets\n");
 
-    /* The escape gates on code >= 16 && Attempts>=5 && FatalIsDegradable().
-     * FatalIsDegradable accepts ONLY FAULT_CODE_FLASH_INIT - so the escape is
-     * dead code unless that code is actually passed to Error_Handler_Fatal.
-     * Pre-fix: zero call sites (a dead W25Q / FlashLog init degraded inline
-     * with no breadcrumb, and the documented escape never ran). */
     CHECK_REGRESSION(count_occurrences(mainc,
                      "Error_Handler_Fatal(FAULT_CODE_FLASH_INIT)") >= 2, "SP-07-sites");
-    /* Sanity pins: the gate and the policy table still exist as designed. */
-    CHECK_REGRESSION(in_function(mainc, "static bool FatalIsDegradable(uint16_t code)",
-                                 "FAULT_CODE_FLASH_INIT"), "SP-07-policy");
+    CHECK_REGRESSION(strstr(mainc, "FatalIsDegradable") == NULL, "SP-07-no-policy");
+    CHECK_REGRESSION(strstr(mainc, "ResetCause_GetBootAttempts() >= 5U") == NULL,
+                     "SP-07-no-threshold");
     CHECK_REGRESSION(in_function(mainc, "void Error_Handler_Fatal(uint16_t code)",
-                                 "ResetCause_GetBootAttempts()"), "SP-07-gate");
+                                 "for (;;)"), "SP-07-noreturn");
+    CHECK_REGRESSION(in_function(mainc, "void Error_Handler_Fatal(uint16_t code)",
+                                 "NVIC_SystemReset()"), "SP-07-reset");
 }
 
 /* ========================================================================== */
