@@ -86,6 +86,11 @@ NVM_SRCS := test_nvm_slot.c ../../Core/Src/nvm_slot.c
 REGION_SRCS := test_region_policy.c ../../Core/Src/region_policy.c
 REGION_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 
+# Refactor stage 4: module contract for the extracted GNSS acquisition policy
+# (Core/Src/gnss_acquire.c) - exhaustive civil-date proof 1970..2100, epoch
+# composition, S-A iteration-budget contract, package-completeness rule.
+GNSS_ACQ_SRCS := test_gnss_acquire.c ../../Core/Src/gnss_acquire.c
+
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
 # DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
@@ -174,6 +179,12 @@ test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h
 region: test_region$(EXE)
 	./test_region$(EXE)
 
+test_gnss_acq$(EXE): $(GNSS_ACQ_SRCS) ../../Core/Inc/gnss_acquire.h
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(GNSS_ACQ_SRCS) -lm
+
+gnssacq: test_gnss_acq$(EXE)
+	./test_gnss_acq$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -218,7 +229,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -273,7 +284,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region gnssacq ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_sanitize$(EXE)

@@ -59,6 +59,7 @@
 #include "packet_queue.h"      /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
 #include "nvm_slot.h"          /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
 #include "region_policy.h"     /* refactor stage 3: geofence/region policy extracted to Core/Src/region_policy.c */
+#include "gnss_acquire.h"      /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -1033,16 +1034,9 @@ void Deadman_Check(void)
   *         time. GPS is the only trustworthy clock source on the balloon.
   *         date = DDMMYY, timestamp = HHMMSS (NMEA RMC).
   */
-static uint32_t DaysFromCivil(int y, unsigned m, unsigned d)
-{
-  y -= (m <= 2);
-  int era = (y >= 0 ? y : y - 399) / 400;
-  unsigned yoe = (unsigned)(y - era * 400);
-  unsigned doy = (153U * (m + (m > 2 ? (unsigned)-3 : 9U)) + 2U) / 5U + d - 1U;
-  unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
-  return (uint32_t)(era * 146097 + (int)doe - 719468);
-}
-
+/* DaysFromCivil and the DDMMYY/HHMMSS epoch composition moved verbatim to
+ * Core/Src/gnss_acquire.c (refactor stage 4) as GnssAcquire_DaysFromCivil /
+ * GnssAcquire_EpochFromUtc. */
 static bool SysTimeSyncFromGnss(void)
 {
   uint32_t d = hgnss.data.date;       /* DDMMYY */
@@ -1052,11 +1046,7 @@ static bool SysTimeSyncFromGnss(void)
    * fully covered by the range check below (d==0 -> day==0 -> rejected). */
   if (!FirstFlightPolicy_GnssDateTimeValid(d, t)) return false;
 
-  int day = (int)(d / 10000U);
-  int mon = (int)((d / 100U) % 100U);
-  int yr  = 2000 + (int)(d % 100U);
-  uint32_t epoch = DaysFromCivil(yr, (unsigned)mon, (unsigned)day) * 86400U
-                 + (t / 10000U) * 3600U + ((t / 100U) % 100U) * 60U + (t % 100U);
+  uint32_t epoch = GnssAcquire_EpochFromUtc(d, t);
 
   SysTime_t st;
   st.Seconds = epoch;
@@ -1175,7 +1165,7 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
      * suspicion. 32/ms mirrors W25Q_MAX_BUSY_POLLS_PER_MS: far above any real
      * iteration rate (each pass sleeps in WFI until an interrupt). */
     uint32_t acq_iters = 0;
-    const uint32_t max_iters = gps_timeout_ms * 32u;
+    const uint32_t max_iters = GnssAcquire_IterationBudget(gps_timeout_ms);  /* S-A (#211): > 0 for every admitted plan */
 
     /* Process GPS data for up to gps_timeout_ms (dynamic based on power mode) */
     while ((HAL_GetTick() - gps_start) < gps_timeout_ms)
@@ -1199,9 +1189,9 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
        * before RMC date/time. Keep processing the same wake until both are
        * present, otherwise a receiver that emits GGA first can be rejected on
        * every cycle even though a valid RMC sentence was milliseconds away. */
-      if (GNSS_IsFixGoodQuality(&hgnss) &&
-          FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
-                                              hgnss.data.timestamp))
+      if (GnssAcquire_PackageComplete(GNSS_IsFixGoodQuality(&hgnss),
+                                      FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
+                                                                          hgnss.data.timestamp)))
       {
         got_fix = true;
         *ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
