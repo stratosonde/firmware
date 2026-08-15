@@ -1,5 +1,15 @@
 # H3Lite Integration Guide
 
+> **Status (2026-08-15): integration COMPLETE.** H3Lite is in-tree as the git
+> submodule `Middlewares/Third_Party/h3lite` (→ `github.com/stratosonde/h3lite`),
+> exactly as this guide prescribes; the API below was re-verified against the
+> submodule's `include/h3lite.h` today (`h3liteInit`, `latLngToH3`,
+> `h3ToRegion`, `latLngToRegion`, `getRegionName`, `findNearestRegions`,
+> `MAX_NEAREST_REGIONS 3`, `REGION_RESTRICTED 15`). The consumer is
+> `Core/Src/multiregion_h3.c` (see RegionLookup.md). Keep this guide for
+> maintenance, submodule updates, and table regeneration — the step-by-step
+> checklist is historical (already done).
+
 ## Overview
 
 This document provides a complete step-by-step guide for integrating H3Lite into the stratosphere balloon firmware for precise LoRaWAN region detection. H3Lite provides industry-standard H3 geospatial indexing optimized for embedded systems.
