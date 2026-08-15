@@ -60,6 +60,7 @@
 #include "nvm_slot.h"          /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
 #include "region_policy.h"     /* refactor stage 3: geofence/region policy extracted to Core/Src/region_policy.c */
 #include "gnss_acquire.h"      /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
+#include "tx_fsm.h"            /* refactor stage 5: TX state machine decision core extracted to Core/Src/tx_fsm.c */
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -374,9 +375,13 @@ static const ABPProvisioningEntry_t abp_provisioning_table[] = {
 /* Packet queue for deferred transmission after RX windows */
 static PacketQueue_t g_packet_queue = {0};
 
-/* Adaptive transmission strategy state */
-static TxState_t g_tx_state = TX_STATE_PROBE_SF10;
-static uint8_t g_bulk_packets_sent = 0;
+/* Adaptive transmission strategy state.
+ * Refactor stage 5: the five FSM globals (g_tx_state, g_bulk_packets_sent,
+ * g_probe_sent_ms, g_burst_opened_ms, g_science_due_ms) are now the fields
+ * of g_tx_fsm; every transition runs through the pure step module
+ * Core/Src/tx_fsm.c. The entry points below are adapters: they gather
+ * inputs, call the step, and perform the mandated actions. */
+static TxFsm_t g_tx_fsm = { TX_FSM_PROBE_SF10, 0, 0, 0, 0 };
 /* LT-07 (#277): burst-scoped deadline state (HAL_GetTick ms, the same time
  * base UTIL_TIMER uses; 0 = not open). BURST_MAX_OPEN_MS bounds how long the
  * FSM may sit in a network-wait state (probe ACK or burst train) without
@@ -387,21 +392,19 @@ static uint8_t g_bulk_packets_sent = 0;
  * (bursts are ASCENT-inhibited, R3-03; the shortest burst-eligible interval
  * is MODE_NORMAL's 300 s). */
 #define BURST_MAX_OPEN_MS  60000U
-static uint32_t g_burst_opened_ms = 0;
-static uint32_t g_probe_sent_ms = 0;
 /* R3-04 (#218): g_bulk_commit_through DELETED - DDR-0005 one-pass recovery
  * advances the watermark AT SEND TIME (FlashLog_MarkRecoverySent); there is
  * no commit-on-ACK and no autonomous retry (BR-TX-009/010/011). */
 
-/* R3-01 (#215): ABSOLUTE science deadline, HAL_GetTick ms domain (the same
- * time base UTIL_TIMER uses). Bulk continuation re-arms the SAME SendTxData
- * task (OnTxData/OnRxData); restarting TxTimer relative to each invocation
- * pushed the next science deadline out by a full interval per bulk packet -
- * unbounded starvation with a large backlog, violating DDR-0005
- * BR-TX-001/002 (current science always wins; recovery yields when science
- * falls due). The deadline advances ONLY when a science cycle is serviced,
- * phase-preserving (due += interval); bulk work can never move it. */
-static uint32_t g_science_due_ms = 0;
+/* R3-01 (#215): ABSOLUTE science deadline (g_tx_fsm.science_due_ms,
+ * HAL_GetTick ms domain - the same time base UTIL_TIMER uses). Bulk
+ * continuation re-arms the SAME SendTxData task (OnTxData/OnRxData);
+ * restarting TxTimer relative to each invocation pushed the next science
+ * deadline out by a full interval per bulk packet - unbounded starvation
+ * with a large backlog, violating DDR-0005 BR-TX-001/002 (current science
+ * always wins; recovery yields when science falls due). The deadline
+ * advances ONLY when a science cycle is serviced, phase-preserving
+ * (due += interval); bulk work can never move it. */
 /* USER CODE END PV */
 
 /* Exported functions ---------------------------------------------------------*/
@@ -887,8 +890,12 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
    * (OnTxData), not on LinkCheckAns. LinkCheckAns now rides the FIRST archive
    * packet (protocol §5.2) and gates burst continuation (§5.3): poor margin /
    * gateway count — or no LinkCheckAns at all — ends the burst after the
-   * (already ACKed) first archive packet. */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent == 1) {
+   * (already ACKed) first archive packet.
+   * FR-14 (#88): continuation of the burst after packet 1 is owned HERE, by
+   * the LinkCheck evaluation — OnTxData no longer re-arms for packet 1 (it
+   * runs before this callback; the race produced a spurious full extra work
+   * cycle). The verdict itself is the pure TxFsm_OnRx step (stage 5). */
+  if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER && g_tx_fsm.bulk_packets_sent == 1) {
     bool link_good = (linkcheck_received &&
                       margin >= CfgLinkMargin() &&
                       gw_count >= CfgGatewayCount());
@@ -896,25 +903,19 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
                       linkcheck_received ? "received" : "MISSING",
                       margin, CfgLinkMargin(), gw_count, CfgGatewayCount(),
                       link_good ? "BURST CONTINUES" : "FALLBACK");
-    if (!link_good) {
-      /* Protocol §5.4: end the burst, return to LONG_RANGE_HEARTBEAT.
-       * R3-04 (#218): the first packet's records were already marked sent
-       * (one-pass advance at send time) — no loss, no retry. */
-      g_tx_state = TX_STATE_COMPLETE;
-      g_bulk_packets_sent = 0;
-    } else {
-      /* FR-14 (#88): continuation of the burst after packet 1 is owned HERE,
-       * by the LinkCheck evaluation — OnTxData no longer re-arms for
-       * g_bulk_packets_sent == 1 (it runs before this callback; the race
-       * produced a spurious full extra work cycle). */
-      if (FlashLog_HasUnsentData(&hflashlog) &&
-          g_bulk_packets_sent < CfgMaxBulkPkts()) {
-        SONDE_LOG_STR("OnRxData: link good - re-arming bulk transfer...\r\n");
-        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-      } else {
-        g_tx_state = TX_STATE_COMPLETE;
-        g_bulk_packets_sent = 0;
-      }
+    TxFsmRxInput_t fsm_in = {
+      linkcheck_received, margin, gw_count,
+      CfgLinkMargin(), CfgGatewayCount(),
+      FlashLog_HasUnsentData(&hflashlog), CfgMaxBulkPkts()
+    };
+    TxFsmEventOutput_t fsm_out;
+    TxFsm_OnRx(&g_tx_fsm, &fsm_in, &fsm_out);
+    /* Protocol §5.4 fallback / continuation both possible here. R3-04 (#218):
+     * the first packet's records were already marked sent (one-pass advance
+     * at send time) — no loss, no retry. */
+    if (fsm_out.arm_send_task) {
+      SONDE_LOG_STR("OnRxData: link good - re-arming bulk transfer...\r\n");
+      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
     }
   } else if (linkcheck_received) {
     // Link check result for non-archive transmissions (informational)
@@ -1518,7 +1519,7 @@ static void ArchiveSample(sensor_t *sensor_data,
    * passes wrote up to 20 junk records (gnss_valid=0) per bulk cycle —
    * accelerating ring wrap and burning W25Q + Tier-2 internal-flash erase
    * cycles (worst case ~33 days to internal-flash endurance). */
-  if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+  if (g_tx_fsm.state != TX_FSM_BULK_TRANSFER) {
     SONDE_LOG_STR("Logging high-resolution data to flash...\r\n");
     /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
      * delta stored in backup regs), NOT boot-relative RTC calendar time.
@@ -1642,65 +1643,146 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
   
-  /* LT-07 (#277): burst-scoped deadline. The FSM used to lean on the science
-   * deadline (SendTxData's entry ScienceIsDue yield) to unstick - a missing
-   * LinkCheckAns parked it in BULK_TRANSFER with nothing scheduled, and an
-   * early TxTimer fire (OnTxTimerEvent's redundant re-arm on a stale
-   * ReloadValue - now removed) then skipped GPS + archive for the cycle,
-   * silently losing one science record. Force COMPLETE when a network-wait
-   * state outlives its bound, logging which one fired; the stale-state
-   * reset below then flushes the deferred header sync like any completed
-   * cycle. */
+  /* Refactor stage 5: every transition (LT-07 stale forcing, the C2/SP-15
+   * stale-state reset, the T1/F-5 RF-silence park, the probe/bulk dispatch)
+   * is decided by the pure step module TxFsm_Dispatch (Core/Src/tx_fsm.c).
+   * This adapter gathers the bulk pipeline facts FIRST - only when a bulk
+   * dispatch is reachable, exactly the old in-case read's reachability: not
+   * on a yielded cycle (the R3-01 entry yield already ran in SendTxData),
+   * not under RF silence, not when LT-07 forcing will preempt, not past the
+   * packet cap - then performs the mandated actions. */
   uint32_t now_ms = HAL_GetTick();
-  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK && g_probe_sent_ms != 0 &&
-      (uint32_t)(now_ms - g_probe_sent_ms) > BURST_MAX_OPEN_MS) {
+
+  bool has_unsent = false;
+  bool recovery_empty = false;
+  bool unconvertible = false;
+  bool no_budget = false;
+  uint16_t max_payload = 0;
+  uint32_t record_count = 0;
+  uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
+  FlashLog_Record_t flash_records[BULK_V6_MAX_RECORDS];
+  HighResTelemetryRecord_t highres_records[BULK_V6_MAX_RECORDS];
+  uint32_t highres_seqs[BULK_V6_MAX_RECORDS];   /* FR-07 (#87): per-record explicit identity */
+  uint8_t packed_count = 0;
+
+  TxFsmState_t pre_state = g_tx_fsm.state;
+  bool probe_stale = TxFsm_ProbeStale(&g_tx_fsm, now_ms, BURST_MAX_OPEN_MS);
+  bool burst_stale = TxFsm_BurstStale(&g_tx_fsm, now_ms, BURST_MAX_OPEN_MS);
+  bool may_bulk = (pre_state == TX_FSM_BULK_TRANSFER) &&
+                  (g_tx_fsm.bulk_packets_sent < CfgMaxBulkPkts()) &&
+                  !burst_stale;
+  if (rf_silence) may_bulk = false;  /* T1 (DDR-0018): the park skips TX work */
+  if (may_bulk) {
+    has_unsent = FlashLog_HasUnsentData(&hflashlog);
+    if (has_unsent) {
+      /* R3-04 (#218, DDR-0005 BR-TX-008): one-pass recovery read, NEWEST
+       * FIRST - pending-live records (never sent) lead, then the walker
+       * works backward from the recovery frontier. Was 6: the 6th record
+       * was read and discarded every packet (finding #9) — the wire format
+       * packs at most 5. */
+      FlashLog_StatusTypeDef flash_status = FlashLog_GetRecoveryRecords(&hflashlog,
+                                                                        flash_records,
+                                                                        BULK_V6_MAX_RECORDS,
+                                                                        &record_count,
+                                                                        &skipped_count);
+      if (skipped_count > 0) {
+        /* DDR-0003: a skipped record is visible, not silent */
+        SONDE_LOG("Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
+                          (unsigned long)skipped_count);
+      }
+      if (flash_status != FLASH_LOG_OK || record_count == 0) {
+        recovery_empty = true;
+      } else {
+        SONDE_LOG("Retrieved %lu unsent records from flash\r\n", record_count);
+        // Convert flash records to high-res format for the bulk packet
+        /* F10 FIX: Failed conversion => skip that record entirely.
+         * Previously the loop logged a warning and still packed the record
+         * (zero-filled) — fabricated data transmitted as science.
+         * A gap is honest; fabricated data is not.
+         * DR-18: BULK_V6_MAX_RECORDS, not a magic 6 - flash_records[] is
+         * sized by the constant, so a raise otherwise made THESE arrays
+         * the overflow. */
+        for (uint32_t i = 0; i < record_count && i < BULK_V6_MAX_RECORDS; i++) {
+          if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count])) {
+            SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
+            continue;  /* Skip bad record, keep packing the rest */
+          }
+          highres_seqs[packed_count] = flash_records[i].sequence;
+          packed_count++;
+        }
+        if (packed_count == 0) {
+          unconvertible = true;
+        } else {
+          /* D3 (#33) + FR-07 (#87): wire v6 variable-length bulk (packet_type
+           * 0x05, per-record explicit sequence). Query the runtime payload
+           * budget (current DR + pending FOpts, protocol §11) and pack only
+           * complete records that fit. Records that don't fit stay pending
+           * for the next cycle (stable identity, DDR-0005). */
+          LoRaMacTxInfo_t txInfo;
+          for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE),
+                                       &txInfo) == LORAMAC_STATUS_OK) {
+              max_payload = (uint16_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE);
+              break;
+            }
+          }
+          if (max_payload == 0) {
+            SONDE_LOG_STR("Bulk: no payload budget at current DR - retry next cycle\r\n");
+            no_budget = true;
+          }
+        }
+      }
+    }
+  }
+
+  TxFsmCycleInput_t fsm_in = {
+    now_ms, 0, rf_silence, has_unsent, recovery_empty, unconvertible,
+    no_budget, CfgMaxBulkPkts(), BURST_MAX_OPEN_MS
+  };
+  TxFsmCycleOutput_t fsm_out;
+  TxFsm_Dispatch(&g_tx_fsm, &fsm_in, &fsm_out);
+
+  /* The logs the inline code emitted on the way through (LT-07 forcing and
+   * the stale-state reset) are reproduced from the pre-dispatch queries. */
+  if (probe_stale) {
     SONDE_LOG_STR("LT-07: probe-ACK wait exceeded BURST_MAX_OPEN_MS - forcing TX_STATE_COMPLETE\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-    g_probe_sent_ms = 0;
   }
-  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_burst_opened_ms != 0 &&
-      (uint32_t)(now_ms - g_burst_opened_ms) > BURST_MAX_OPEN_MS) {
+  if (burst_stale) {
     SONDE_LOG_STR("LT-07: burst open longer than BURST_MAX_OPEN_MS - forcing TX_STATE_COMPLETE\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-    g_burst_opened_ms = 0;
-    g_bulk_packets_sent = 0;
+  }
+  if (pre_state == TX_FSM_WAIT_PROBE_ACK || pre_state == TX_FSM_COMPLETE ||
+      probe_stale || burst_stale) {
+    /* The reset ran (a stale forcing routes through COMPLETE first). */
+    SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n",
+                      (probe_stale || burst_stale) ? TX_FSM_COMPLETE : pre_state);
   }
 
-  /* C2 FIX: Reset stale TX states so every timer cycle sends actual data.
-   * If the previous cycle left us in WAIT_PROBE_ACK (no downlink received) or
-   * COMPLETE (already handled), reset to PROBE_SF10 for a fresh probe.
-   * BULK_TRANSFER is NOT reset here - it continues until exhausted via OnTxData.
-   * SP-15 (#253): this reset guarantees the switch below only ever sees
-   * PROBE_SF10 or BULK_TRANSFER - the old 'case TX_STATE_WAIT_PROBE_ACK' was
-   * unreachable, and its 'fall through' comment was falsified by its break. */
-  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK || g_tx_state == TX_STATE_COMPLETE) {
-    SONDE_LOG("Resetting stale TX state %d -> PROBE_SF10\r\n", g_tx_state);
-    /* Finding #8: the burst (if any) ended last cycle — flush the deferred
-     * header sync exactly once here, the single chokepoint every completed
-     * cycle passes through. No-op when nothing was committed. STOP2 retains
-     * RAM, so the dirty flag survives sleep; a mid-burst reset replays from
-     * the last persisted watermark (conservative, backend dedupes). */
+  if (fsm_out.flush_header_sync) {
+    /* Finding #8 + F-5 (#180): every completed cycle (the stale-state
+     * reset) and every RF-silence park flushes the deferred header sync
+     * through this single action - a park or reset never strands the
+     * persisted watermark. No-op when nothing was committed. */
     FlashLog_FlushHeaderSync(&hflashlog);
-    g_tx_state = TX_STATE_PROBE_SF10;
-    g_bulk_packets_sent = 0;
   }
-  
-  SONDE_LOG("Adaptive TX: State=%d\r\n", g_tx_state);
 
-  /* T1 (DDR-0018): RF silence skips the entire transmit state machine —
-   * GPS acquisition and flash logging above have already run. */
-  if (rf_silence) {
-    /* F-5 (#180): a park that interrupts a burst must not strand the
-     * deferred header sync (FlashLog_DeferHeaderSync at burst open) -
-     * otherwise the persisted watermark freezes for the rest of the flight
-     * and every later commit lives only in RAM, silently (the RAM copy
-     * looks current). Flush here too; no-op when nothing is deferred. */
-    FlashLog_FlushHeaderSync(&hflashlog);
-    g_tx_state = TX_STATE_PROBE_SF10;  /* keep state machine parked */
-  } else
-  switch (g_tx_state) {
-    case TX_STATE_PROBE_SF10:
-    {
+  if (fsm_out.retire_batch) {
+    /* R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL
+     * consumed batch, not just the corrupt skips: a record that reads
+     * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
+     * unconvertible — leaving it pending re-probes it forever and
+     * wedges bulk transfer.
+     * R3-04 (#218): retire = advance the one-pass watermark past each
+     * consumed record (MarkRecoverySent is range-aware: live records
+     * raise H, walker records lower F). Leading corrupt runs were
+     * already retired inline by the read. */
+    SONDE_LOG("Retiring %lu unconvertible records with no TX (%lu corrupt skipped)\r\n",
+                      (unsigned long)record_count, (unsigned long)skipped_count);
+    for (uint32_t i = 0; i < record_count; i++) {
+      FlashLog_MarkRecoverySent(&hflashlog, flash_records[i].sequence);
+    }
+  }
+
+  if (fsm_out.action == TXFSM_ACT_SEND_PROBE) {
       // Encode 10-byte compact telemetry packet
       /* STAB-12 (#159): restore the timestamp-wrap latch once per boot -
        * a post-wrap reset must not make time look like an earlier epoch. */
@@ -1749,245 +1831,106 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
       LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
         
         if (status == LORAMAC_HANDLER_SUCCESS) {
-          g_probe_sent_ms = HAL_GetTick();  /* LT-07 (#277): bound the wait */
-          g_tx_state = TX_STATE_WAIT_PROBE_ACK;  /* Wait for the confirmed-uplink ACK (OnTxData) */
+          /* LT-07 (#277): the step stamps the wait with this fresh tick and
+           * moves to WAIT_PROBE_ACK (the confirmed-uplink ACK is evaluated
+           * in OnTxData). */
+          TxFsm_OnSendResult(&g_tx_fsm, HAL_GetTick(), true, false, CfgMaxBulkPkts());
           SONDE_LOG_STR("Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
           SONDE_LOG("Compact packet send failed (status: %d)\r\n", status);
-          g_tx_state = TX_STATE_COMPLETE;  // Complete cycle on error
+          TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());  // Complete cycle on error
         }
       } else {
         SONDE_LOG_STR("ERROR: Failed to encode compact packet!\r\n");
-        g_tx_state = TX_STATE_COMPLETE;
+        TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());
       }
-      break;
-    }
+  } else if (fsm_out.action == TXFSM_ACT_SEND_BULK) {
     
-    case TX_STATE_BULK_TRANSFER:
-    {
-      SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n", 
-                        g_bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
-      
-      // Check if we have unsent data and haven't exceeded packet limit
-      if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
+      SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n",
+                        g_tx_fsm.bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
 
-        /* R3-04 (#218, DDR-0005 BR-TX-008): one-pass recovery read, NEWEST
-         * FIRST - pending-live records (never sent) lead, then the walker
-         * works backward from the recovery frontier. Was 6: the 6th record
-         * was read and discarded every packet (finding #9) — the wire format
-         * packs at most 5. */
-        FlashLog_Record_t flash_records[BULK_V6_MAX_RECORDS];
-        uint32_t record_count;
-        uint32_t skipped_count = 0;  /* F-006/R13 (#51): corrupt skips are explicit */
+      // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
+      LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
 
-        FlashLog_StatusTypeDef flash_status = FlashLog_GetRecoveryRecords(&hflashlog,
-                                                                          flash_records,
-                                                                          BULK_V6_MAX_RECORDS,
-                                                                          &record_count,
-                                                                          &skipped_count);
-        if (skipped_count > 0) {
-          /* DDR-0003: a skipped record is visible, not silent */
-          SONDE_LOG("Flash: skipped %lu corrupt record(s) (watermark advanced)\r\n",
-                            (unsigned long)skipped_count);
+      uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
+      uint8_t v5_packed = 0;
+      uint16_t v5_len = 0;
+
+      if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
+                             highres_records, highres_seqs, packed_count,
+                             &v5_packed, &v5_len)) {
+
+        /* DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
+         * archive packet of a burst carries LinkCheckReq (protocol §5.2);
+         * records commit only on network ACK (OnTxData). */
+        if (fsm_out.linkcheck_req) {
+          LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
+          (void)lc_status;  /* FR-19: log-only in flight; the call has the side effect */
+          SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
         }
-        
-        if (flash_status == FLASH_LOG_OK && record_count > 0) {
-          SONDE_LOG("Retrieved %lu unsent records from flash\r\n", record_count);
-          
-          // Convert flash records to high-res format for bulk packet
-          /* F10 FIX: Failed conversion => skip that record entirely.
-           * Previously the loop logged a warning and still packed the record
-           * (zero-filled) — fabricated data transmitted as science.
-           * A gap is honest; fabricated data is not. */
-          /* DR-18: BULK_V6_MAX_RECORDS, not a magic 6 - flash_records[] is
-           * sized by the constant, so a raise otherwise made THESE arrays
-           * the overflow. */
-          HighResTelemetryRecord_t highres_records[BULK_V6_MAX_RECORDS];
-          uint32_t highres_seqs[BULK_V6_MAX_RECORDS];   /* FR-07 (#87): per-record explicit identity */
-          uint8_t packed_count = 0;
-          for (uint32_t i = 0; i < record_count && i < BULK_V6_MAX_RECORDS; i++) {
-            if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count])) {
-              SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
-              continue;  /* Skip bad record, keep packing the rest */
-            }
-            highres_seqs[packed_count] = flash_records[i].sequence;
-            packed_count++;
+
+        LmHandlerAppData_t bulkData;
+        bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
+        bulkData.BufferSize = v5_len;
+        bulkData.Buffer = v6_buf;
+
+        SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
+                          v5_len, LORAWAN_BULK_PORT, v5_packed);
+
+        /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
+         * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
+         * frame is never retried autonomously. The backend owns gap
+         * repair (BR-TX-012, deferred: #125). */
+        LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+
+        if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
+          /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
+           * TIME, per packed record (newest-first as read). Records read
+           * but cut by the payload budget stay sendable. */
+          for (uint8_t i = 0; i < v5_packed; i++) {
+            FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
+          }
+          if (v5_packed != record_count) {
+            SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
+                              v5_packed, (unsigned long)record_count);
           }
 
-          if (packed_count == 0) {
-            /* R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL
-             * consumed batch, not just the corrupt skips: a record that reads
-             * CRC-clean but fails ConvertFlashLogToHighRes is deterministically
-             * unconvertible — leaving it pending re-probes it forever and
-             * wedges bulk transfer.
-             * R3-04 (#218): retire = advance the one-pass watermark past each
-             * consumed record (MarkRecoverySent is range-aware: live records
-             * raise H, walker records lower F). Leading corrupt runs were
-             * already retired inline by the read. */
-            SONDE_LOG("Retiring %lu unconvertible records with no TX (%lu corrupt skipped)\r\n",
-                              (unsigned long)record_count, (unsigned long)skipped_count);
-            for (uint32_t i = 0; i < record_count; i++) {
-              FlashLog_MarkRecoverySent(&hflashlog, flash_records[i].sequence);
-            }
-            g_tx_state = TX_STATE_COMPLETE;
-            break;
-          }
+          /* The step counts the packet and decides stay-vs-complete from
+           * the post-mark watermark. */
+          TxFsm_OnSendResult(&g_tx_fsm, now_ms, true,
+                             FlashLog_HasUnsentData(&hflashlog), CfgMaxBulkPkts());
 
-          // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
-          LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
+          SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
+                            g_tx_fsm.bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
 
-          /* D3 (#33) + FR-07 (#87): wire v6 variable-length bulk (packet_type
-           * 0x05, per-record explicit sequence). Query the runtime payload
-           * budget (current DR + pending FOpts, protocol §11) and pack only
-           * complete records that fit. Records that don't fit stay pending
-           * for the next cycle (stable identity, DDR-0005). */
-          LoRaMacTxInfo_t txInfo;
-          uint16_t max_payload = 0;
-          for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
-            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE),
-                                       &txInfo) == LORAMAC_STATUS_OK) {
-              max_payload = (uint16_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE);
-              break;
-            }
-          }
-          if (max_payload == 0) {
-            SONDE_LOG_STR("Bulk: no payload budget at current DR - retry next cycle\r\n");
-            g_tx_state = TX_STATE_COMPLETE;
-            break;
-          }
-
-          uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
-          uint8_t v5_packed = 0;
-          uint16_t v5_len = 0;
-
-          if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
-                                 highres_records, highres_seqs, packed_count,
-                                 &v5_packed, &v5_len)) {
-
-            /* DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
-             * archive packet of a burst carries LinkCheckReq (protocol §5.2);
-             * records commit only on network ACK (OnTxData). */
-            if (g_bulk_packets_sent == 0) {
-              LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
-              (void)lc_status;  /* FR-19: log-only in flight; the call has the side effect */
-              SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
-            }
-
-            LmHandlerAppData_t bulkData;
-            bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
-            bulkData.BufferSize = v5_len;
-            bulkData.Buffer = v6_buf;
-
-            SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
-                              v5_len, LORAWAN_BULK_PORT, v5_packed);
-
-            /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
-             * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
-             * frame is never retried autonomously. The backend owns gap
-             * repair (BR-TX-012, deferred: #125). */
-            LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-
-            if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
-              g_bulk_packets_sent++;
-
-              /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
-               * TIME, per packed record (newest-first as read). Records read
-               * but cut by the payload budget stay sendable. */
-              for (uint8_t i = 0; i < v5_packed; i++) {
-                FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
-              }
-              if (v5_packed != record_count) {
-                SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
-                                  v5_packed, (unsigned long)record_count);
-              }
-
-              SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
-                                g_bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
-              
-              // Continue bulk transfer if more data available and under packet limit
-              if (FlashLog_HasUnsentData(&hflashlog) && g_bulk_packets_sent < CfgMaxBulkPkts()) {
-                SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
-                // Stay in TX_STATE_BULK_TRANSFER for next packet
-              } else {
-                SONDE_LOG_STR("Bulk transfer complete (no more data or packet limit reached)\r\n");
-                g_tx_state = TX_STATE_COMPLETE;
-              }
-              
-            } else {
-              SONDE_LOG("Bulk packet send failed (status: %d)\r\n", bulk_status);
-              g_tx_state = TX_STATE_COMPLETE;  // Complete on error
-            }
-            
+          if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER) {
+            SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
           } else {
-            SONDE_LOG_STR("ERROR: Failed to encode bulk packet!\r\n");
-            g_tx_state = TX_STATE_COMPLETE;
+            SONDE_LOG_STR("Bulk transfer complete (no more data or packet limit reached)\r\n");
           }
-          
         } else {
-          SONDE_LOG("No unsent records available (status: %d)\r\n", flash_status);
-          g_tx_state = TX_STATE_COMPLETE;
+          SONDE_LOG("Bulk packet send failed (status: %d)\r\n", bulk_status);
+          TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());  // Complete on error
         }
-        
       } else {
-        SONDE_LOG_STR("Bulk transfer complete: no data or packet limit reached\r\n");
-        g_tx_state = TX_STATE_COMPLETE;
+        SONDE_LOG_STR("ERROR: Failed to encode bulk packet!\r\n");
+        TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());
       }
-      break;
-    }
-      
-    case TX_STATE_COMPLETE:
-    default:
-      // Reset for next cycle
-      g_tx_state = TX_STATE_PROBE_SF10;
-      g_bulk_packets_sent = 0;
-      SONDE_LOG_STR("Transmission cycle complete, reset to PROBE_SF10\r\n");
-      break;
   }
-}
-
-/**
- * @brief R3-01 (#215): has the absolute science deadline arrived?
- *        Wrap-safe (int32 subtraction), false while unscheduled.
- */
-static bool ScienceIsDue(void)
-{
-  return g_science_due_ms != 0 &&
-         (int32_t)(HAL_GetTick() - g_science_due_ms) >= 0;
 }
 
 /**
  * @brief R3-01 (#215): re-arm TxTimer against the ABSOLUTE science deadline.
- * @param interval_ms   the plan's science interval for THIS cycle
- * @param science_cycle true when this invocation serviced current science:
- *        the deadline advances phase-preservingly (due += interval), with a
- *        re-base if we fell a full period behind (never storm catch-up).
- *        False for bulk continuations: the timer is only re-pointed at the
- *        existing deadline - archive work can never move it.
+ *        Stage 5: the deadline arithmetic (phase-preserving advance on
+ *        science cycles, re-base when a full period behind, bulk
+ *        continuations only re-point, the LT-01/#269 signed-domain
+ *        "fire now" clamp) is the pure TxFsm_Reschedule step; the
+ *        science_cycle flag is derived from the FSM state. This wrapper
+ *        owns only the timer hardware.
  */
-static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)
+static void RescheduleScienceTimer(uint32_t interval_ms)
 {
-  uint32_t now_ms = HAL_GetTick();
-  if (science_cycle) {
-    if (g_science_due_ms == 0) g_science_due_ms = now_ms;  /* establish phase */
-    g_science_due_ms += interval_ms;
-    if ((int32_t)(g_science_due_ms - now_ms) <= 0) {
-      g_science_due_ms = now_ms + interval_ms;  /* fell >= 1 period behind */
-    }
-  } else if (g_science_due_ms == 0) {
-    g_science_due_ms = now_ms + interval_ms;
-  }
-  /* LT-01 (#269): the re-base guard above runs ONLY on the science path. A bulk
-   * continuation legitimately arrives with g_science_due_ms already in the past
-   * (SendTxData's ScienceIsDue() check is tens of ms earlier - EnvSensors_Read
-   * runs the MS5607 OSR_4096 pair, SHT31 and 3 ADC channels in between), and
-   * this subtraction used to be unsigned: 50 ms overdue became a 4294967246 ms
-   * period, which TIMER_IF_Convert_ms2Tick ALIASES (not saturates) into
-   * ~103079163 ticks = ~28 h of ReloadValue. UTIL_TIMER_Start clamps only
-   * upward, so nothing caught it and only the deadman (3-6 h) recovered.
-   * Clamp in the SIGNED domain: an overdue deadline means "fire now". */
-  int32_t remain_ms = (int32_t)(g_science_due_ms - now_ms);
-  if (remain_ms <= 0) remain_ms = 1;
-  uint32_t delay_ms = (uint32_t)remain_ms;
+  uint32_t delay_ms = TxFsm_Reschedule(&g_tx_fsm, HAL_GetTick(), interval_ms);
   UTIL_TIMER_Stop(&TxTimer);
   UTIL_TIMER_SetPeriod(&TxTimer, delay_ms);
   UTIL_TIMER_Start(&TxTimer);
@@ -1995,16 +1938,13 @@ static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)
 
 static void FirstFlightAbortTransmitCycle(void)
 {
-  if (g_tx_state == TX_STATE_PROBE_SF10) return;
-
-  /* A low-energy decision wins over every open transmit state. Flush any
-   * deferred archive watermark before parking the FSM, then discard all
-   * burst-scoped timing so a late callback cannot reopen the old burst. */
-  FlashLog_FlushHeaderSync(&hflashlog);
-  g_tx_state = TX_STATE_PROBE_SF10;
-  g_bulk_packets_sent = 0;
-  g_probe_sent_ms = 0;
-  g_burst_opened_ms = 0;
+  /* A low-energy decision wins over every open transmit state. The pure
+   * step (stage 5) parks the FSM and discards all burst-scoped timing so a
+   * late callback cannot reopen the old burst; it reports whether a flush
+   * is owed (no-op when already parked). */
+  if (TxFsm_OnAbort(&g_tx_fsm)) {
+    FlashLog_FlushHeaderSync(&hflashlog);
+  }
 }
 
 static bool FirstFlightWakeAdmitted(const sensor_t *sample,
@@ -2031,7 +1971,7 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
    * deadline advances or after GNSS, so phase-advancing the existing deadline
    * here could accidentally add two intervals. */
   uint32_t retry_ms = cfg != NULL ? cfg->tx_interval_survival : 3600000UL;
-  g_science_due_ms = HAL_GetTick() + retry_ms;
+  TxFsm_SetScienceDue(&g_tx_fsm, HAL_GetTick() + retry_ms);
   UTIL_TIMER_Stop(&TxTimer);
   UTIL_TIMER_SetPeriod(&TxTimer, retry_ms);
   UTIL_TIMER_Start(&TxTimer);
@@ -2066,10 +2006,13 @@ static void SendTxData(void)
    * record + probe). Current science always wins (DDR-0005 BR-TX-001/002).
    * RunTxStateMachine's COMPLETE reset performs the deferred header-sync
    * flush, so nothing already committed is stranded. */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER && ScienceIsDue()) {
-    SONDE_LOG_STR("R3-01: science deadline reached - bulk transfer yields\r\n");
-    g_tx_state = TX_STATE_COMPLETE;
-    g_bulk_packets_sent = 0;
+  {
+    TxFsmState_t entry_state = g_tx_fsm.state;
+    TxFsm_OnCycleEntry(&g_tx_fsm, HAL_GetTick());
+    if (entry_state == TX_FSM_BULK_TRANSFER &&
+        g_tx_fsm.state != TX_FSM_BULK_TRANSFER) {
+      SONDE_LOG_STR("R3-01: science deadline reached - bulk transfer yields\r\n");
+    }
   }
 
   /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
@@ -2167,8 +2110,7 @@ static void SendTxData(void)
    * "now + interval". A bulk continuation (g_tx_state still BULK_TRANSFER at
    * this point) re-points the timer at the existing deadline WITHOUT
    * advancing it; only a serviced science cycle moves the deadline. */
-  RescheduleScienceTimer(plan.tx_interval_ms,
-                         g_tx_state != TX_STATE_BULK_TRANSFER);
+  RescheduleScienceTimer(plan.tx_interval_ms);
   
   // Log power management status
   /* F27 FIX: integer-only print (no float printf support linked) */
@@ -2313,10 +2255,10 @@ static void SendTxData(void)
   GnssAcquisitionResult_t gnss_result = GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
   
   // C7a FIX: cached bulk recovery skips GNSS; new science never does.
-  if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
+  if (!gps_enabled_by_power_mgmt || g_tx_fsm.state == TX_FSM_BULK_TRANSFER) {
     /* Bulk callbacks do not create a new observation. The disabled-plan branch
      * is a defensive backstop; first-flight plans are always GNSS-on. */
-    if (g_tx_state == TX_STATE_BULK_TRANSFER) {
+    if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER) {
       SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
     } else {
       SONDE_LOG_STR("Unexpected GNSS-disabled plan - rejecting live observation\r\n");
@@ -2337,7 +2279,7 @@ static void SendTxData(void)
      * are exempt: the probe that opened the burst ran the check first. No
      * fix EVER (cold boot) -> transmit: a sonde that has never had a fix
      * cannot be known to be restricted, and going dark forever is worse. */
-    if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+    if (g_tx_fsm.state != TX_FSM_BULK_TRANSFER) {
       float la, lo, al;
       /* DR-02 (#237): only an explicit RESTRICTED silences. UNKNOWN (no fix
        * ever, or an implausible stored position) maps to the documented
@@ -2399,7 +2341,7 @@ static void SendTxData(void)
 
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
-  if (g_tx_state != TX_STATE_BULK_TRANSFER &&
+  if (g_tx_fsm.state != TX_FSM_BULK_TRANSFER &&
       (gnss_result != GNSS_ACQUIRE_FRESH_GOOD_FIX ||
        !time_disciplined_this_wake)) {
     /* An admitted science wake without this wake's accepted GNSS package is
@@ -2428,7 +2370,7 @@ static void SendTxData(void)
    * same hgnss fix internally, so the merge above is not undone.
    * Science path only: bulk continuations skip GPS and must not pay the
    * MS5607 OSR_4096 + SHT31 cost (ArchiveSample already skips them). */
-  if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+  if (g_tx_fsm.state != TX_FSM_BULK_TRANSFER) {
     EnvSensors_Read(&sensor_data);
 
     /* The post-GNSS sample is the one archived and transmitted. If the rail
@@ -2550,7 +2492,13 @@ static void OnTxTimerEvent(void *context)
   /* USER CODE BEGIN OnTxTimerEvent_1 */
   SONDE_LOG_STR("\r\n*** OnTxTimerEvent FIRED ***\r\n");
   /* USER CODE END OnTxTimerEvent_1 */
-  UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+  {
+    TxFsmEventOutput_t fsm_out;
+    TxFsm_OnTxTimer(&fsm_out);
+    if (fsm_out.arm_send_task) {
+      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+    }
+  }
 
   /* LT-07 (#277): NO bare UTIL_TIMER_Start(&TxTimer) here - it was a second
    * arming path next to RescheduleScienceTimer and fired on a stale partial
@@ -2614,43 +2562,60 @@ static void OnTxData(LmHandlerTxParams_t *params)
    * deduplicates by (device, base_seq + i) and owns gap repair. */
 
   /* DDR-0005 (#34): the confirmed probe heartbeat opens the archive opportunity.
-   * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15). */
-  if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
-    g_probe_sent_ms = 0;  /* LT-07 (#277): the wait is resolved one way or the other */
-    if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      /* Use the admitted post-GNSS sample; this prevents receiver-load sag
-       * from opening a cached-data burst on an obsolete pre-load voltage. */
-      uint16_t battery_mv = s_cycle_batt_mv;
-      bool battery_good = (battery_mv >= CfgBulkBattMin());
-      bool has_cache = FlashLog_HasUnsentData(&hflashlog);
+   * No ACK -> stay in long-range mode, no archive probe (protocol §5.1/§15).
+   * R3-03 (#217): mission-aware TX policy (DDR-0005 INV-TX-006,
+   * BR-TX-016/017, P-TX-008): during ASCENT the current 10 s
+   * full-resolution observations are far more valuable than historical
+   * recovery - never open the archive opportunity. The climb is short;
+   * the backlog keeps and recovery resumes automatically in FLOAT
+   * (BR-TX-019/020).
+   * Stage 5: the WAIT_PROBE_ACK resolution and the bulk-continuation tail
+   * are the pure TxFsm_OnTxConfirm step; this adapter gathers the inputs,
+   * then performs the mandated actions (defer, re-arm). */
+  {
+    /* Use the admitted post-GNSS sample; this prevents receiver-load sag
+     * from opening a cached-data burst on an obsolete pre-load voltage. */
+    bool battery_good = (s_cycle_batt_mv >= CfgBulkBattMin());
+    bool has_cache = FlashLog_HasUnsentData(&hflashlog);
+    bool was_waiting = (g_tx_fsm.state == TX_FSM_WAIT_PROBE_ACK);
+    bool was_bulk_tail = (g_tx_fsm.state == TX_FSM_BULK_TRANSFER &&
+                          g_tx_fsm.bulk_packets_sent > 1);
+    if (was_waiting &&
+        params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
-                        battery_mv, battery_good ? "GOOD" : "LOW",
+                        s_cycle_batt_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
-      /* R3-03 (#217): mission-aware TX policy (DDR-0005 INV-TX-006,
-       * BR-TX-016/017, P-TX-008): during ASCENT the current 10 s
-       * full-resolution observations are far more valuable than historical
-       * recovery - never open the archive opportunity. The climb is short;
-       * the backlog keeps and recovery resumes automatically in FLOAT
-       * (BR-TX-019/020). */
-      if (battery_good && has_cache && MissionState_Get() != MISSION_ASCENT) {
-        SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
-        /* Finding #8: defer header persistence for the whole burst — one
-         * sector erase at flush instead of one per ACKed packet. */
-        FlashLog_DeferHeaderSync(&hflashlog);
-        g_burst_opened_ms = HAL_GetTick();  /* LT-07 (#277): bound the burst */
-        g_tx_state = TX_STATE_BULK_TRANSFER;
-        g_bulk_packets_sent = 0;
-        UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-      } else {
-        if (battery_good && has_cache) {
-          SONDE_LOG_STR("R3-03: ASCENT — archive recovery inhibited (live science prioritized)\r\n");
-        }
-        g_tx_state = TX_STATE_COMPLETE;
-      }
-    } else {
+    }
+    TxFsmConfirmInput_t fsm_in = {
+      HAL_GetTick(),
+      params->Status == LORAMAC_EVENT_INFO_STATUS_OK,
+      params->AckReceived != 0,
+      battery_good,
+      has_cache,
+      MissionState_Get() != MISSION_ASCENT,
+      CfgMaxBulkPkts()
+    };
+    TxFsmEventOutput_t fsm_out;
+    TxFsm_OnTxConfirm(&g_tx_fsm, &fsm_in, &fsm_out);
+    if (fsm_out.defer_header_sync) {
+      SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
+      /* Finding #8: defer header persistence for the whole burst — one
+       * sector erase at flush instead of one per ACKed packet. */
+      FlashLog_DeferHeaderSync(&hflashlog);
+    } else if (was_waiting &&
+               !(params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived)) {
       SONDE_LOG("Probe heartbeat NOT acknowledged (status %d, ack %d) — no archive opportunity\r\n",
                         params->Status, params->AckReceived);
-      g_tx_state = TX_STATE_COMPLETE;
+    } else if (was_waiting && battery_good && has_cache) {
+      SONDE_LOG_STR("R3-03: ASCENT — archive recovery inhibited (live science prioritized)\r\n");
+    }
+    if (fsm_out.arm_send_task) {
+      if (was_bulk_tail) {
+        SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
+      }
+      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
+    } else if (was_bulk_tail && g_tx_fsm.state == TX_FSM_COMPLETE) {
+      SONDE_LOG_STR("OnTxData: Bulk transfer complete\r\n");
     }
   }
 
@@ -2705,17 +2670,9 @@ static void OnTxData(LmHandlerTxParams_t *params)
    *               so touching the state here would race it — the FR-14 (#88)
    *               finding, which stays fixed.
    * Only sent > 1 is a terminal condition this callback may decide. */
-  if (g_tx_state == TX_STATE_BULK_TRANSFER && g_bulk_packets_sent > 1) {
-    if (FlashLog_HasUnsentData(&hflashlog) &&
-        g_bulk_packets_sent < CfgMaxBulkPkts()) {
-      SONDE_LOG_STR("OnTxData: Re-arming bulk transfer (next packet)...\r\n");
-      UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaSendOnTxTimerOrButtonEvent), CFG_SEQ_Prio_0);
-    } else {
-      SONDE_LOG_STR("OnTxData: Bulk transfer complete\r\n");
-      g_tx_state = TX_STATE_COMPLETE;
-      g_bulk_packets_sent = 0;
-    }
-  }
+  /* (Stage 5: the tail this comment describes is decided inside the
+   * TxFsm_OnTxConfirm step call above; the step encodes these ownership
+   * rules - nothing here may terminate packet counts 0 or 1.) */
   /* USER CODE END OnTxData_1 */
 }
 

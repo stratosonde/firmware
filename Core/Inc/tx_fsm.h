@@ -104,6 +104,12 @@ void     TxFsm_Dispatch(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
 bool TxFsm_ScienceIsDue(const TxFsm_t *fsm, uint32_t now_ms);
 bool TxFsm_BurstStale(const TxFsm_t *fsm, uint32_t now_ms,
                       uint32_t burst_max_open_ms);
+bool TxFsm_ProbeStale(const TxFsm_t *fsm, uint32_t now_ms,
+                      uint32_t burst_max_open_ms);
+
+/* Direct deadline re-base (first-flight survival retry path re-arms at
+ * now + retry_ms, bypassing the phase-preserving advance). */
+void TxFsm_SetScienceDue(TxFsm_t *fsm, uint32_t due_ms);
 
 /* Report the outcome of a mandated send. has_unsent_now is re-queried AFTER
  * the adapter's send-time watermark advance. Probe: ok -> WAIT (stamped),

@@ -209,26 +209,37 @@ static void scan_firmware(void)
     cfg_ontxdata_reentrant =
         (strstr(norm, "if (params->IsMcpsConfirm == 0) { return; }") == NULL);
 
+    /* Stage 5.4b: the decision shapes moved VERBATIM into the pure module
+     * Core/Src/tx_fsm.c (fsm-> fields instead of the old globals). The
+     * anchors below lock them there; the adapter-side shapes (IsMcpsConfirm
+     * early return, the absent tail, the timer never re-arming, the retire
+     * loop, the no-budget log) stay locked on lora_app.c. */
+    char *fsm  = slurp("../../Core/Src/tx_fsm.c");
+    char *fnorm = normalize_code(fsm);
+    free(fsm);
+
     cfg_yield_science_due =
-        (strstr(norm, "if (g_tx_state == TX_STATE_BULK_TRANSFER && ScienceIsDue()) {") != NULL);
+        (strstr(fnorm, "if (fsm->state == TX_FSM_BULK_TRANSFER && TxFsm_ScienceIsDue(fsm, now_ms)) {") != NULL);
     cfg_lt07_probe =
-        (strstr(norm, "g_tx_state == TX_STATE_WAIT_PROBE_ACK && g_probe_sent_ms != 0 && (uint32_t)(now_ms - g_probe_sent_ms) > BURST_MAX_OPEN_MS") != NULL);
+        (strstr(fnorm, "fsm->state == TX_FSM_WAIT_PROBE_ACK && fsm->probe_sent_ms != 0 && (uint32_t)(in->now_ms - fsm->probe_sent_ms) > in->burst_max_open_ms") != NULL);
     cfg_lt07_burst =
-        (strstr(norm, "g_tx_state == TX_STATE_BULK_TRANSFER && g_burst_opened_ms != 0 && (uint32_t)(now_ms - g_burst_opened_ms) > BURST_MAX_OPEN_MS") != NULL);
+        (strstr(fnorm, "fsm->state == TX_FSM_BULK_TRANSFER && fsm->burst_opened_ms != 0 && (uint32_t)(in->now_ms - fsm->burst_opened_ms) > in->burst_max_open_ms") != NULL);
     cfg_ascent_gate =
-        (strstr(norm, "MissionState_Get() != MISSION_ASCENT") != NULL);
+        (strstr(fnorm, "!in->mission_ascent") != NULL);
     cfg_defer_at_open =
-        (strstr(norm, "FlashLog_DeferHeaderSync(&hflashlog); g_burst_opened_ms = HAL_GetTick();") != NULL);
+        (strstr(fnorm, "out->defer_header_sync = true; fsm->burst_opened_ms = in->now_ms;") != NULL);
     cfg_flush_on_reset =
-        (strstr(norm, "FlashLog_FlushHeaderSync(&hflashlog); g_tx_state = TX_STATE_PROBE_SF10; g_bulk_packets_sent = 0;") != NULL);
+        (strstr(fnorm, "out->flush_header_sync = true; fsm->state = TX_FSM_PROBE_SF10; fsm->bulk_packets_sent = 0;") != NULL);
     cfg_phase_advance =
-        (strstr(norm, "g_science_due_ms += interval_ms;") != NULL);
+        (strstr(fnorm, "fsm->science_due_ms += interval_ms;") != NULL);
     cfg_rebase =
-        (strstr(norm, "g_science_due_ms = now_ms + interval_ms;") != NULL);
+        (strstr(fnorm, "fsm->science_due_ms = now_ms + interval_ms;") != NULL);
     cfg_lt01_clamp =
-        (strstr(norm, "if (remain_ms <= 0) remain_ms = 1;") != NULL);
+        (strstr(fnorm, "if (remain_ms <= 0) remain_ms = 1;") != NULL);
     cfg_abort_park =
-        (strstr(norm, "if (g_tx_state == TX_STATE_PROBE_SF10) return;") != NULL);
+        (strstr(fnorm, "if (fsm->state == TX_FSM_PROBE_SF10) return false;") != NULL);
+    free(fnorm);
+
     cfg_retire_unconvertible =
         (strstr(norm, "FlashLog_MarkRecoverySent(&hflashlog, flash_records[i].sequence);") != NULL);
     cfg_no_budget_complete =

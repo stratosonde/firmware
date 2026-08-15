@@ -35,6 +35,18 @@ bool TxFsm_BurstStale(const TxFsm_t *fsm, uint32_t now_ms,
            (uint32_t)(now_ms - fsm->burst_opened_ms) > burst_max_open_ms;
 }
 
+bool TxFsm_ProbeStale(const TxFsm_t *fsm, uint32_t now_ms,
+                      uint32_t burst_max_open_ms)
+{
+    return fsm->state == TX_FSM_WAIT_PROBE_ACK && fsm->probe_sent_ms != 0 &&
+           (uint32_t)(now_ms - fsm->probe_sent_ms) > burst_max_open_ms;
+}
+
+void TxFsm_SetScienceDue(TxFsm_t *fsm, uint32_t due_ms)
+{
+    fsm->science_due_ms = due_ms;
+}
+
 void TxFsm_OnCycleEntry(TxFsm_t *fsm, uint32_t now_ms)
 {
     /* R3-01 (#215): a bulk continuation yields when the science deadline

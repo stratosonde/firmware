@@ -184,12 +184,16 @@ science_cycle:
     return max_gap;
 }
 
-static void test_r301_bulk_starvation(const char *app)
+static void test_r301_bulk_starvation(const char *app, const char *txfsm)
 {
     printf("-- R3-01 (P0/P1, #215): bulk recovery must not starve current science\n");
 
-    bool has_deadline  = strstr(app, "g_science_due_ms") != NULL;
-    bool has_yield     = strstr(app, "ScienceIsDue") != NULL;
+    /* Stage 5.4b: the absolute-deadline machinery lives in the extracted
+     * pure module Core/Src/tx_fsm.c; lora_app.c's evidence is the phased
+     * entry call (the yield) at SendTxData's head. */
+    bool has_deadline  = strstr(txfsm, "science_due_ms") != NULL;
+    bool has_yield     = strstr(txfsm, "TxFsm_ScienceIsDue") != NULL &&
+                         strstr(app, "TxFsm_OnCycleEntry") != NULL;
     bool relative_arm  = strstr(app, "UTIL_TIMER_SetPeriod(&TxTimer, plan.tx_interval_ms)") != NULL;
 
     printf("   scan: absolute deadline var=%s science-due yield=%s relative re-arm=%s\n",
@@ -290,8 +294,9 @@ static void test_r303_ascent_no_bulk(const char *app)
            gated ? "yes" : "NO (defect)");
     CHECK_REGRESSION(gated, "R3-03");
 
-    /* Guard: the opportunity itself still exists (float recovery intact). */
-    CHECK(occurs_before(sig, end, "TX_STATE_BULK_TRANSFER"));
+    /* Guard: the opportunity itself still exists (float recovery intact).
+     * Stage 5.4b: the FSM decision is the TxFsm_OnTxConfirm step call. */
+    CHECK(occurs_before(sig, end, "TxFsm_OnTxConfirm"));
 }
 
 /* ------------------------------------------------------------------ */
@@ -485,10 +490,11 @@ int main(void)
     char *sensc  = normalize_code(slurp("../../Core/Src/sys_sensors.c"));
     char *lpm    = normalize_code(slurp("../../Core/Src/stm32_lpm_if.c"));
     char *mreg   = normalize_code(slurp("../../Core/Src/multiregion_context.c"));
+    char *txfsm  = normalize_code(slurp("../../Core/Src/tx_fsm.c"));
 
     printf("=== 2026-08-12 deep review regressions (R3 series) ===\n\n");
 
-    test_r301_bulk_starvation(app);
+    test_r301_bulk_starvation(app, txfsm);
     printf("\n");
     test_r302_gnss_wake_stale(app);
     printf("\n");

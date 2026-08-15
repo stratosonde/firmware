@@ -209,7 +209,11 @@ static int count_in_function(const char *src, const char *sig, const char *needl
 /* LT-01 - BEHAVIOURAL: the science timer period can never exceed one interval */
 /* ========================================================================== */
 
-#define LT_RESCHED_SIG  "static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)"
+/* Stage 5.4b: the wrapper kept its home in lora_app.c (one signature change:
+ * the science_cycle flag is now derived from the FSM state inside the pure
+ * step) and the deadline arithmetic moved to TxFsm_Reschedule in
+ * Core/Src/tx_fsm.c. */
+#define LT_RESCHED_SIG  "static void RescheduleScienceTimer(uint32_t interval_ms)"
 
 /* Core/Src/timer_if.c: ret = ((uint32_t)((((uint64_t) timeMilliSec) << RTC_N_PREDIV_S) / 1000));
  * The uint32_t cast ALIASES rather than saturates - that is what turns the
@@ -252,15 +256,17 @@ static uint32_t model_reschedule_period_ms(uint32_t *due, uint32_t now,
     return delay_ms;
 }
 
-/* The fix is present when the bare unsigned subtraction is gone and a SECOND
- * signed cast has appeared (HEAD has exactly one: the re-base guard). */
-static bool lt01_fix_present(const char *app)
+/* The fix is present when the bare unsigned subtraction is gone and the
+ * signed clamp is present. Stage 5.4b: the arithmetic lives in
+ * TxFsm_Reschedule (Core/Src/tx_fsm.c). */
+static bool lt01_fix_present(const char *txfsm)
 {
     bool bare_subtraction_gone =
-        !in_function(app, LT_RESCHED_SIG, "uint32_t delay_ms = g_science_due_ms - now_ms;");
-    bool second_signed_cast =
-        count_in_function(app, LT_RESCHED_SIG, "(int32_t)") >= 2;
-    return bare_subtraction_gone && second_signed_cast;
+        !in_function(txfsm, "uint32_t TxFsm_Reschedule(TxFsm_t *fsm, uint32_t now_ms, uint32_t interval_ms)",
+                     "uint32_t delay_ms = fsm->science_due_ms - now_ms;");
+    bool signed_clamp_present =
+        (strstr(txfsm, "if (remain_ms <= 0) remain_ms = 1;") != NULL);
+    return bare_subtraction_gone && signed_clamp_present;
 }
 
 static void test_lt01_bulk_continuation_never_overshoots(bool fixed)
@@ -360,17 +366,19 @@ static void test_lt01_wrap_era_still_absorbed(bool fixed)
     CHECK(period == interval);
 }
 
-static void test_lt01_structural(const char *app)
+static void test_lt01_structural(const char *app, const char *txfsm)
 {
     printf("LT-01: structural - the unguarded subtraction must be gone\n");
 
+    /* The timer is still programmed in exactly one place (the wrapper). */
     CHECK(count_in_function(app, LT_RESCHED_SIG, "UTIL_TIMER_SetPeriod") == 1);
 
     CHECK_REGRESSION(
-        !in_function(app, LT_RESCHED_SIG, "uint32_t delay_ms = g_science_due_ms - now_ms;"),
+        !in_function(txfsm, "uint32_t TxFsm_Reschedule(TxFsm_t *fsm, uint32_t now_ms, uint32_t interval_ms)",
+                     "uint32_t delay_ms = fsm->science_due_ms - now_ms;"),
         "LT-01-unguarded-subtraction");
     CHECK_REGRESSION(
-        count_in_function(app, LT_RESCHED_SIG, "(int32_t)") >= 2,
+        strstr(txfsm, "if (remain_ms <= 0) remain_ms = 1;") != NULL,
         "LT-01-signed-clamp-present");
 }
 
@@ -714,12 +722,13 @@ int main(void)
     char *mainc = strip_comments(slurp("../../Core/Src/main.c"));
     char *mstate = strip_comments(slurp("../../Core/Src/mission_state.c"));
     char *mregh  = strip_comments(slurp("../../Core/Inc/multiregion_context.h"));
+char *txfsm  = strip_comments(slurp("../../Core/Src/tx_fsm.c"));
 
     printf("=== LT-series review regressions (2026-08-13) ===\n\n");
 
     /* The behavioural LT-01 model runs in the shape the REAL source has, so it
      * cannot go green by editing the test (test_burst_fsm.c precedent). */
-    bool fixed = lt01_fix_present(app);
+    bool fixed = lt01_fix_present(txfsm);
     printf("LT-01 fix detected in lora_app.c: %s\n\n", fixed ? "YES" : "NO");
 
     test_lt01_bulk_continuation_never_overshoots(fixed);
@@ -730,7 +739,7 @@ int main(void)
     printf("\n");
     test_lt01_wrap_era_still_absorbed(fixed);
     printf("\n");
-    test_lt01_structural(app);
+    test_lt01_structural(app, txfsm);
     printf("\n");
     test_lt06_compensation_monotonic();
     printf("\n");

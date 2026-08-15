@@ -5,6 +5,7 @@
 ./Core/Src/flash_log.o
 ./Core/Src/first_flight_policy.o
 ./Core/Src/gnss_acquire.o
+./Core/Src/tx_fsm.o
 ./Core/Src/main.o
 ./Core/Src/mission_state.o
 ./Core/Src/mission_logic.o
