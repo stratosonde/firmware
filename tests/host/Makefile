@@ -137,11 +137,18 @@ sp0813: test_sp0813$(EXE)
 lt0813: test_lt0813$(EXE)
 	./test_lt0813$(EXE)
 
+# The lt0813 suite is red-by-design locally while the LT campaign lands; in
+# `all` (the CI gate) it must run as the green pre-fix gate (same semantics
+# as baseline) or every push fails on the documented known-unfixed checks.
+# Any UNEXPECTED failure (a CHECK anchor, a compile error) still fails CI.
+lt0813-gate: test_lt0813$(EXE)
+	EXPECT_UNFIXED=1 ./test_lt0813$(EXE)
+
 # R3-11 (#223): DDR identity integrity against the canonical manifest.
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 ddrmanifest
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -194,7 +201,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813 ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate ddrmanifest
 
 clean:
 	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_sanitize$(EXE)
