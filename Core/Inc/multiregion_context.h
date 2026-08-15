@@ -64,7 +64,11 @@ extern "C" {
  * banks mismatch-reject (FlashLoadStorage/FlashLoadTier2) and the unit
  * re-commissions on the bench - acceptable pre-first-flight, no in-field
  * migration. */
-#define MULTIREGION_VERSION              4
+/* C-01 (#270): v5 adds the durable PROVISIONED latch to the Tier-1 bank
+ * (uint32_t magic before crc32, inside the existing CRC span). v4 banks
+ * mismatch-reject and re-commission on the bench - same policy as the
+ * v3->v4 bump; pre-first-flight, no in-field migration. */
+#define MULTIREGION_VERSION              5
 
 /* Exported types ------------------------------------------------------------*/
 
@@ -154,6 +158,15 @@ LoRaMacRegion_t MultiRegion_GetActiveRegion(void);
  * @retval bool: true if region is joined and context is valid
  */
 bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region);
+
+/**
+ * @brief Check whether provisioning is complete (durable latch)
+ * @retval bool: true only when the CRC-valid Tier-1 bank carries the
+ *         PROVISIONED magic AND every required region still validates
+ * @note C-01 (#270, DDR-0018): the latch is written only by the post-
+ *       pre-join verification step and gates the one-way flight door.
+ */
+bool MultiRegion_IsProvisioningComplete(void);
 
 /**
  * @brief Auto-switch based on GPS location (if enabled)

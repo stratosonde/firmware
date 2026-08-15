@@ -344,11 +344,14 @@ static void test_sp05_structural(const char *conf, const char *app, const char *
                      "SP-05-identity-ru864");
     CHECK_REGRESSION(strstr(seid, "LORAWAN_DEVICE_EUI_RU864") != NULL, "SP-05-deveui-ru864");
 
-    /* Bank holds 7 slots; persisted format bumped so old banks re-commission. */
+    /* Bank holds 7 slots; persisted format bumped so old banks re-commission.
+     * C-01 (#270) bumped v4 -> v5: the Tier-1 bank now carries the durable
+     * PROVISIONED latch; v4 banks mismatch-reject and re-commission on the
+     * bench (same policy as the v3 -> v4 bump below). */
     CHECK_REGRESSION(strstr(mregh, "#define MAX_REGION_CONTEXTS              7") != NULL,
                      "SP-05-slots-7");
-    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              4") != NULL,
-                     "SP-05-version-4");
+    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              5") != NULL,
+                     "SP-05-version-5");
 
     /* Ground-join-all and boot resume-scan cover the new regions. */
     CHECK_REGRESSION(in_function(mreg, "kPreJoinRegions[] =", "LORAMAC_REGION_IN865"), "SP-05-prejoin-in865");

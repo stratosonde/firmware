@@ -524,6 +524,87 @@ static void test_sp05_all_seven_regions_supported(void)
 }
 
 /* ========================================================================== */
+/* C-01 (P0) — durable PROVISIONED latch in the Tier-1 bank                    */
+/* ========================================================================== */
+/* MissionState_Update opened the one-way flight door on pressure departure
+ * alone; joins are commissioning-only (DDR-0018 INV-COMM-001), so an
+ * unprovisioned unit that latched ASCENT could never join - archive-only
+ * mission. The fix gates the door on a provisioned magic carried by the
+ * CRC-valid Tier-1 bank, written only after commissioning verifies read-back
+ * of every required region. The negative legs below are the proof the latch
+ * is real, not cosmetic. */
+static void test_c01_provisioning_latch(void)
+{
+    printf("-- C-01 (P0): durable PROVISIONED latch gates the flight door\n");
+
+    static const struct { LoRaMacRegion_t region; uint8_t key0; } kAll[] = {
+        { LORAMAC_REGION_US915, 0xA0 }, { LORAMAC_REGION_EU868, 0xB0 },
+        { LORAMAC_REGION_AS923, 0xC0 }, { LORAMAC_REGION_AU915, 0xD0 },
+        { LORAMAC_REGION_IN865, 0xE0 }, { LORAMAC_REGION_KR920, 0xF0 },
+        { LORAMAC_REGION_RU864, 0x20 },
+    };
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+
+    /* Virgin bank: erased flash must read as NOT provisioned. */
+    CHECK_REGRESSION(!MultiRegion_IsProvisioningComplete(), "C-01-virgin");
+
+    /* Commission all seven through the real ABP entry point (each call
+     * persists the Tier-1 bank via the commissioning save path). */
+    for (uint32_t i = 0; i < sizeof(kAll)/sizeof(kAll[0]); i++) {
+        uint8_t app_key[16], nwk_key[16];
+        memset(app_key, kAll[i].key0, sizeof(app_key));
+        memset(nwk_key, (uint8_t)(kAll[i].key0 + 1u), sizeof(nwk_key));
+        if (!MultiRegion_InitializeRegionFromNetworkServer(
+                kAll[i].region, 0x26010000u + i, app_key, nwk_key)) {
+            printf("   SETUP FAILED: commission %s\n", RegionToString(kAll[i].region));
+            exit(2);
+        }
+    }
+
+    /* Joined but not yet verified: the latch requires the read-back step. */
+    CHECK_REGRESSION(!MultiRegion_IsProvisioningComplete(), "C-01-unverified");
+
+    /* The commissioning verification step (the step that ends
+     * MultiRegion_PreJoinAllRegions on target): every required region must
+     * read back from flash valid; only then is the latch written. */
+    CHECK_REGRESSION(VerifyAndSetProvisioningLatch(), "C-01-verify-runs");
+    CHECK_REGRESSION(MultiRegion_IsProvisioningComplete(), "C-01-latch-set");
+
+    /* Durable: a reboot (RAM gone) restores the latch from the CRC-valid
+     * Tier-1 bank, not from any RAM residue. */
+    g_initialized = false;
+    memset(&g_storage, 0, sizeof(g_storage));
+    g_provisioned = 0;  /* RAM clears on a real reboot */
+    mac_reset();
+    MultiRegion_Init();
+    CHECK_REGRESSION(MultiRegion_IsProvisioningComplete(), "C-01-survives-reboot");
+
+    /* One invalidated region slot in the persisted bank -> not provisioned,
+     * even though the latch magic itself is still present in the bank. */
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_EU868) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+    g_storage.contexts[slot].dev_addr = 0xFFFFFFFFUL;
+    UpdateContextCRC(&g_storage.contexts[slot]);
+    g_tier1_dirty = true;
+    if (!FlashWriteTier1()) { printf("   SETUP FAILED: rewrite\n"); exit(2); }
+    CHECK_REGRESSION(!MultiRegion_IsProvisioningComplete(), "C-01-poisoned-slot");
+
+    g_initialized = false;
+    memset(&g_storage, 0, sizeof(g_storage));
+    g_provisioned = 0;
+    mac_reset();
+    MultiRegion_Init();
+    CHECK_REGRESSION(!MultiRegion_IsProvisioningComplete(), "C-01-poisoned-persisted");
+}
+
+/* ========================================================================== */
 /* R3 (P0) — FCnt restore must resume AHEAD of the true network counter       */
 /* ========================================================================== */
 
@@ -778,6 +859,8 @@ printf("\n");
 test_r1_restore_fail_closed();
 test_f01_restore_steps123_fail_closed();
 test_sp05_all_seven_regions_supported();
+    printf("\n");
+    test_c01_provisioning_latch();
     printf("\n");
     test_r3_fcnt_reset_margin();
     test_dr07_single_margin();

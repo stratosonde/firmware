@@ -153,6 +153,20 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
      * the unit to ASCENT cadence. */
     if (s_state == MISSION_COMMISSIONING) {
         if (LaunchDetector_Update(&s_launch_det, pressure_hpa, pressure_valid, now_s)) {
+            /* C-01 (#270, DDR-0018): the one-way flight door is gated on the
+             * durable PROVISIONED latch in the Tier-1 credential bank. A
+             * virgin or partially provisioned unit that sees a qualifying
+             * pressure drop (real launch, drive uphill, storm front) must
+             * NOT latch ASCENT: joins are commissioning-only, so it could
+             * never join and the mission would be archive-only. The launch
+             * detector keeps tracking its reference either way, so the door
+             * can still open on a later update once provisioning completes.
+             * The persisted-state restore path (Init) is untouched: an
+             * already-flying unit still restores ASCENT. */
+            if (!MultiRegion_IsProvisioningComplete()) {
+                SONDE_LOG_STR("MissionState: LAUNCH detected but NOT provisioned - door stays shut (DDR-0018)\r\n");
+                return;
+            }
             SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
             /* F1 (#167): persist the launch reference BEFORE entering flight —
              * a reset during ascent must be able to restore it or FLOAT is

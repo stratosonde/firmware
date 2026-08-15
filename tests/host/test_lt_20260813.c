@@ -653,6 +653,38 @@ static void test_lt11_dead_timestamp_param(const char *app)
 }
 
 /* ========================================================================== */
+/* C-01 - the one-way flight door must be gated on a PROVISIONED latch         */
+/* ========================================================================== */
+
+static void test_c01_flight_door_gated(const char *mstate, const char *mregh)
+{
+    printf("C-01: launch detection must not open the flight door unprovisioned\n");
+
+    /* MissionState_Update's commissioning branch called the one-way
+     * MissionState_EnterFlight() on pressure departure alone, while joins are
+     * commissioning-only (DDR-0018 INV-COMM-001): a virgin or partially
+     * provisioned unit latching ASCENT could never join - an archive-only
+     * mission. The door must be gated on the durable Tier-1 PROVISIONED
+     * latch, and EnterFlight must not be reachable before that gate. */
+    char *body = function_body(mstate, "void MissionState_Update(");
+    CHECK(body != NULL);
+    bool gated = false;
+    if (body) {
+        const char *gate = strstr(body, "MultiRegion_IsProvisioningComplete");
+        const char *door = strstr(body, "MissionState_EnterFlight();");
+        gated = (gate != NULL) && (door != NULL) && (gate < door);
+        free(body);
+    }
+    CHECK_REGRESSION(gated, "C-01-door-gate");
+
+    /* The latch lives in the Tier-1 bank: persisted-format bump v4 -> v5
+     * (v4 banks mismatch-reject and re-commission on the bench, same policy
+     * as the v3 -> v4 bump in #246). */
+    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              5") != NULL,
+                     "C-01-version-5");
+}
+
+/* ========================================================================== */
 
 int main(void)
 {
@@ -661,6 +693,8 @@ int main(void)
     char *mreg  = strip_comments(slurp("../../Core/Src/multiregion_context.c"));
     char *lpm   = strip_comments(slurp("../../Core/Src/stm32_lpm_if.c"));
     char *mainc = strip_comments(slurp("../../Core/Src/main.c"));
+    char *mstate = strip_comments(slurp("../../Core/Src/mission_state.c"));
+    char *mregh  = strip_comments(slurp("../../Core/Inc/multiregion_context.h"));
 
     printf("=== LT-series review regressions (2026-08-13) ===\n\n");
 
@@ -696,8 +730,11 @@ int main(void)
     test_lt10_vspeed_gated_on_parse(gnss);
     printf("\n");
     test_lt11_dead_timestamp_param(app);
+    printf("\n");
+    test_c01_flight_door_gated(mstate, mregh);
 
     free(app); free(gnss); free(mreg); free(lpm); free(mainc);
+    free(mstate); free(mregh);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

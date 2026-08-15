@@ -70,6 +70,10 @@ static uint8_t CfgFrameCounterSaveInterval(void)
 
 #define TIER1_MAGIC                      0x54314D52UL  /* 'T1MR' */
 #define TIER2_MAGIC                      0x54324D52UL  /* 'T2MR' */
+/* C-01 (#270): PROVISIONED latch magic ('PROV'). A magic, not a bool:
+ * distinct from 0 and 0xFFFFFFFF so a zeroed struct and erased flash both
+ * read as "not provisioned". */
+#define TIER1_PROVISIONED_MAGIC          0x50524F56UL  /* 'PROV' */
 
 /* Private types -------------------------------------------------------------*/
 
@@ -84,6 +88,9 @@ typedef struct {
     uint8_t active_slot;                 // Active slot at commissioning time
     uint32_t generation;                 // R8 (#190): monotonic; newest valid copy wins
     MinimalRegionContext_t contexts[MAX_REGION_CONTEXTS];
+    /* C-01 (#270): durable PROVISIONED latch. Before crc32 so the existing
+     * whole-bank CRC span covers it; TIER1_PROVISIONED_MAGIC when set. */
+    uint32_t provisioned;
     uint32_t crc32;                      // Whole-bank validation
 } __attribute__((aligned(8))) Tier1Bank_t;
 
@@ -149,6 +156,17 @@ static uint32_t g_t2_sequence = 0;       // Last Tier-2 sequence written/read
 static int8_t g_t2_last_slot = -1;       // Last Tier-2 slot written (-1 = none)
 static bool g_tier1_dirty = false;       // Static credentials changed, Tier-1 rewrite needed
 static uint32_t g_t1_generation = 0;     // R8 (#190): last Tier-1 generation read/written
+static uint32_t g_provisioned = 0;       // C-01 (#270): RAM mirror of the Tier-1 PROVISIONED latch
+
+/* F-R3 (#73) / SP-05 (#246) / C-01 (#270): the required-region set, at file
+ * scope so the pre-join ceremony and the provisioning-latch checks share
+ * one list - they can never drift apart. */
+static const LoRaMacRegion_t kPreJoinRegions[] = {
+    LORAMAC_REGION_US915, LORAMAC_REGION_EU868,
+    LORAMAC_REGION_AS923, LORAMAC_REGION_AU915,
+    LORAMAC_REGION_IN865, LORAMAC_REGION_KR920, LORAMAC_REGION_RU864,
+};
+#define NUM_PREJOIN_REGIONS  ((uint8_t)(sizeof(kPreJoinRegions) / sizeof(kPreJoinRegions[0])))
 
 /* Batched frame counter save infrastructure */
 static uint8_t g_unsaved_tx_count = 0;  // Track unsaved successful transmissions
@@ -165,6 +183,7 @@ static bool FlashReadStorage(void);
 static bool FlashWriteStorage(void);
 static bool FlashReadTier1(Tier1Bank_t *out);
 static bool FlashWriteTier1(void);
+static bool VerifyAndSetProvisioningLatch(void);  /* C-01 (#270) */
 static bool FlashReadTier2(Tier2Bank_t *out);
 static bool FlashWriteTier2(void);
 static int8_t FindContextSlot(LoRaMacRegion_t region);
@@ -208,7 +227,8 @@ void MultiRegion_Init(void)
     g_t2_sequence = 0;
     g_t2_last_slot = -1;
     g_tier1_dirty = false;
-    
+    g_provisioned = 0;  // C-01 (#270): fresh storage is never provisioned
+
     // Note: We rely on DevAddr==0 to detect empty slots, not region value
     // memset already zeroed everything, which is perfect for our needs
     
@@ -908,6 +928,7 @@ bool MultiRegion_ClearAllContexts(void)
     g_t2_sequence = 0;
     g_t2_last_slot = -1;
     g_tier1_dirty = false;
+    g_provisioned = 0;  // C-01 (#270): erasing the Tier-1 pages kills the latch
 
     // Erase all tier pages (3x Tier-1 + 2x Tier-2)
     bool ok = true;
@@ -1138,6 +1159,82 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region)
 }
 
 /**
+ * @brief C-01 (#270, DDR-0018): verify the persisted Tier-1 bank region by
+ *        region, then set or clear the durable PROVISIONED latch to match.
+ *        Runs at the end of MultiRegion_PreJoinAllRegions (commissioning
+ *        only). Every region in kPreJoinRegions[] must read back from flash
+ *        with a valid CRC, sane semantics and a non-zero DevAddr; only then
+ *        is the latch written. Any failure leaves the latch clear.
+ */
+static bool VerifyAndSetProvisioningLatch(void)
+{
+    Tier1Bank_t bank;
+    bool all_ok = true;
+
+    if (!FlashReadTier1(&bank)) {
+        SONDE_LOG_STR("PROVISIONING INCOMPLETE: no CRC-valid Tier-1 bank to verify\r\n");
+        all_ok = false;
+    } else {
+        for (uint8_t i = 0; i < NUM_PREJOIN_REGIONS; i++) {
+            LoRaMacRegion_t region = kPreJoinRegions[i];
+            bool region_ok = false;
+            for (uint8_t j = 0; j < MAX_REGION_CONTEXTS; j++) {
+                MinimalRegionContext_t *ctx = &bank.contexts[j];
+                if (ctx->region == region &&
+                    ValidateContextCRC(ctx) &&        /* CRC: the bytes survived */
+                    ValidateContextSemantics(ctx)) {  /* non-zero DevAddr, real keys */
+                    region_ok = true;
+                    break;
+                }
+            }
+            SONDE_LOG("PROVISIONING verify %s: %s\r\n",
+                      RegionToString(region), region_ok ? "ok" : "FAIL");
+            if (!region_ok) {
+                SONDE_LOG("PROVISIONING INCOMPLETE: %s not verified\r\n",
+                          RegionToString(region));
+                all_ok = false;
+            }
+        }
+    }
+
+    /* Persist the outcome either way: the latch must reflect THIS
+     * verification, so a stale magic from an earlier bank cannot survive a
+     * failed re-commission. Commissioning-only path - the extra Tier-1 write
+     * is irrelevant next to the one-way flight door this latch gates. */
+    g_provisioned = all_ok ? TIER1_PROVISIONED_MAGIC : 0;
+    if (!FlashWriteTier1()) {
+        /* The latch is only as good as its persistence: never report
+         * provisioned on a RAM-only flag. */
+        g_provisioned = 0;
+        SONDE_LOG_STR("PROVISIONING INCOMPLETE: Tier-1 latch write failed\r\n");
+        return false;
+    }
+    if (all_ok) {
+        SONDE_LOG_STR("PROVISIONING COMPLETE: all regions verified - latch set (C-01)\r\n");
+    }
+    return all_ok;
+}
+
+/**
+ * @brief C-01 (#270, DDR-0018): true only when the CRC-valid Tier-1 bank
+ *        carried the PROVISIONED latch at boot AND every required region
+ *        still validates. The per-region re-check means a bank that loses a
+ *        context after latching still reads as NOT provisioned.
+ */
+bool MultiRegion_IsProvisioningComplete(void)
+{
+    if (!g_initialized || g_provisioned != TIER1_PROVISIONED_MAGIC) {
+        return false;
+    }
+    for (uint8_t i = 0; i < NUM_PREJOIN_REGIONS; i++) {
+        if (!MultiRegion_IsRegionJoined(kPreJoinRegions[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * @brief Pre-join all required regions (ground operations)
  */
 bool MultiRegion_PreJoinAllRegions(void)
@@ -1171,13 +1268,9 @@ bool MultiRegion_PreJoinAllRegions(void)
 
     /* F-R3 (#73): one loop over the region table. SP-05 (#246): seven banks -
      * IN865/KR920/RU864 join on the bench too (DDR-0018 INV-COMM-001: join
-     * every configured region on the ground; the geofence maps all three). */
-    static const LoRaMacRegion_t kPreJoinRegions[] = {
-        LORAMAC_REGION_US915, LORAMAC_REGION_EU868,
-        LORAMAC_REGION_AS923, LORAMAC_REGION_AU915,
-        LORAMAC_REGION_IN865, LORAMAC_REGION_KR920, LORAMAC_REGION_RU864,
-    };
-    const uint8_t num_regions = (uint8_t)(sizeof(kPreJoinRegions) / sizeof(kPreJoinRegions[0]));
+     * every configured region on the ground; the geofence maps all three).
+     * C-01 (#270): the table is file scope, shared with the latch checks. */
+    const uint8_t num_regions = NUM_PREJOIN_REGIONS;
 
     for (uint8_t i = 0; i < num_regions; i++) {
         LoRaMacRegion_t region = kPreJoinRegions[i];
@@ -1222,6 +1315,15 @@ bool MultiRegion_PreJoinAllRegions(void)
         APP_LOG(TS_ON, VLEVEL_H, "PRE-JOIN: no banks provisioned (R30/D6)\r\n");
     } else {
         SONDE_LOG_STR("PRE-JOIN complete - COMMISSIONING quiet watch until arming/launch (#142)\r\n");
+    }
+
+    /* C-01 (#270, DDR-0018): the durable PROVISIONED latch is written only
+     * after every required region verifies against the persisted Tier-1
+     * bank. MissionState_Update's flight door reads this latch - a unit
+     * that could not verify every region can never latch ASCENT and be
+     * stranded unable to join. */
+    if (!VerifyAndSetProvisioningLatch()) {
+        all_success = false;
     }
 
     return all_success;
@@ -1503,6 +1605,7 @@ static bool FlashWriteTier1(void)
     t1.num_valid = g_storage.num_valid;
     t1.active_slot = g_storage.active_slot;
     t1.generation = ++g_t1_generation;  /* R8 (#190): newest valid copy wins on read */
+    t1.provisioned = g_provisioned;     /* C-01 (#270): carry the latch */
     memcpy(t1.contexts, g_storage.contexts, sizeof(t1.contexts));
     t1.crc32 = 0;
     t1.crc32 = CalculateCRC32((uint8_t*)&t1, sizeof(Tier1Bank_t) - 4);
@@ -1629,6 +1732,9 @@ static bool FlashReadStorage(void)
     g_storage.num_valid = t1.num_valid;
     g_storage.active_slot = t1.active_slot;
     memcpy(g_storage.contexts, t1.contexts, sizeof(g_storage.contexts));
+    /* C-01 (#270): the PROVISIONED latch restores only from a CRC-valid
+     * Tier-1 bank - never invented, never cached across a wipe. */
+    g_provisioned = t1.provisioned;
 
     bool counters_bumped = false;  /* R3 (#188): any margin applied */
     Tier2Bank_t t2 = {0};  /* F-17 (#67): silence maybe-uninitialized (false positive, but explicit) */

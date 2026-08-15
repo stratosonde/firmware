@@ -116,7 +116,7 @@ test_dr$(EXE): $(DR_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
 test_sp0813$(EXE): $(SP_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SP_SRCS) -lm
 
-test_lt0813$(EXE): $(LT_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/atgm336h.c ../../Core/Src/multiregion_context.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/main.c
+test_lt0813$(EXE): $(LT_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/atgm336h.c ../../Core/Src/multiregion_context.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/main.c ../../Core/Src/mission_state.c ../../Core/Inc/multiregion_context.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(LT_SRCS) -lm
 
 review0812: test_review0812$(EXE)
