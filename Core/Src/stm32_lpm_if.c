@@ -32,6 +32,7 @@
 #include "w25q16jv.h"  // For external flash deep power-down
 #include "stm32wlxx_ll_pwr.h"  // For LL_PWR_ClearFlag_C1STOP_C1STB
 #include "mission_state.h"  // R09: LED gating
+#include "sys_caps.h"  // LT-05 (#275): wake re-init failures mark capabilities
 #include "config.h"  // DR-04 (#240): CONFIG_MAX_TX_INTERVAL_MS for MAX_SLEEP_CHUNKS
 /* USER CODE END Includes */
 
@@ -376,7 +377,20 @@ void PWR_ExitStopMode(void)
    * come back must be VISIBLE, not silently used blind. Failures are counted
    * per peripheral class and printed; a flash (SPI) re-init failure is the
    * flight-critical one (the archive depends on it) and gets its own flag. */
+  /* LT-05 (#275): the F-029 counting/logging never reached the capability
+   * mask - telemetry kept claiming healthy hardware over a dead peripheral
+   * (#255 fixed the once-at-boot I2C2 twin). Each failing class now marks its
+   * capability: I2C2 -> SYS_CAP_SENSORS, SPI2/W25Q -> SYS_CAP_FLASH,
+   * UART1 -> SYS_CAP_GNSS. Debounced per class: the capability is marked
+   * only after STOP2_REINIT_CAP_FAIL_THRESHOLD CONSECUTIVE failing wakes of
+   * that class (a debounce choice, not a measurement - one transient must
+   * not condemn a peripheral, a persistent failure must not go unreported);
+   * a successful re-init resets that class's streak. */
+  #define STOP2_REINIT_CAP_FAIL_THRESHOLD  3
   static uint32_t stop2_reinit_fail_count = 0;
+  static uint8_t stop2_sensors_fail_streak = 0;  /* I2C2 */
+  static uint8_t stop2_flash_fail_streak = 0;    /* SPI2 + W25Q wake */
+  static uint8_t stop2_gnss_fail_streak = 0;     /* UART1 */
   bool reinit_failed = false;
 
   /* Re-enable peripheral clocks that were disabled for STOP2 */
@@ -391,7 +405,11 @@ void PWR_ExitStopMode(void)
   if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
     SONDE_LOG_STR("STOP2 REINIT FAIL: I2C2\r\n");
     reinit_failed = true;
+    if (++stop2_sensors_fail_streak >= STOP2_REINIT_CAP_FAIL_THRESHOLD) {
+      SysCaps_MarkFailed(SYS_CAP_SENSORS);  /* LT-05 (#275) */
+    }
   } else {
+    stop2_sensors_fail_streak = 0;  /* LT-05: healthy re-init clears the streak */
     /* S-09 (#233): re-apply the filter config from MX_I2C2_Init (same calls
      * as the bus-recovery path in sys_sensors.c). */
     HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE);
@@ -399,10 +417,12 @@ void PWR_ExitStopMode(void)
   }
 
   /* Re-initialize SPI2 - external flash needs this */
+  bool flash_class_ok = true;
   HAL_SPI_DeInit(&hspi2);
   if (HAL_SPI_Init(&hspi2) != HAL_OK) {
     SONDE_LOG_STR("STOP2 REINIT FAIL: SPI2 (flash archive at risk)\r\n");
     reinit_failed = true;
+    flash_class_ok = false;
   }
 
   /* FW-14: wake the flash from deep power-down. tRES1 = 3us max per
@@ -411,7 +431,14 @@ void PWR_ExitStopMode(void)
     if (W25Q_ReleasePowerDown(&hw25q) != W25Q_OK) {
       SONDE_LOG_STR("STOP2 REINIT FAIL: W25Q wake\r\n");
       reinit_failed = true;
+      flash_class_ok = false;
     }
+  }
+  /* LT-05 (#275): SPI2 and W25Q are one capability class (the archive). */
+  if (flash_class_ok) {
+    stop2_flash_fail_streak = 0;
+  } else if (++stop2_flash_fail_streak >= STOP2_REINIT_CAP_FAIL_THRESHOLD) {
+    SysCaps_MarkFailed(SYS_CAP_FLASH);
   }
 
   /* R17 (#31): VREFBUF enable removed — see the sleep-entry note. The FW-15
@@ -427,13 +454,19 @@ void PWR_ExitStopMode(void)
     if (HAL_UART_Init(&huart1) != HAL_OK) {
       SONDE_LOG_STR("STOP2 REINIT FAIL: UART1 (GNSS)\r\n");
       reinit_failed = true;
+      if (++stop2_gnss_fail_streak >= STOP2_REINIT_CAP_FAIL_THRESHOLD) {
+        SysCaps_MarkFailed(SYS_CAP_GNSS);  /* LT-05 (#275) */
+      }
+    } else {
+      stop2_gnss_fail_streak = 0;  /* LT-05: healthy re-init clears the streak */
     }
   }
 
   if (reinit_failed) {
     stop2_reinit_fail_count++;
-    SONDE_LOG("STOP2 reinit failures this boot: %lu\r\n",
-                      (unsigned long)stop2_reinit_fail_count);
+    /* LT-05 (#275): the summary line now carries the capability mask. */
+    SONDE_LOG("STOP2 reinit failures this boot: %lu (caps failed-mask=0x%02X)\r\n",
+                      (unsigned long)stop2_reinit_fail_count, (unsigned)SysCaps_Raw());
   }
   
   /* USER CODE END ExitStopMode_1 */
