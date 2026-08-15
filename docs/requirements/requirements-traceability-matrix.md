@@ -2,6 +2,7 @@
 
 **Date:** 2026-08-12 (merges the round-2 and round-3 interview matrices into one living V-model artifact)
 **Updated:** 2026-08-13 (three-pass intent interview merged; see §"2026-08-13 rows" and `../decisions/merge-ledger-2026-08-13.md`)
+**Annotated:** 2026-08-15 (row-status layer added against master @ `dc8026a`, after the LT/C-01 fix sweep; annotations name issues/commits/tests only — finding detail lives in the tracker, not here. Markers: 🟡 implemented / proof open · 🔴 open, tracker named · ⚪ not assessed this pass)
 **Purpose:** Link product intent to DDR ownership, implementation responsibility, and objective proof.
 
 Every flight-critical row should answer:
@@ -50,6 +51,8 @@ If a link is missing, the requirement is not fully closed.
 | SYS-ID-007 | Already claimed means no silent transfer | DDR-0024 | ownership backend | duplicate-claim test |
 | SYS-FW-004 | Reflash preserves identity/credentials | DDR-0025 | linker/NVM/service | before/after service test |
 | SYS-VER-010 | First flight has explicit validation checklist | DDR-0026 | release process | completed checklist artifact |
+
+**2026-08-15 row annotations:** SYS-BOOT-006 🟡 (per-code degrade escape, STAB-02/#149) · SYS-ORCH-002 🟡 (burst-FSM deadline LT-07/#277; STOP2 re-init degrade LT-05/#275) · SYS-PWR-004/005 🟡 (caveat: trend lost on reset → #288) · SYS-CFG-003/004 🟡 (clamps + CRC→defaults verified in `config.c` this pass) · SYS-CFG-008 🟡 (next-wake apply, INV-CONFIG-014) · SYS-DATA-001 🟡 (caveat: solar channel unflagged → #279) · SYS-GNSS-003 🟡 (caveat → #284) · SYS-GNSS-005 🟡 (24 h constant verified `lora_app.h:206`; boundary walk open, FW-CONF-023) · SYS-GNSS-007 🔴 (violated today — silence clears only next wake → #285) · SYS-RF-002 🟡 (#215, #269, #277) · SYS-RF-003 🔴 (fresh backlog drains oldest-first → #286) · SYS-NVM-005 🟡 (host flight suite; power-cut campaign open) · SYS-NVM-006 🟡 (R3-07/#221; caveat: boot full-ring scan → #289) · SYS-NVM-008 🟡 (#109 + H-02/#273; caveat: NVM slot atomicity → #282) · SYS-FW-004 🟡 (STAB-11/#158; reflash proof open) · SYS-VER-010 🔴 (checklist unchecked → `flight1-validation-readiness-checklist.md`; #261/#262) · SYS-ID-006/007 ⚪ (backend-side, not assessed).
 
 
 ## 2. Mission / Product Intent Coverage (round 2)
@@ -103,37 +106,39 @@ Round-2 "action" dispositions are now **merged** into the corpus (2026-08-12); t
 | TR-VER-008 | Exact production/release image receives hardware evidence. | DDR-0026 (INV-VER-004) | release pipeline | release qualification |
 | TR-VER-009 | Cold chamber validates energy model, not just boot survival. | DDR-0026 / 0016 | chamber + Otii | temp/load campaign |
 
+**2026-08-15 row annotations:** TR-MISSION-001 🟡 (#215, #269, #277) · TR-MISSION-002 🟡 (science continues dark; same-wake recovery caveat → #285) · TR-MISSION-003 🟡 (host flight suite: fill/wrap) · TR-MISSION-004 🔴 (→ #286) · TR-MISSION-005 🟡 (caveat: trend lost on reset → #288) · TR-POWER-001/002 🟡 (caveats #248, #288) · TR-POWER-003 🟡 (caveat: intent is FULL/SLEEP admission → #288) · TR-DATA-001 🟡 (caveat → #279) · TR-DATA-002 🟡 (R28/#136; LT-05/#275) · TR-DATA-003 🟡 · TR-DATA-004 ⚪ (backend-side) · TR-RF-001 🟡 (`ScienceIsDue` yield) · TR-RF-002 🟡 (24 h verified; boundary test open) · TR-RF-003 🔴 (→ #285) · TR-RF-004/005/006 🟡 (DDR-0019 + `../PayloadFormats.md` allocation) · TR-FAULT-001/002/003 🟡 (STAB-02/#149; #272; #275) · TR-FAULT-004 🟡 (DDR-0020 deadman; commissioning exempt) · TR-PERSIST-001/002 🟡 (#109, STAB-11/#158, C-01/#270; caveats → #282, #289) · TR-ID-001..005 🟡 (per-region provisioning + read-back, #270; backend halves ⚪) · TR-ID-006 ⚪ (claim protocol open by design, OD-ID-001) · TR-FW-001..005 🟡 (no OTA surface; identity in backup regs #158; reflash proof open) · TR-CONFIG-001/002/003 🟡 (verified `config.c` this pass) · TR-HW-001 ✅ (single revision; tracked in `../decisions/open-intent-questions.md` #19) · TR-VER-001 🟡 (this matrix + the worklist are the audit; statuses now dated) · TR-VER-002 ✅ (13-suite host baseline green in CI, incl. sanitize build) · TR-VER-003..006 🔴 (no HIL lane; #261/#262) · TR-VER-007 🟡 (flight build compiles debug out, R2-15/#119; equivalence campaign open) · TR-VER-008 🔴 (release qualification; #261/#262) · TR-VER-009 🔴 (cold chamber also feeds #248).
+
 ---
 
 ## 3. Highest-Priority Implementation Checks (round 3)
 
-1. Confirm startup code converges reset and wake paths as intended.
-2. Confirm no reset-cause branch changes long-term mission policy.
-3. Audit every driver/blocking call for bounded execution.
-4. Reconcile current config behavior with the explicit **clamp** policy.
-5. Verify config changes apply at wake boundary.
-6. Verify power model supports reversible reevaluation without chatter.
-7. Confirm app/Qwiic code cannot independently hold power/radio/wake time.
-8. Add GNSS failed-wake provenance regression.
-9. Fix/prove archive newest-first and science-preemption behavior.
-10. Audit persistent objects against the must-never-lose/bounded-loss hierarchy.
-11. Define the backend QR/PIN claim security protocol.
-12. Complete the Flight-1 checklist with actual evidence.
+1. Confirm startup code converges reset and wake paths as intended. — 🟡 (host boot-resilience #107; target open)
+2. Confirm no reset-cause branch changes long-term mission policy. — 🟡 (#149 per-code degrade; formal audit open)
+3. Audit every driver/blocking call for bounded execution. — 🟡 (LT-05/#275, LT-07/#277; formal audit open)
+4. Reconcile current config behavior with the explicit **clamp** policy. — 🟡 (verified `config.c` 2026-08-15)
+5. Verify config changes apply at wake boundary. — 🟡 (INV-CONFIG-014)
+6. Verify power model supports reversible reevaluation without chatter. — 🟡 (caveats #248, #288)
+7. Confirm app/Qwiic code cannot independently hold power/radio/wake time. — ⚪ not assessed this pass
+8. Add GNSS failed-wake provenance regression. — 🟡 (teardown anchored by LT-04/#276; freshness caveat → #284)
+9. Fix/prove archive newest-first and science-preemption behavior. — preemption 🟡 (#215/#269/#277); newest-first 🔴 → #286
+10. Audit persistent objects against the must-never-lose/bounded-loss hierarchy. — 🟡 (#158, #270; caveats → #281, #282)
+11. Define the backend QR/PIN claim security protocol. — ⚪ backend-side, open by design (OD-ID-001)
+12. Complete the Flight-1 checklist with actual evidence. — 🔴 (see `flight1-validation-readiness-checklist.md`; #261/#262)
 
 ## 4. Immediate Conformance Priorities (round 2)
 
-1. Guarantee fresh science preempts archive recovery.
-2. Fix GNSS wake-failure provenance so old coordinates cannot appear fresh.
-3. Bring archive recovery to newest-first/current-science-preemptive behavior.
-4. Move power policy toward measured operation-level droop admission.
-5. Verify stale-position RF timeout and automatic fresh-fix recovery.
-6. Verify fatal exception handlers reset.
-7. Verify watchdog/deadman is armed across all flight paths.
-8. Add bounded driver/bus retries.
-9. Verify reflash preserves identity/credential banks.
-10. Formalize FPort/schema bindings and decoder golden vectors.
-11. Verify archive reconstruction under metadata corruption/power cuts.
-12. Build the first target-HIL lane and retain evidence.
+1. Guarantee fresh science preempts archive recovery. — 🟡 done in code (#215/#269/#277); accelerated proof open
+2. Fix GNSS wake-failure provenance so old coordinates cannot appear fresh. — 🟡 (LT-04/#276; caveat → #284)
+3. Bring archive recovery to newest-first/current-science-preemptive behavior. — 🔴 newest-first → #286
+4. Move power policy toward measured operation-level droop admission. — 🔴 FULL/SLEEP admission → #288
+5. Verify stale-position RF timeout and automatic fresh-fix recovery. — 🟡 24 h enforced; 🔴 same-wake recovery → #285
+6. Verify fatal exception handlers reset. — 🟡 (STAB-02/#149)
+7. Verify watchdog/deadman is armed across all flight paths. — 🟡 (DDR-0020 deadman; path audit open)
+8. Add bounded driver/bus retries. — 🟡 (R28/#136; LT-05/#275)
+9. Verify reflash preserves identity/credential banks. — 🟡 (STAB-11/#158; automated reflash proof open)
+10. Formalize FPort/schema bindings and decoder golden vectors. — 🟡 bindings exist (DDR-0019 + `../PayloadFormats.md`); golden vectors open
+11. Verify archive reconstruction under metadata corruption/power cuts. — 🟡 reconstruction (R3-07/#221); 🔴 power-cut campaign + boot scan → #289
+12. Build the first target-HIL lane and retain evidence. — 🔴 (#261/#262)
 
 
 ---
@@ -175,10 +180,14 @@ New/changed requirements from the 2026-08-13 merge. Implementation bindings mark
 | SYS-CFG-011 | Corrupt persisted operational config is repaired, not fatal; credentials excluded | DDR-0014 `BR-CONFIG-015/016` | `config.c` validator | `P-CONFIG-010` / FW-CONF-053 |
 | SYS-PROTO-001 | Deployed packet versions stay decodable; no OTA dependency | DDR-0027 `BR-PROTO-001..005` | backend codecs (ground-side) | `P-PROTO-001..004` / FW-CONF-054 |
 
+**2026-08-15 row annotations:** SYS-WAKE-012 🟡 (veto provenance b5-b7; LT-03/#271) · SYS-PWR-013 🔴 / SYS-PWR-014 🟡 / SYS-PWR-015 🔴 (→ #288) · SYS-SCHED-001 🟡 (#215, #269, #277) · SYS-PERSIST-010/011/012 🟡 (see FW-CONF-031/032/034) · SYS-STORE-010 🟡 (F-006/#51) · SYS-STORE-011 🟡 with 🔴 half (fast path #221; deferred reconstruction → #289) · SYS-FAIL-010 🟡 (#272, #275) · SYS-FAIL-011 🟡 (#270 door; #272 rollback) · SYS-FAIL-012 🟡 (#104) · SYS-ARCH-010/011 🔴 (no lookup API in `flash_log.h` — verified this pass; part of the unimplemented request set) · SYS-ARCH-012 🟡 · SYS-TX-009 🔴 (binding "backfill controller" is optimistic — there is no request path at all; same set as SYS-TX-010) · SYS-TX-010 🔴 (confirmed still **(none yet)** this pass) · SYS-TX-011 🟡 (veto ordering exists in `transmit_plan.c`; no request path to outrank yet) · SYS-GNSS-010/011 🟡 (caveat → #284) · SYS-COMM-010 🟡 (C-01/#270) · SYS-CFG-010 🟡 (no downlink parse surface today; fuzz proof open) · SYS-CFG-011 🟡 (verified `config.c` CRC→defaults; credentials excluded, STAB-11/#158) · SYS-PROTO-001 🔴 (ground-side; next wire bump #266 + #279) · SYS-STALE-010 🟡 (24 h verified; boundary walk open) · SYS-STALE-011 🔴 (→ #285) · SYS-STALE-012 ⚪ (only the GPS-loss path was found in the 2026-08-13 review; formal audit open) · SYS-COMM-008/009 🟡 (C-01/#270 latch + all-7-regions read-back; caveat: durable pre-flight state → #281) · SYS-LIFE-010/011 🟡 (one-way latch host-tested; #270 gate) · SYS-GNSS-009 🟡 (caveat → #284).
+
 ### Closure note
 
 Rows whose implementation binding reads **(none yet)** — SYS-RF-013 (`home_region`
 Band 0 fallback) and SYS-TX-010 (explicit record request) — are the two places where the
-2026-08-13 intent has no code at all. Everything else is either already implemented,
+2026-08-13 intent has no code at all. **Re-verified 2026-08-15:** still the only two —
+no `home_region` provisioning exists (#287), and `flash_log.h` has no arbitrary-ID
+lookup / request path (FW-CONF-042..045). Everything else is either already implemented,
 partially implemented, or a test gap. Per the header rule, none of these rows are closed
 until the proof column points at real evidence tied to a build.
