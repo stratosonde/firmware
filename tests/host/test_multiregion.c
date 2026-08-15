@@ -70,6 +70,7 @@ static struct {
      * the injected fault kills the attempted switch but NOT the rollback. */
     int  fail_mib_set_devaddr_once;   /* next N MIB_DEV_ADDR sets fail */
     int  fail_mib_radio_param_once;   /* next N MIB_CHANNELS_TX_POWER sets fail */
+    bool fail_mib_set_channel_mask;   /* FR-17 (#294): MIB_CHANNELS_MASK/_DEFAULT_MASK sets fail */
 } g_mac;
 
 LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
@@ -103,6 +104,10 @@ LoRaMacStatus_t LoRaMacMibSetRequestConfirm(MibRequestConfirm_t *mib)
     case MIB_RX2_CHANNEL:
         g_mac.rx2_freq = mib->Param.Rx2Channel.Frequency;
         g_mac.rx2_dr = mib->Param.Rx2Channel.Datarate;
+        return LORAMAC_STATUS_OK;
+    case MIB_CHANNELS_MASK:
+    case MIB_CHANNELS_DEFAULT_MASK:
+        if (g_mac.fail_mib_set_channel_mask) return LORAMAC_STATUS_ERROR;
         return LORAMAC_STATUS_OK;
     default:
         return LORAMAC_STATUS_OK;
@@ -256,6 +261,7 @@ volatile uint8_t g_multiregion_in_prejoin = 0;
 #define FAKE_FLASH_BASE  0x0803C000UL
 #define FAKE_FLASH_SIZE  (16u * 2048u)
 static uint8_t g_flash[FAKE_FLASH_SIZE];
+static int g_fail_flash_writes = 0;   /* FR-15 (#293): next N FLASH_IF_Write calls fail */
 
 FLASH_IF_StatusTypedef FLASH_IF_Init(void *pAllocRamBuffer) { (void)pAllocRamBuffer; return FLASH_IF_OK; }
 FLASH_IF_StatusTypedef FLASH_IF_DeInit(void) { return FLASH_IF_OK; }
@@ -269,6 +275,7 @@ static bool flash_addr_ok(const void *p, uint32_t len)
 FLASH_IF_StatusTypedef FLASH_IF_Write(void *dst, const void *src, uint32_t len)
 {
     if (!flash_addr_ok(dst, len)) return FLASH_IF_ERROR;
+    if (g_fail_flash_writes > 0) { g_fail_flash_writes--; return FLASH_IF_ERROR; }
     memcpy(&g_flash[(uint32_t)(uintptr_t)dst - FAKE_FLASH_BASE], src, len);
     return FLASH_IF_OK;
 }
@@ -1050,6 +1057,100 @@ static void test_r2_semantic_validation(void)
     CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "R2c-switch");
 }
 
+/* ========================================================================== */
+/* FR-15 (#293) - a failed periodic Tier-2 save must keep the TX counter     */
+/* ========================================================================== */
+/* SaveCurrentContext resets g_unsaved_tx_count BEFORE FlashWriteStorage; a
+ * failed write therefore reads as "0 unsaved TXs" and the next save is a full
+ * interval away - a reset in that window restores a counter up to INTERVAL
+ * behind the true FCntUp, and the NS rejects the reused frames. The counter
+ * must only be reset after a SUCCESSFUL write, so the very next TX retries. */
+static void test_fr15_failed_save_keeps_counter(void)
+{
+    printf("-- FR-15 (#293): failed periodic save keeps the counter - retry next TX\n");
+
+    const uint32_t interval = CfgFrameCounterSaveInterval();
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    g_host_boot_attempts = 1;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* TX until the counter sits one below the checkpoint threshold (the
+     * commissioning/switch path may leave it anywhere in [0, interval) ). */
+    uint32_t guard = 0;
+    while (g_unsaved_tx_count < interval - 1 && guard++ < 1000) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        MultiRegion_SaveCurrentContext();
+    }
+
+    /* Next TX: the periodic save fires - kill the flash write. */
+    g_fail_flash_writes = 1;
+    g_mac.nvm.Crypto.FCntList.FCntUp++;
+    MultiRegion_SaveCurrentContext();
+
+    /* The counter must NOT read 0 after the failed write: it still represents
+     * `interval` unsaved TXs, so the next TX retries the save immediately. */
+    printf("   after failed save: unsaved_tx_count=%lu (want >= %lu)\n",
+           (unsigned long)g_unsaved_tx_count, (unsigned long)interval);
+    CHECK_REGRESSION(g_unsaved_tx_count >= interval, "FR-15-counter-kept");
+
+    /* Next TX: the retry persists the true counter. A simulated reset must
+     * then restore persisted + INTERVAL (R3 contract), not a stale value. */
+    g_mac.nvm.Crypto.FCntList.FCntUp++;
+    MultiRegion_SaveCurrentContext();
+    uint32_t true_now = g_mac.nvm.Crypto.FCntList.FCntUp;
+
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+    uint32_t resumed = g_storage.contexts[slot].uplink_counter;
+    printf("   true=%lu resumed=%lu (want %lu)\n",
+           (unsigned long)true_now, (unsigned long)resumed,
+           (unsigned long)(true_now + interval));
+    CHECK_REGRESSION(resumed == true_now + interval, "FR-15-retry-persists");
+}
+
+/* ========================================================================== */
+/* FR-17 (#294) - a failed channel-mask MIB set must abort the restore       */
+/* ========================================================================== */
+/* ApplyRegionChannelMask returns void; US915/EU868 mask MIB failures were
+ * logged and ignored, so the restore reported SUCCESS on a stack whose bank
+ * masks were never applied. The restore must fail closed (R1/#187 contract),
+ * feeding the LT-02 (#272) rollback. */
+static void test_fr17_channel_mask_failure_aborts_restore(void)
+{
+    printf("-- FR-17 (#294): channel-mask MIB failure aborts the restore\n");
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+
+    g_mac.fail_mib_set_channel_mask = true;
+    LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    g_mac.fail_mib_set_channel_mask = false;
+
+    printf("   switch with mask MIB failing: %s (want ERROR)\n",
+           st == LORAMAC_HANDLER_SUCCESS ? "SUCCESS" : "ERROR");
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "FR-17-mask-failure-aborts");
+}
+
 static void test_r8_tier1_generation_order(void);
 static void test_r11_capture_restore_symmetry(void);
 
@@ -1081,6 +1182,9 @@ test_sp05_all_seven_regions_supported();
     test_r8_tier1_generation_order();
     printf("\n");
     test_r11_capture_restore_symmetry();
+    printf("\n");
+    test_fr15_failed_save_keeps_counter();
+    test_fr17_channel_mask_failure_aborts_restore();
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

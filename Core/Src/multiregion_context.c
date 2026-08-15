@@ -337,8 +337,10 @@ bool MultiRegion_SaveCurrentContext(void)
         return true;  // Return success, just didn't write to flash
     }
     
-    // Reset counter and perform actual save
-    g_unsaved_tx_count = 0;
+    // Perform the actual save
+    /* FR-15 (#293): the counter reset moved into ForceSave (success only) -
+     * clearing it here meant a failed save read as "0 unsaved TXs" and the
+     * next checkpoint was a full interval away. */
     SONDE_LOG("Batching: Performing flash save (reached %d TXs)\r\n", CfgFrameCounterSaveInterval());
     
     return MultiRegion_ForceSaveCurrentContext();
@@ -488,14 +490,19 @@ bool MultiRegion_ForceSaveCurrentContext(void)
      */
     UpdateContextCRC(ctx);
     
-    // Also reset the unsaved TX count since we're doing an actual write
-    g_unsaved_tx_count = 0;
-    
     // Save to flash
     SONDE_LOG_STR("Calling FlashWriteStorage...\r\n");
     bool result = FlashWriteStorage();
     
     if (result) {
+        /* FR-15 (#293): reset the unsaved-TX count only AFTER a successful
+         * write. It used to be cleared BEFORE FlashWriteStorage: a failed
+         * save then read as "0 unsaved TXs", the next checkpoint was a full
+         * interval away, and a reset in that window restored an FCntUp up to
+         * INTERVAL behind the true network counter - the NS rejects reused
+         * frames. Keeping the count makes the next SaveCurrentContext retry
+         * the save immediately. */
+        g_unsaved_tx_count = 0;
         SONDE_LOG_STR("Flash write successful!\r\n");
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Saved %s context (slot %d)\r\n", 
                 RegionToString(current_region), slot);
@@ -555,7 +562,11 @@ static const RegionChannelMask_t kChannelMasks[] = {
  *        ABP we must restore them. Regions without a table entry keep MAC
  *        defaults (same as before F-R2).
  */
-static void ApplyRegionChannelMask(LoRaMacRegion_t region)
+/* FR-17 (#294): returns false when a required mask MIB set fails so the
+ * restore fails closed (R1/#187 contract) instead of reporting SUCCESS on a
+ * stack whose bank masks were never applied. Regions without a table entry
+ * keep the MAC defaults by design - their restore needs no bank mask. */
+static bool ApplyRegionChannelMask(LoRaMacRegion_t region)
 {
     for (uint32_t i = 0; i < (sizeof(kChannelMasks) / sizeof(kChannelMasks[0])); i++) {
         if (kChannelMasks[i].region != region) {
@@ -564,16 +575,20 @@ static void ApplyRegionChannelMask(LoRaMacRegion_t region)
         MibRequestConfirm_t mib_ch;
         mib_ch.Type = MIB_CHANNELS_MASK;
         mib_ch.Param.ChannelsMask = (uint16_t *)kChannelMasks[i].mask;
-        if (LoRaMacMibSetRequestConfirm(&mib_ch) == LORAMAC_STATUS_OK) {
-            SONDE_LOG("Channel mask applied: %s\r\n", kChannelMasks[i].note);
-        } else {
-            SONDE_LOG("WARNING: Failed to set channel mask for %s\r\n", RegionToString(region));
+        if (LoRaMacMibSetRequestConfirm(&mib_ch) != LORAMAC_STATUS_OK) {
+            SONDE_LOG("ERROR: Failed to set channel mask for %s\r\n", RegionToString(region));
+            return false;
         }
         mib_ch.Type = MIB_CHANNELS_DEFAULT_MASK;
         mib_ch.Param.ChannelsDefaultMask = (uint16_t *)kChannelMasks[i].mask;
-        LoRaMacMibSetRequestConfirm(&mib_ch);
-        return;
+        if (LoRaMacMibSetRequestConfirm(&mib_ch) != LORAMAC_STATUS_OK) {
+            SONDE_LOG("ERROR: Failed to set default channel mask for %s\r\n", RegionToString(region));
+            return false;
+        }
+        SONDE_LOG("Channel mask applied: %s\r\n", kChannelMasks[i].note);
+        return true;
     }
+    return true;   /* no table entry: MAC defaults are the intended masks */
 }
 /* F-R3 (#73) / H-07 (#274): the identity table + lookup live at the top of
  * the file, shared by JoinRegion, InitializeRegionFromNetworkServer AND the
@@ -681,7 +696,13 @@ static LmHandlerErrorStatus_t RestoreSessionToMac(MinimalRegionContext_t *ctx, L
     }
 
     // STEP 6: region channel masks, table-driven (F-R2)
-    ApplyRegionChannelMask(region);
+    /* FR-17 (#294): fail closed like every other restore step - a stack on
+     * the wrong bank masks is not a successful restore. Feeds the LT-02
+     * (#272) rollback path. */
+    if (!ApplyRegionChannelMask(region)) {
+        SONDE_LOG_STR("  ERROR: channel mask apply failed - restore aborted\r\n");
+        return LORAMAC_HANDLER_ERROR;
+    }
 
     // STEP 7: Start MAC and allow state machine to stabilize
     LoRaMacStart();
@@ -1348,7 +1369,14 @@ bool MultiRegion_PreJoinAllRegions(void)
         HAL_Delay(5000);
     }
     // Switch back to US915 as starting region
-    MultiRegion_SwitchToRegion(LORAMAC_REGION_US915);
+    /* FR-18 (#295): a failed switch-back must block the PROVISIONED latch -
+     * otherwise the device claims commissioned while the MAC sits on the
+     * wrong session (or none). */
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        SONDE_LOG_STR("WARNING: switch-back to US915 FAILED - latch NOT set\r\n");
+        APP_LOG(TS_ON, VLEVEL_M, "Switch-back to US915 failed\r\n");
+        all_success = false;
+    }
 
     APP_LOG(TS_ON, VLEVEL_H, "\r\n========================================\r\n");
     if (all_success) {
