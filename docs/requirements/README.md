@@ -13,6 +13,12 @@ to implementation/proof.
 | `flight1-validation-readiness-checklist.md` | Go/no-go evidence checklist for the first-flight build (DDR-0026 INV-VER-011) |
 | `firmware-conformance-worklist.md` | Implementation/proof queue (FW-CONF-*) converting intent into code/test work |
 
+**Status convention (2026-08-15):** the worklist, traceability matrix, and readiness
+checklist carry dated per-item status annotations against a named master commit
+(last pass: `dc8026a`). They are snapshots, not live state — refresh the annotations
+after each fix batch, and never copy finding prose from the issue tracker into them
+(reference the issue number only).
+
 `flight1-mission-definition.md` says *what the flight must demonstrate*;
 `flight1-validation-readiness-checklist.md` says *what must be proved before we
 launch it*. Keep them distinct.
