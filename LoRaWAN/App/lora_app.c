@@ -1510,7 +1510,7 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
  *        write, not by up to 255 s of GNSS acquisition). F-07 (#68): bulk
  *        retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
  */
-static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
+static void ArchiveSample(sensor_t *sensor_data,
                           int16_t slope_mv_per_hour, OperatingMode_t current_mode,
                           uint8_t veto)
 {
@@ -1529,11 +1529,13 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
     /* R45: stamp with disciplined UTC epoch (SysTime applies the GPS-synced
      * delta stored in backup regs), NOT boot-relative RTC calendar time.
      * Before the first GPS fix this falls back to boot-relative seconds —
-     * honest, monotonic, and distinguishable (small values) from epoch. */
-    *now_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
+     * honest, monotonic, and distinguishable (small values) from epoch.
+     * LT-11 (#278): kept as a LOCAL - the last external consumer of the
+     * out-pointer died with #250. */
+    uint32_t archive_timestamp = SysTimeGet().Seconds;  // UTC epoch seconds at write time
     /* §6a (2026-08-11): the veto rides into record.flags b5-b7 — DDR-0003:
      * a degraded cycle records WHY, not just THAT. */
-    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data, *now_timestamp,
+    FlashLog_StatusTypeDef log_status = FlashLog_WriteRecord(&hflashlog, sensor_data, archive_timestamp,
                                                              slope_mv_per_hour, (uint8_t)current_mode,
                                                              veto);
     if (log_status == FLASH_LOG_OK) {
@@ -1635,8 +1637,10 @@ static void BuildDebugLppPayload(const sensor_t *sensor_data, uint32_t ttf_ms,
  *        ACK -> bulk transfer -> complete). DDR-0005 confirmed uplinks; D3
  *        (#33) v3 variable-length bulk; F-005/F-006 (#51) watermark semantics.
  *        rf_silence (DDR-0018/R11) parks the machine without transmitting.
+ *        LT-11 (#278): the dual-domain now_timestamp parameter is gone - the
+ *        last consumer died with #250 (Payload_TimestampMinutesNow).
  */
-static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestamp,
+static void RunTxStateMachine(const sensor_t *sensor_data,
                               int16_t slope_mv_per_hour, OperatingMode_t current_mode,
                               bool rf_silence)
 {
@@ -1716,8 +1720,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data, uint32_t now_timestam
       }
       CompactTelemetryPacket_t compact_packet;
       /* SP-11/SP-12 (#250): the wire field is minutes since UTC EPOCH
-       * (docs/PayloadFormats.md). now_timestamp/60 was RTC-UPTIME minutes -
-       * nothing ever sets the RTC calendar, so it never carries UTC. */
+       * (docs/PayloadFormats.md) - never RTC-UPTIME minutes (nothing ever
+       * sets the RTC calendar). LT-11 (#278): this is the ONLY timestamp
+       * basis the FSM uses. */
       uint16_t timestamp_min = Payload_TimestampMinutesNow();
       
       if (EncodeCompactBinaryPacket(&compact_packet, sensor_data, timestamp_min, 
@@ -2072,6 +2077,14 @@ static void SendTxData(void)
     if (ms == MISSION_ASCENT) {
       plan.tx_interval_ms = MISSION_ASCENT_TX_INTERVAL_MS;
       plan.gps_enabled = true;  /* #142: GNSS always tracking in ASCENT */
+      /* LT-08 (#278): forcing the ENABLE flag without a BUDGET is a no-op
+       * (S-A/#211: AcquireGnssFix loops zero times on gps_timeout_ms == 0).
+       * Today NORMAL/CONSERVATIVE happen to carry 60 s - a cross-file
+       * coincidence, not a guarantee. Apply the same non-zero clamp the
+       * GPS-loss path uses. */
+      if (plan.gps_timeout_ms == 0U) {
+        plan.gps_timeout_ms = GPS_LOSS_RETRY_TIMEOUT_MS;
+      }
     } else if (ms == MISSION_FLOAT &&
                MISSION_FLOAT_TX_INTERVAL_MS > plan.tx_interval_ms) {
       plan.tx_interval_ms = MISSION_FLOAT_TX_INTERVAL_MS;
@@ -2348,14 +2361,14 @@ static void SendTxData(void)
     EnvSensors_Read(&sensor_data);
   }
 
-  ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode,
+  ArchiveSample(&sensor_data, slope_mv_per_hour, current_mode,
                 (uint8_t)plan.veto);
 
   #if ENABLE_DEBUG_LPP
   BuildDebugLppPayload(&sensor_data, ttf_ms, slope_mv_per_hour, time_to_target_signed, current_mode);
   #endif
 
-  RunTxStateMachine(&sensor_data, now_timestamp, slope_mv_per_hour, current_mode, rf_silence);
+  RunTxStateMachine(&sensor_data, slope_mv_per_hour, current_mode, rf_silence);
   /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */
   #if ENABLE_DEBUG_LPP
   static uint32_t tx_count = 0;

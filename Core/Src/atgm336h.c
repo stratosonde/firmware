@@ -451,9 +451,13 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   if (strncmp(sentence, NMEA_GGA, strlen(NMEA_GGA)) == 0 ||
       strncmp(sentence, "$GNGGA", 6) == 0)
   {
-    GNSS_ParseGGA(hgnss, sentence);
-    /* Update vertical speed after new altitude reading */
-    GNSS_UpdateVerticalSpeed(hgnss);
+    /* LT-10 (#278): DR-01 (#236) rejects bad sentences - never recompute
+     * vertical speed (or advance prev_altitude/prev_timestamp) on a
+     * rejected parse; the return value already exists and is correct. */
+    if (GNSS_ParseGGA(hgnss, sentence) == 0) {
+      /* Update vertical speed after new altitude reading */
+      GNSS_UpdateVerticalSpeed(hgnss);
+    }
   }
   /* Parse RMC sentence (speed and course) */
   /* Support both GPS-only ($GPRMC) and multi-GNSS ($GNRMC) formats */
