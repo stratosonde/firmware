@@ -2,272 +2,89 @@
 
 ## Overview
 
-The Configuration Module provides a centralized repository for all configurable parameters in the Stratosonde firmware. It manages parameter storage in flash memory, provides a unified interface for parameter access, and supports default configurations for first boot or recovery scenarios.
+The Configuration Module (`Core/Src/config.c`, API in `Core/Inc/config.h`) holds
+`SystemConfig_t`: the flash-persisted system configuration in a **dedicated
+2 KB internal-flash page**, with magic/version/size/CRC32 validation and a
+defaults fallback. It replaces scattered `#define`s for the knobs that are
+actually configurable — and honestly annotates the fields that are **reserved**
+(no live consumer) so nobody trusts a decorative knob (R12/#197).
 
-## Responsibilities
+## Storage
 
-- Store all configurable parameters in flash memory
-- Provide a unified interface for parameter access
-- Support default configurations for first boot
-- Validate configuration integrity
-- Handle parameter updates during operation
+Internal flash page 125 (`CONFIG_FLASH_ADDRESS` 0x0803E800, one full 2 KB erase
+page). The STM32WLE5 erases in 2 KB pages, so the region must own its page —
+this module previously lived at 0x0803FC00, **inside** page 127, and every
+`Config_Save` erased the entire LoRaWAN multiregion context store (DevAddr,
+session keys, frame counters) with it.
 
-## Configuration Parameters
+Internal flash page map (256 KB device, mirrored in `multiregion_context.c` —
+FR-21/#102: any new page user updates both):
 
-The Configuration Module manages parameters for all aspects of the Stratosonde's operation:
+| Page | Address | Owner |
+|------|---------|-------|
+| 120-122 | 0x0803C000+ | Tier-1 LoRaWAN credentials, copies A/B/C (FW-1/DDR-0018) |
+| 123-124 | 0x0803D800+ | Tier-2 frame counters, ping-pong slots A/B |
+| 125 | 0x0803E800 | **System configuration (this module)** |
+| 126-127 | 0x0803F000+ | LoRaWAN NVM context + slot B ping-pong (F-016/#54) |
 
-### System Parameters
+## What Is Actually Configurable
 
-- **System mode**: Initial operating mode
-- **Watchdog timeout**: Timeout period for independent watchdog
-- **Error handling policy**: How to handle different error types
+`SystemConfig_t` (packed, 8-byte aligned for `FLASH_IF_Write` — FR-04/#81: the
+write is rejected *after* erase if the length isn't 64-bit aligned, so the
+`_Static_assert` is load-bearing):
 
-### Power Management Parameters
+| Group | Fields | Status |
+|-------|--------|--------|
+| TX intervals | `tx_interval_{normal,conservative,reduced,recovery,survival}` (ms; 5/10/15/30/60 min) | **ACTIVE** — power-model cadence inputs; ceiling `CONFIG_MAX_TX_INTERVAL_MS` = 2 h (DR-04/#240) |
+| LoRaWAN params | datarate, txpower, ADR, confirmed, class-B timeout | **RESERVED** (R12/#197) — no consumer; session radio params persist per-region in the Tier-2 bank (R11/#196) |
+| Power thresholds | battery_low/critical, hysteresis | **RESERVED** — live thresholds are hardcoded in `power_model.c`/`transmit_plan.c` (R10 raw floor, F8 hysteresis) |
+| Bulk gate | `bulk_battery_min_mv` (default 5000), `max_bulk_packets` (20), `bulk_timeout_ms` (60 s) | **ACTIVE** (§6b) |
+| GPS | `gps_temperature_lockout` | **DEPRECATED** (RV-08/#164, DDR-0021) — never read, kept for layout |
+| GPS | `gps_timeout_{normal,conservative}`, `gps_min_satellites` (4), `gps_max_hdop_x10` (25), `gps_standby_power_ua` (15) | Active/quality knobs — see #286 (def-val entry points must agree) and #284 (acceptance predicate) |
+| Adaptive TX | `link_margin_threshold` (15 dB), `gateway_count_threshold` (2) | SF7 elevation gates |
+| Counters | `frame_counter_save_interval` (default 10) | **ACTIVE** (`CfgFrameCounterSaveInterval`) — H-02: the restore margin must follow the configured value, so `Config_Init` runs **before** `MX_LoRaWAN_Init` (#273) |
+| Flash logging | interval, enabled, compression, retention_days | archive policy |
+| Debug | LPP/GNSS-detail enables, intervals, RTT level, flags | compiled out of flight builds with `ENABLE_DEBUG_LPP=0` |
+| Solar | `reserved_solar` | deleted (F19): the 6000 mV default could never trip on the ~1.1 V panel and had zero consumers |
 
-- **Battery thresholds**: Voltage levels for state transitions
-  - Normal operation threshold
-  - Low power threshold
-  - Critical power threshold
-- **Duty cycle parameters**: Active and sleep durations for different power states
+## Derived Values
 
-### GNSS Parameters
+- `ConfigGetDeadmanTimeoutS()` (S-04/#228): the deadman watchdog timeout is
+  **derived**, not configured — `max(CONFIG_DEADMAN_FLOOR_S = 3 h,
+  3 × survival cadence)`. A fixed 3 h timeout against a configurable 2 h
+  survival cadence gave a 1.5× margin where 3× was intended.
 
-- **Update intervals**: How often to acquire position in different states
-- **Acquisition timeout**: Maximum time to wait for a valid fix
-- **Quality thresholds**: Minimum satellites and maximum HDOP for valid fix
-- **High altitude mode**: Enable/disable high altitude mode
+## API
 
-### Sensor Parameters
+| Function | Purpose |
+|----------|---------|
+| `Config_Init` | Load from flash, fall back to defaults (must precede `MX_LoRaWAN_Init`, H-02/#273) |
+| `Config_Get` | Read-only pointer; **NULL before init** — callers use macro defaults (§6b single-accessor pattern) |
+| `Config_Load` / `Config_LoadDefaults` | Reload / factory defaults (defaults are not saved until `Config_Save`) |
+| `Config_Save` | Erase page 125 + program — see immutability below |
+| `Config_Validate` | Range/dependency checks (enforces the DR-04 ceiling) |
+| `Config_UpdateParameter` | Validated single-field update with CRC refresh |
+| `Config_GetStats` / `Config_PrintCurrent` | Read/write/CRC-failure counters; RTT dump |
+| `ConfigGetDeadmanTimeoutS` | Derived deadman timeout (S-04) |
 
-- **Sampling intervals**: How often to read sensors in different states
-- **Sensor precision**: Resolution settings for different power states
-- **Calibration values**: Sensor calibration coefficients
+## Immutability in Flight (the load-bearing rule)
 
-### Flash Logging Parameters
+**`Config_Save` has no callers outside `config.c`** — configuration is written
+once at commissioning and never in flight. This is what makes the single-slot
+erase-then-write persistence acceptable: there is a torn-write window between
+erase and program, and it is only tolerable because a reset inside it can only
+happen on the bench (#198, documented as the IMMUTABILITY ASSUMPTION at the
+save site; a host regression test fails if any new caller appears — R14).
+Upgrading to an atomic slot scheme is tracked as **#282** (needs host tests
+first per the test-first rule).
 
-- **Record format**: Structure of telemetry records
-- **Buffer size**: Size of circular buffer for telemetry
-- **Metadata location**: Where to store flash metadata
+Invalid or corrupted configuration (bad magic/version/size/CRC) falls back to
+compiled defaults — the system always boots with sane values.
 
-### Transmission Parameters
+## Cross-References
 
-- **LoRaWAN parameters**: Region, data rate, TX power, etc.
-- **Transmission strategy**: Confirmed/unconfirmed, retry count
-- **Adaptive parameters**: Rules for adapting spreading factor
-- **Batch size**: Number of records to send after confirmation
-
-## Data Structure
-
-```c
-typedef struct {
-    // Magic number and version
-    uint32_t magic;               // Magic number for validation
-    uint16_t version;             // Configuration version
-    
-    // System parameters
-    uint8_t system_mode;          // Initial system mode
-    uint16_t watchdog_timeout;    // Watchdog timeout in ms
-    uint8_t error_policy;         // Error handling policy
-    
-    // Power management parameters
-    uint16_t battery_normal;      // Normal battery threshold in mV
-    uint16_t battery_low;         // Low battery threshold in mV
-    uint16_t battery_critical;    // Critical battery threshold in mV
-    uint16_t sleep_normal;        // Sleep duration in normal mode (seconds)
-    uint16_t sleep_low_power;     // Sleep duration in low power mode (seconds)
-    uint16_t sleep_critical;      // Sleep duration in critical mode (seconds)
-    
-    // GNSS parameters
-    uint16_t gnss_interval_normal;    // GNSS update interval in normal mode (seconds)
-    uint16_t gnss_interval_low;       // GNSS update interval in low power mode (seconds)
-    uint16_t gnss_timeout;            // GNSS acquisition timeout (seconds)
-    uint8_t gnss_min_satellites;      // Minimum satellites for valid fix
-    uint8_t gnss_max_hdop;            // Maximum HDOP for valid fix (x10)
-    uint8_t gnss_high_altitude;       // High altitude mode (0=disabled, 1=enabled)
-    
-    // Sensor parameters
-    uint16_t sensor_interval_normal;  // Sensor sampling interval in normal mode (seconds)
-    uint16_t sensor_interval_low;     // Sensor sampling interval in low power mode (seconds)
-    uint8_t pressure_osr;             // Pressure oversampling ratio
-    uint8_t temperature_osr;          // Temperature oversampling ratio
-    uint8_t humidity_precision;       // Humidity measurement precision
-    int16_t temp_calibration;         // Temperature calibration offset (x10)
-    int16_t pressure_calibration;     // Pressure calibration offset (x10)
-    int16_t humidity_calibration;     // Humidity calibration offset (x10)
-    
-    // Flash logging parameters
-    uint32_t flash_buffer_size;       // Size of circular buffer in bytes
-    uint32_t flash_metadata_addr;     // Address of flash metadata
-    uint8_t flash_record_version;     // Version of telemetry record format
-    
-    // Transmission parameters
-    uint8_t lora_region;              // LoRaWAN region code
-    uint8_t lora_datarate;            // LoRaWAN data rate
-    uint8_t lora_tx_power;            // LoRaWAN TX power
-    uint8_t lora_confirmed;           // Use confirmed messages (0=no, 1=yes)
-    uint8_t lora_retry_count;         // Number of retries for confirmed messages
-    uint8_t lora_adaptive_sf;         // Enable adaptive spreading factor (0=no, 1=yes)
-    uint8_t lora_batch_size;          // Number of records to send after confirmation
-    
-    // CRC for validation
-    uint32_t crc;                     // CRC for configuration validation
-} Configuration_t;
-```
-
-## Key Functions
-
-### Initialization
-
-```c
-ConfigStatus_t Config_Init(void);
-```
-- Initializes the Configuration Module
-- Reads configuration from flash
-- Validates configuration integrity
-- Loads default values if necessary
-
-### Parameter Access
-
-```c
-ConfigStatus_t Config_GetParameter(ConfigParam_t param, void *value, size_t size);
-ConfigStatus_t Config_SetParameter(ConfigParam_t param, const void *value, size_t size);
-```
-- Provides unified interface for parameter access
-- Handles type conversion and validation
-- Supports different parameter types
-
-### Configuration Management
-
-```c
-ConfigStatus_t Config_SaveToFlash(void);
-ConfigStatus_t Config_LoadFromFlash(void);
-ConfigStatus_t Config_ResetToDefaults(void);
-```
-- Manages configuration storage in flash
-- Handles loading and saving operations
-- Provides factory reset capability
-
-### Validation
-
-```c
-bool Config_IsValid(void);
-uint32_t Config_CalculateCRC(void);
-```
-- Validates configuration integrity
-- Calculates CRC for configuration data
-- Detects corrupted configurations
-
-## Flash Storage
-
-The Configuration Module stores configuration data in a dedicated flash sector:
-
-```
-+---------------------------+
-|      Magic Number         |
-+---------------------------+
-|      Configuration        |
-|          Data             |
-|                           |
-+---------------------------+
-|          CRC              |
-+---------------------------+
-```
-
-- **Sector Selection**: Uses a dedicated flash sector for configuration
-- **Wear Leveling**: Simple alternating sector approach for wear leveling
-- **Validation**: Magic number and CRC for configuration validation
-- **Recovery**: Default values if configuration is invalid
-
-## Default Configuration
-
-The Configuration Module provides default values for all parameters:
-
-```c
-static const Configuration_t DEFAULT_CONFIG = {
-    .magic = CONFIG_MAGIC,
-    .version = CONFIG_VERSION,
-    
-    // System defaults
-    .system_mode = SYSTEM_MODE_NORMAL,
-    .watchdog_timeout = 10000,  // 10 seconds
-    .error_policy = ERROR_POLICY_RETRY,
-    
-    // Power management defaults
-    .battery_normal = 3600,     // 3.6V
-    .battery_low = 3300,        // 3.3V
-    .battery_critical = 3000,   // 3.0V
-    .sleep_normal = 300,        // 5 minutes
-    .sleep_low_power = 900,     // 15 minutes
-    .sleep_critical = 3600,     // 60 minutes
-    
-    // GNSS defaults
-    .gnss_interval_normal = 60,  // 1 minute
-    .gnss_interval_low = 900,    // 15 minutes
-    .gnss_timeout = 60,          // 60 seconds
-    .gnss_min_satellites = 4,
-    .gnss_max_hdop = 50,         // 5.0
-    .gnss_high_altitude = 1,     // Enabled
-    
-    // Sensor defaults
-    .sensor_interval_normal = 60,  // 1 minute
-    .sensor_interval_low = 900,    // 15 minutes
-    .pressure_osr = 4,             // OSR 4096
-    .temperature_osr = 4,          // OSR 4096
-    .humidity_precision = 1,       // Medium precision
-    .temp_calibration = 0,
-    .pressure_calibration = 0,
-    .humidity_calibration = 0,
-    
-    // Flash logging defaults
-    .flash_buffer_size = 0x1F0000,  // ~2MB
-    .flash_metadata_addr = 0x1000,
-    .flash_record_version = 1,
-    
-    // Transmission defaults
-    .lora_region = REGION_EU868,
-    .lora_datarate = 5,            // SF7/125kHz
-    .lora_tx_power = 14,           // 14 dBm
-    .lora_confirmed = 1,           // Use confirmed messages
-    .lora_retry_count = 3,         // 3 retries
-    .lora_adaptive_sf = 1,         // Enable adaptive SF
-    .lora_batch_size = 5,          // Send 5 records after confirmation
-    
-    // CRC will be calculated during initialization
-    .crc = 0
-};
-```
-
-## Runtime Updates
-
-The Configuration Module supports runtime updates to parameters:
-
-- **Immediate Updates**: Some parameters take effect immediately
-- **Deferred Updates**: Some parameters require system restart
-- **Persistent Updates**: Changes can be saved to flash for persistence
-- **Temporary Updates**: Changes can be kept in RAM only
-
-## Error Handling
-
-1. **Flash Errors**:
-   - Retry mechanism for flash operations
-   - Fallback to default values if flash is corrupted
-   - Error reporting to System Module
-
-2. **Parameter Validation**:
-   - Range checking for parameter values
-   - Type checking for parameter access
-   - Error reporting for invalid parameters
-
-3. **CRC Validation**:
-   - Detection of corrupted configuration
-   - Automatic recovery with default values
-   - Logging of configuration corruption events
-
-## Implementation Notes
-
-- Parameters stored in dedicated flash sector
-- CRC validation for configuration integrity
-- Default values for factory reset or recovery
-- Simple interface for parameter access
-- Support for different parameter types
-- Efficient storage format to minimize flash usage
+- `Core/Inc/backup_regs.h` — the backup-domain ownership map (sibling rule to
+  the flash page map)
+- DDR-0018 (credentials), DDR-0010 (persistence classification)
+- `docs/PowerManagement.md` — where the live (hardcoded) power thresholds
+  actually live
