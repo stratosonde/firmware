@@ -1060,6 +1060,65 @@ static void test_r3_07_blank_flash_still_fresh(void)
     fake_w25q_free();
 }
 
+/* ========================================================================== */
+/* FR-12 (#292) - a failed ordinary header checkpoint must not stay lost     */
+/* ========================================================================== */
+/* WriteRecord checkpoints the header every HEADER_UPDATE_INTERVAL (10)
+ * records. On checkpoint failure it returns the error but sets NO dirty
+ * flag, so the sync is never retried until the next scheduled checkpoint.
+ * Consecutive failures (worn header sector, sagging rail) keep the durable
+ * header stale without bound; once more than 10 records are written past the
+ * stale checkpoint, the bounded boot FrontierScan (10 probes) cannot reach
+ * the true frontier - the reclaimed write pointer overwrites valid records.
+ * Fix contract: a failed checkpoint sets header_dirty (retried at the top of
+ * the next WriteRecord) and the record write itself still reports OK. */
+static void test_fr12_failed_checkpoint_retried(void)
+{
+    printf("-- FR-12 (#292): failed header checkpoint sets dirty + is retried\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* Armed AFTER init (a fresh init writes the initial header). Fail the
+     * next TWO header-sector writes: pre-fix those are the checkpoints at
+     * records 10 and 20; post-fix they are the record-10 checkpoint and its
+     * record-11 retry. Data-record writes are unaffected. */
+    fake_w25q_fail_writes_below(2U * W25Q_SECTOR_SIZE, 2);
+
+    FlashLog_StatusTypeDef st10 = FLASH_LOG_OK;
+    for (uint32_t i = 0; i < 25; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        FlashLog_StatusTypeDef st = FlashLog_WriteRecord(&hlog, &s, 9000U + i, 0, 0, 0);
+        if (i == 9) {
+            st10 = st;   /* the record-10 call whose checkpoint fails */
+        } else if (i == 19) {
+            /* record 20's checkpoint also fails pre-fix (2nd armed fault);
+             * post-fix the faults were consumed by the dirty retries and
+             * this call is clean. Not part of the fix contract. */
+        } else {
+            CHECK_EQ_I(st, FLASH_LOG_OK);
+        }
+    }
+
+    /* The failed checkpoint must NOT make the (successfully written) record
+     * report an error... */
+    CHECK_REGRESSION(st10 == FLASH_LOG_OK, "FR-12-record-reports-ok");
+
+    /* ...and the durable header must have recovered WITHOUT any explicit
+     * FlashLog_SyncHeader: a reload sees all 25 records. Pre-fix the durable
+     * header is stuck at the boot state and the bounded FrontierScan recovers
+     * at most 10 - records 10..24 are invisible and their slots get reused. */
+    FlashLog_HandleTypeDef re;
+    CHECK_EQ_I(FlashLog_Init(&re, &hw), FLASH_LOG_OK);
+    printf("   after failed checkpoints + reload: record_count=%lu (want 25)\n",
+           (unsigned long)re.record_count);
+    CHECK_REGRESSION(re.record_count == 25, "FR-12-reload-recovers-all");
+
+    fake_w25q_free();
+}
+
 int main(void)
 {
     printf("=== Stratosonde flight-readiness regression tests ===\n\n");
@@ -1082,6 +1141,7 @@ test_sp19_high_water_never_behind_oldest();
     test_r3_04_one_pass_recovery();
     test_r3_07_double_header_loss_recovers_ring();
     test_r3_07_blank_flash_still_fresh();
+    test_fr12_failed_checkpoint_retried();
 
     printf("\n%d checks, %d failures", g_checks, g_failures);
     if (g_expected_failures > 0) {

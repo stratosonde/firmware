@@ -27,6 +27,8 @@ static uint8_t *g_mem = NULL;
 static int      g_fail_reads  = 0;
 static int      g_fail_writes = 0;   /* finding #4: intermittent program faults */
 static int      g_fail_erases = 0;   /* finding #4: intermittent erase faults */
+static uint32_t g_fail_below_addr  = 0;
+static int      g_fail_below_count = 0;   /* FR-12 (#292): fail writes below an address (header sectors) */
 
 /* Statistics — used to assert that the code under test does not, e.g.,
  * erase a sector it is about to read from. */
@@ -44,6 +46,8 @@ void fake_w25q_init(void)
     g_fail_reads  = 0;
     g_fail_writes = 0;
     g_fail_erases = 0;
+    g_fail_below_addr = 0;
+    g_fail_below_count = 0;
     fake_w25q_erase_count = 0;
     fake_w25q_write_count = 0;
     fake_w25q_read_count  = 0;
@@ -73,6 +77,14 @@ void fake_w25q_fail_next_reads(int n) { g_fail_reads = n; }
  * the program step — the destructive case the finding reproduces. */
 void fake_w25q_fail_next_writes(int n) { g_fail_writes = n; }
 void fake_w25q_fail_next_erases(int n) { g_fail_erases = n; }
+
+/* FR-12 (#292): WriteRecord's ordinary header checkpoint rides the SAME call
+ * as the record's own program op, so "fail the next write" can only ever kill
+ * the record, never the checkpoint. Target by address instead: the headers
+ * live in the two sectors below the data region, so fail the next `n` writes
+ * whose destination is below `addr_threshold`. Immune to the op-count shift
+ * the fix's header-sync retries introduce. */
+void fake_w25q_fail_writes_below(uint32_t addr_threshold, int n) { g_fail_below_addr = addr_threshold; g_fail_below_count = n; }
 
 uint8_t fake_w25q_peek(uint32_t addr) { return g_mem[addr]; }
 
@@ -113,6 +125,7 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     (void)hw25q;
     if (g_mem == NULL || data == NULL || len == 0) { return W25Q_ERROR; }
     if ((uint64_t)addr + len > W25Q_FLASH_SIZE)    { return W25Q_ERROR; }
+    if (g_fail_below_count > 0 && addr < g_fail_below_addr) { g_fail_below_count--; return W25Q_ERROR; }
     if (g_fail_writes > 0) { g_fail_writes--; return W25Q_ERROR; }
     fake_w25q_write_count++;
     /* NOR semantics: program can only clear bits. */

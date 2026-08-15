@@ -778,6 +778,21 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     if (hlog == NULL || !hlog->initialized || sensor_data == NULL) {
         return FLASH_LOG_ERROR_PARAM;
     }
+
+    /* FR-12 (#292): a failed periodic checkpoint (below) left the durable
+     * header stale with no retry until the next scheduled checkpoint -
+     * consecutive failures (worn header sector, sagging rail) pushed it more
+     * than HEADER_UPDATE_INTERVAL records behind, and the bounded boot
+     * FrontierScan then reclaimed a write address still holding valid
+     * records. Retry the sync BEFORE appending so the staleness window never
+     * exceeds one record. Non-fatal on failure: the flag stays set and the
+     * append proceeds. The !sync_deferred guard keeps the finding-#8 burst
+     * batching intact (a deferred burst sync is owned by FlushHeaderSync). */
+    if (hlog->header_dirty && !hlog->sync_deferred) {
+        if (FlashLog_SyncHeader(hlog) == FLASH_LOG_OK) {
+            hlog->header_dirty = 0;
+        }
+    }
     
     /* Erase sector if starting new sector */
     log_status = FlashLog_EraseSectorIfNeeded(hlog, hlog->write_addr);
@@ -880,7 +895,12 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
     if ((hlog->record_count % HEADER_UPDATE_INTERVAL) == 0) {
         log_status = FlashLog_WriteHeader(hlog);
         if (log_status != FLASH_LOG_OK) {
-            return log_status;
+            /* FR-12 (#292): the RECORD is durable - only the checkpoint
+             * failed. Do not report the record write as failed (the caller
+             * would treat a good record as lost); defer the sync instead.
+             * The retry at the top of the next WriteRecord closes the
+             * window. */
+            hlog->header_dirty = 1;
         }
     }
     
