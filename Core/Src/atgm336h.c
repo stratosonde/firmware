@@ -37,6 +37,7 @@ static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss);
 static bool GNSS_VerifyChecksum(const char *sentence);
+static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss);  /* LT-04 (#276) */
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -162,11 +163,10 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
      * through one cleanup that returns all hardware to OFF. Previously this
      * path left the module electrically powered (~25-30 mA) and STOP mode
      * disabled while is_powered stayed false, so nothing later cleaned up
-     * and physical/software state disagreed. */
-    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
-    HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
-    hgnss->is_powered = false;
+     * and physical/software state disagreed. (LT-04/#276: the cleanup is now
+     * the shared GNSS_TeardownToOff, which also applies the SP-09/#249
+     * sleep-safe pin policy.) */
+    GNSS_TeardownToOff(hgnss);
     SONDE_LOG_STR("GNSS_PowerOn: DMA start FAILED - rolled back to OFF (pins LOW, STOP re-enabled)\r\n");
     return GNSS_ERROR;
   }
@@ -179,13 +179,9 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   if (HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100) != HAL_OK)
   {
     /* R9 (#194): same transactional cleanup - DMA was started, so abort it
-     * too on the way back to OFF. */
-    hgnss->rx_dma_active = false;  /* SP-01 (#244): not live anymore */
-    HAL_UART_AbortReceive(hgnss->huart);
-    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
-    HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
-    hgnss->is_powered = false;
+     * too on the way back to OFF. (LT-04/#276: GNSS_TeardownToOff does both,
+     * plus the SP-09/#249 sleep-safe pins.) */
+    GNSS_TeardownToOff(hgnss);
     SONDE_LOG_STR("GNSS_PowerOn: wake TX FAILED - rolled back to OFF\r\n");
     return GNSS_ERROR;
   }
@@ -1517,6 +1513,25 @@ void GNSS_UARTPins_SleepSafe(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
+/* LT-04 (#276): one exit for every failed startup - the module ends OFF and
+ * the pins end in the SP-09 (#249) sleep-safe state, never AF-HIGH into a
+ * dead module. The wake path used to only re-enable STOP mode on failure,
+ * leaving PB6 driven into a depowered receiver (the parasitic-drive
+ * condition #249 eliminated). */
+static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss)
+{
+  hgnss->rx_dma_active = false;
+  if (hgnss->huart != NULL) {
+    HAL_UART_AbortReceive(hgnss->huart);
+    HAL_UART_DeInit(hgnss->huart);
+  }
+  GNSS_UARTPins_SleepSafe();                 /* PB6 OUTPUT-LOW, PB7 ANALOG */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
+  UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+  hgnss->is_powered = false;
+}
+
 /**
   * @brief  Wake GPS from standby mode
   * @param  hgnss: Pointer to GNSS handle structure
@@ -1544,7 +1559,9 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     if (HAL_UART_Init(hgnss->huart) != HAL_OK)
     {
       SONDE_LOG_STR("[GPS WAKE] ERROR - UART reinit failed\r\n");
-      UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+      /* LT-04 (#276): full teardown, not just the LPM lock - PB6 must not sit
+       * AF-HIGH into a depowered module (the SP-09/#249 condition). */
+      GNSS_TeardownToOff(hgnss);
       return GNSS_ERROR;
     }
     SONDE_LOG_STR("[GPS WAKE] UART reinitialized\r\n");
@@ -1577,8 +1594,10 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   if (dma_status != HAL_OK)
   {
     SONDE_LOG_STR("[GPS WAKE] ERROR - DMA start failed\r\n");
-    /* BUG 2.4 FIX: Re-enable STOP mode on error path to prevent permanent ~mA Sleep-only */
-    UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
+    /* BUG 2.4 FIX + LT-04 (#276): re-enable STOP mode AND return the pins to
+     * the SP-09 (#249) sleep-safe state - PB6 AF push-pull idles HIGH and
+     * leaks through the depowered module's ESD clamp. */
+    GNSS_TeardownToOff(hgnss);
     return GNSS_ERROR;
   }
   SONDE_LOG_STR("[GPS WAKE] DMA started - ready to receive\r\n");
