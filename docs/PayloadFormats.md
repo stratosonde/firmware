@@ -12,16 +12,17 @@ The Stratosonde firmware transmits data using multiple LoRaWAN packet formats op
 |------|-------------|------|---------|--------|
 | **2** | CayenneLPP | Variable | Human-readable debug format | Development only |
 | **3** | GNSS Detail | Variable | Satellite tracking data | Development only |
-| **10** | Compact Binary | 10 bytes | Production telemetry (SF10) | **PRODUCTION** |
-| **11** | Bulk Binary | Variable (v4, `0x04`: `6 + 32n + 4`) | Core science archive transfer (SF7) | **PRODUCTION** |
+| **10** | Compact Binary | 11 bytes | Production telemetry (SF10) | **PRODUCTION** |
+| **11** | Bulk Binary | Variable (v6, `0x06`: `6 + 38n`) | Core science archive transfer (SF7) | **PRODUCTION** |
 
 ### Debug Packet Control
 
-Debug packets (ports 2 and 3) can be disabled via compile-time flags:
+Debug packets (ports 2 and 3) are **compiled out of flight builds** (defaults
+below); they are opt-in for bench/commissioning builds:
 ```c
-#define ENABLE_DEBUG_LPP           1  // 0 = Disable CayenneLPP
-#define ENABLE_GNSS_DETAIL_PACKET  1  // 0 = Disable GNSS detail
-#define DEBUG_LPP_TX_INTERVAL      5  // Send debug every 5th TX
+#define ENABLE_DEBUG_LPP           0  // 0 = Default OFF for flight builds
+#define ENABLE_GNSS_DETAIL_PACKET  0  // 0 = Default OFF for flight builds
+#define DEBUG_LPP_TX_INTERVAL      5  // Send debug every 5th TX (when enabled)
 ```
 
 ---
@@ -38,7 +39,7 @@ Ultra-compact **11-byte** heartbeat for maximum-range transmission (SF10; SF9 in
 | 0 | Timestamp | uint16 LE | 2 | 1 minute | 0-45.5 days | Minutes since epoch (wraps; see status bit 5) |
 | 2 | Latitude | int16 LE | 2 | ~300 m | ±90° | Full-range scale: deg = value × 90 / 32767 |
 | 4 | Longitude | int16 LE | 2 | ~550 m | ±180° | Full-range scale: deg = value × 180 / 32767 |
-| 6 | Temperature | uint8 | 1 | 2°C | -64 to +63.5°C | (value - 64) × 2 |
+| 6 | Temperature | int8 | 1 | 2°C | -64 to +63.5°C | (value - 64) × 2 |
 | 7 | Pressure + Humidity | uint16 LE | 2 | 1 hPa / 5% | 0-2046 hPa / 0-100% | bits 0-10 pressure hPa (2047 = invalid); bits 11-15 humidity 5%-units (31 = invalid) |
 | 9 | Battery | uint8 | 1 | 50 mV | 0-12.75V | value × 0.050 |
 | 10 | Status v2 | uint8 | 1 | — | — | bit table below |
@@ -241,7 +242,7 @@ stored honestly in flash can never arrive at the backend looking fresh
 (DDR-0007), and the flags byte's power-mode field is the HISTORICAL mode
 (STAB-05, #152).
 
-The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many oldest complete records as fit; records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0005).
+The firmware queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts) and packs as many complete records as fit, walking the archive **newest-to-oldest** (the one-pass recovery walker, DDR-0005); records cut by the budget remain pending and are retransmitted next cycle (at-least-once, DDR-0005).
 
 ### Packet Structure v4 (variable length, SUPERSEDED — never deployed)
 
