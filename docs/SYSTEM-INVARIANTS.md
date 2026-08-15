@@ -232,4 +232,7 @@ failure mode.
 - `decisions/` — the normative records.
 - `decisions/system-operational-assumptions.md` — the environmental facts these
   invariants are designed around.
-- `requirements/` — requirements, traceability, and proof obligations.
+- `requirements/` — requirements, traceability, and proof obligations, including the
+  dated code-conformance statuses (last pass 2026-08-15). Where an invariant is not
+  yet met in code, the gap is tracked there and in the issue tracker — this file
+  stays intent-pure.
