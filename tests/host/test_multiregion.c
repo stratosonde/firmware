@@ -237,9 +237,13 @@ LoRaMacRegion_t MultiRegion_DetectFromGPS_H3(float lat, float lon) { (void)lat; 
 int32_t EnvSensors_Read(sensor_t *sensor_data) { sensor_data->temperature = 20.0f; return 0; }
 
 /* R47 precedent: Config_Get stubbed to NULL -> the macro-default fallback,
- * same as the main suite. The unit under test includes config.h itself. */
+ * same as the main suite. The unit under test includes config.h itself.
+ * H-02 (#273): the fake can now serve a configured interval - the restore
+ * margin must follow it, not the macro default. */
 #include "config.h"
-const SystemConfig_t *Config_Get(void) { return NULL; }
+static SystemConfig_t g_fake_config;
+static bool g_fake_config_valid = false;
+const SystemConfig_t *Config_Get(void) { return g_fake_config_valid ? &g_fake_config : NULL; }
 
 uint32_t g_fake_tick = 0;
 uint32_t HAL_GetTick(void) { return g_fake_tick; }
@@ -785,6 +789,63 @@ static void test_r3_fcnt_reset_margin(void)
 }
 
 /* ========================================================================== */
+/* H-02 (P1) — the restore margin must follow the CONFIGURED save interval     */
+/* ========================================================================== */
+/* On target the Tier-2 restore ran before Config_Init, so
+ * CfgFrameCounterSaveInterval() fell back to the macro (10) at restore time
+ * while the save cadence used the configured value. Here the fake Config_Get
+ * serves the configured value (the fixed init order) and the invariant is
+ * pinned: the margin and the save cadence must be the same number. The
+ * ordering defect itself is main.c-bound - the LT suite's structural scan
+ * (H-02-config-first) is the red-first gate for it. */
+static void test_h02_restore_margin_uses_config_interval(void)
+{
+    printf("-- H-02 (P1): restore margin follows the CONFIGURED save interval\n");
+
+    memset(&g_fake_config, 0, sizeof(g_fake_config));
+    g_fake_config.frame_counter_save_interval = 20;  /* non-default (macro = 10) */
+    g_fake_config_valid = true;
+
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    g_initialized = false;
+    mac_reset();
+    MultiRegion_Init();
+    if (!commission_two_regions()) { printf("   SETUP FAILED: commissioning path\n"); exit(2); }
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: switch\n"); exit(2);
+    }
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].region == LORAMAC_REGION_US915 &&
+            g_storage.contexts[i].dev_addr == 0x26011111UL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: slot\n"); exit(2); }
+
+    /* One full configured batch (20 TXs) -> persisted counter == true counter. */
+    for (int i = 0; i < 20; i++) {
+        g_mac.nvm.Crypto.FCntList.FCntUp++;
+        MultiRegion_SaveCurrentContext();
+    }
+    uint32_t persisted = g_storage.contexts[slot].uplink_counter;
+
+    /* Simulated reset: the restore margin must be +20 (configured), not +10
+     * (macro default). */
+    g_initialized = false;
+    g_unsaved_tx_count = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+    MultiRegion_Init();
+
+    uint32_t resumed = g_storage.contexts[slot].uplink_counter;
+    printf("   configured interval 20: persisted %lu, resumed %lu (want %lu)\n",
+           (unsigned long)persisted, (unsigned long)resumed,
+           (unsigned long)(persisted + 20));
+    CHECK_REGRESSION(resumed == persisted + 20, "H-02-margin-follows-config");
+
+    g_fake_config_valid = false;  /* restore the harness default (NULL) */
+}
+
+/* ========================================================================== */
 /* DR-07 (#239) — the C6/R3 margin must be applied EXACTLY ONCE               */
 /* ========================================================================== */
 /* MultiRegion_SaveCurrentContext advanced ctx->uplink_counter by INTERVAL and
@@ -968,6 +1029,7 @@ test_sp05_all_seven_regions_supported();
     test_c01_provisioning_latch();
     printf("\n");
     test_r3_fcnt_reset_margin();
+    test_h02_restore_margin_uses_config_interval();
     test_dr07_single_margin();
     test_s03_tier2_commit_back_bounded();
     printf("\n");

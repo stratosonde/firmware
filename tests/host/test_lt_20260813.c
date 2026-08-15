@@ -685,6 +685,25 @@ static void test_c01_flight_door_gated(const char *mstate, const char *mregh)
 }
 
 /* ========================================================================== */
+/* H-02 - Config_Init must run before MX_LoRaWAN_Init                          */
+/* ========================================================================== */
+
+static void test_h02_config_before_lorawan_init(const char *mainc)
+{
+    printf("H-02: Config_Init must run before MX_LoRaWAN_Init\n");
+
+    /* The frame-counter restore inside MultiRegion_Init (called from
+     * MX_LoRaWAN_Init) reads CfgFrameCounterSaveInterval(), which falls back
+     * to the macro default (10) while Config_Get() is NULL. With a configured
+     * interval != 10 the restore margin and the save cadence disagree -
+     * counter replay/rollback, the DR-07/#239 defect class via init order. */
+    const char *cfg = strstr(mainc, "Config_Init();");
+    const char *lw  = strstr(mainc, "MX_LoRaWAN_Init();");
+    CHECK(cfg != NULL && lw != NULL);
+    CHECK_REGRESSION(cfg != NULL && lw != NULL && cfg < lw, "H-02-config-first");
+}
+
+/* ========================================================================== */
 
 int main(void)
 {
@@ -732,6 +751,8 @@ int main(void)
     test_lt11_dead_timestamp_param(app);
     printf("\n");
     test_c01_flight_door_gated(mstate, mregh);
+    printf("\n");
+    test_h02_config_before_lorawan_init(mainc);
 
     free(app); free(gnss); free(mreg); free(lpm); free(mainc);
     free(mstate); free(mregh);

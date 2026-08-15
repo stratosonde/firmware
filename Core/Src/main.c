@@ -224,6 +224,31 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+
+  /* H-02 (#273): Config_Init BEFORE MX_LoRaWAN_Init - the frame-counter
+   * restore inside MultiRegion_Init (called from MX_LoRaWAN_Init) reads the
+   * configured save interval via CfgFrameCounterSaveInterval(); running
+   * Config_Init later forced the macro fallback (10) at restore time while
+   * the save cadence used the configured value (replay/rollback, the
+   * DR-07/#239 class via init order). INVARIANT: the restore margin and the
+   * save cadence must be the same number. Dependency verified before the
+   * move: Config_Init touches internal flash only (FLASH_IF_Read needs no
+   * init buffer; Config_FlashWrite erases the page before writing, so
+   * FLASH_IF_Write never takes the read-modify-write path that needs
+   * pAllocatedBuffer) and makes no LoRaWAN stack calls. */
+  // Initialize configuration system
+  SONDE_LOG_STR("Initializing configuration system...\r\n");
+  ConfigStatus_t config_status = Config_Init();
+  if (config_status == CONFIG_OK) {
+    SONDE_LOG_STR("Configuration system initialized successfully\r\n");
+
+    // Print current configuration for verification
+    Config_PrintCurrent();
+  } else {
+    SONDE_LOG("WARNING: Configuration initialization failed (status: %d)\r\n", config_status);
+    SONDE_LOG_STR("Continuing with hardcoded defaults...\r\n");
+  }
+
   MX_LoRaWAN_Init();  /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
@@ -316,19 +341,6 @@ int main(void)
      * malformed. Breadcrumb + reset so the failure is observable, not silent. */
     SONDE_LOG_STR("ERROR: Payload format size validation failed!\r\n");
     Error_Handler_Fatal(FAULT_CODE_PAYLOAD_FORMAT);
-  }
-  
-  // Initialize configuration system
-  SONDE_LOG_STR("Initializing configuration system...\r\n");
-  ConfigStatus_t config_status = Config_Init();
-  if (config_status == CONFIG_OK) {
-    SONDE_LOG_STR("Configuration system initialized successfully\r\n");
-    
-    // Print current configuration for verification
-    Config_PrintCurrent();
-  } else {
-    SONDE_LOG("WARNING: Configuration initialization failed (status: %d)\r\n", config_status);
-    SONDE_LOG_STR("Continuing with hardcoded defaults...\r\n");
   }
   
   /* #77: H3Lite bench profiler deleted (never enabled in flight; git history
