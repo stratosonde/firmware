@@ -194,7 +194,9 @@ never an autonomous in-flight join. (DDR-0018, DDR-0019.)
 
 Normal backlog recovery is newest-first.
 
-An explicit backend request for record `N` preempts opportunistic backlog.
+An explicit backend request for record `N` preempts opportunistic backlog
+(**intent — not yet implemented in firmware**; tracked in the conformance
+worklist FW-CONF-042..045, see `requirements/`):
 
 ```text
 receive REQUEST_RECORD N
