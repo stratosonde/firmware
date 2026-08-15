@@ -1,229 +1,103 @@
-# Environmental Sensor Module
+# Environmental Sensors
 
 ## Overview
 
-The Environmental Sensor Module interfaces with the MS5607 pressure sensor and SHT31 temperature/humidity sensor to collect atmospheric data for the Stratosonde. It manages sensor communication, power control, and data acquisition while optimizing for power efficiency.
+Environmental sensing is the `sys_sensors.c` aggregation layer over three
+drivers — `ms5607.c` (pressure/temperature), `sht31.c` (temperature/humidity),
+`adc_if.c` (battery/solar/regulator) — plus GNSS merge from `atgm336h.c`.
+Its product is `sensor_t` (`Core/Inc/sys_sensors.h`): one coherent observation
+where **every field carries its own freshness** (DDR-0003 data honesty).
 
-## Hardware Interface
+## Hardware
 
-- **Pressure Sensor**: MS5607
-  - Interface: I2C
-  - Measurement: Barometric pressure and temperature
-  - Range: 10 to 1200 mbar, -40 to +85°C
-  
-- **Temperature/Humidity Sensor**: SHT31
-  - Interface: I2C
-  - Measurement: Temperature and relative humidity
-  - Range: -40 to +125°C, 0 to 100% RH
+- **MS5607** pressure + temperature, I2C2 (PA11 SDA / PA12 SCL; driver range
+  check 1–1200 hPa, -90…+85 °C; compensation includes the `temp < -1500`
+  very-low-temperature branch most drivers omit)
+- **SHT31** temperature + humidity, I2C2
+- **ADC** battery, solar panel, and VDDA/regulator rails
+- **GNSS** fields merge from the ATGM336H handle (no I2C traffic —
+  `EnvSensors_MergeGnss`, FR-15/#96)
 
-- **I2C Bus**: Shared I2C bus for both sensors
-  - SCL: I2C clock line
-  - SDA: I2C data line
-  - Power Control: GPIO pins for sensor power gating
-
-## Operational Flow
-
-```mermaid
-sequenceDiagram
-    participant SM as System Module
-    participant ESM as Environmental Sensor Module
-    participant PS as Pressure Sensor
-    participant TH as Temp/Humidity Sensor
-    
-    SM->>ESM: Request Sensor Readings
-    
-    alt Normal Power Mode
-        ESM->>PS: Wake Up
-        ESM->>PS: Request Pressure Reading
-        PS-->>ESM: Raw Pressure Data
-        ESM->>PS: Request Temperature Reading
-        PS-->>ESM: Raw Temperature Data
-        ESM->>PS: Enter Low Power Mode
-        
-        ESM->>TH: Wake Up
-        ESM->>TH: Request Temperature Reading
-        TH-->>ESM: Temperature Data
-        ESM->>TH: Request Humidity Reading
-        TH-->>ESM: Humidity Data
-        ESM->>TH: Enter Low Power Mode
-        
-        ESM->>ESM: Calculate Altitude
-        ESM->>ESM: Apply Calibration
-    else Low Power Mode
-        ESM->>PS: Wake Up
-        ESM->>PS: Request Low Resolution Reading
-        PS-->>ESM: Combined Data
-        ESM->>PS: Enter Low Power Mode
-        
-        ESM->>TH: Wake Up
-        ESM->>TH: Request Low Power Reading
-        TH-->>ESM: Combined Data
-        ESM->>TH: Enter Low Power Mode
-        
-        ESM->>ESM: Calculate Essential Values
-    end
-    
-    ESM-->>SM: Return Processed Sensor Data
-```
-
-## Key Functions
-
-### Initialization
-
-```c
-SensorStatus_t Sensor_Init(void);
-```
-- Initializes I2C interface for sensor communication
-- Configures GPIO pins for power control
-- Performs sensor detection and initial configuration
-- Reads calibration data from sensors
-
-### Power Management
-
-```c
-SensorStatus_t Sensor_PowerOn(void);
-SensorStatus_t Sensor_PowerOff(void);
-SensorStatus_t Sensor_EnterLowPowerMode(void);
-```
-- Controls power to sensors
-- Implements proper power-up and power-down sequences
-- Configures sensors for low-power operation
-
-### Data Acquisition
-
-```c
-SensorStatus_t Sensor_ReadAll(SensorData_t *data);
-SensorStatus_t Sensor_ReadPressure(float *pressure);
-SensorStatus_t Sensor_ReadTemperature(float *temperature);
-SensorStatus_t Sensor_ReadHumidity(float *humidity);
-```
-- Acquires data from sensors
-- Implements one-shot measurements for power efficiency
-- Converts raw sensor values to physical units
-
-### Altitude Calculation
-
-```c
-float Sensor_CalculateAltitude(float pressure, float temperature);
-float Sensor_DetectAscent(float current_altitude, float previous_altitude);
-```
-- Calculates altitude from pressure and temperature
-- Implements altitude trend detection
-- Provides ascent/descent rate calculation
-
-### Calibration
-
-```c
-SensorStatus_t Sensor_Calibrate(void);
-SensorStatus_t Sensor_ApplyCalibration(SensorData_t *data);
-```
-- Performs sensor calibration if needed
-- Applies calibration factors to raw readings
-- Stores calibration data in non-volatile memory
-
-### Validation
-
-```c
-bool Sensor_ValidateReading(const SensorData_t *data);
-SensorStatus_t Sensor_FilterReading(SensorData_t *data);
-```
-- Validates sensor readings against acceptable ranges
-- Implements simple filtering for noisy readings
-- Detects sensor failures or anomalies
-
-## Data Structures
-
-### Sensor Data
+## The Honesty Contract (T2/DDR-0003)
 
 ```c
 typedef struct {
-    float pressure;               // Barometric pressure in hPa
-    float temperature_pressure;   // Temperature from pressure sensor in °C
-    float temperature_humidity;   // Temperature from humidity sensor in °C
-    float humidity;               // Relative humidity in %
-    float altitude;               // Calculated altitude in meters
-    float ascent_rate;            // Calculated ascent/descent rate in m/s
-    uint32_t timestamp;           // Timestamp of the reading
-    bool valid;                   // Flag indicating if data is valid
-} SensorData_t;
+  float pressure, temperature, humidity;
+  int32_t latitude, longitude;   // binary scaled
+  int32_t altitudeGps;           // int32 since D5/#35 (float alt >32767 m overflowed int16)
+  /* altitudeBar DELETED (D5/#35): never assigned; backend computes
+     barometric altitude from pressure+temperature */
+  uint8_t satellites, gnss_fix_quality;  float gnss_hdop;  bool gnss_valid;
+  float battery_voltage, regulator_voltage, solar_voltage;
+  uint8_t temp_stale, hum_stale, press_stale, gnss_stale, batt_stale;
+} sensor_t;
 ```
 
-### Sensor Configuration
+A stale bit means "last-known-good (or default), **not** a live read". The
+bits land in the flash record's flags byte (b0–b4) and the wire
+`sensor_quality` byte. **Omission is preferable to fabrication** (SI-004).
 
-```c
-typedef struct {
-    uint8_t pressure_osr;         // Pressure oversampling ratio
-    uint8_t temperature_osr;      // Temperature oversampling ratio
-    uint8_t humidity_precision;   // Humidity measurement precision
-    uint16_t measurement_interval; // Interval between measurements in ms
-    bool enable_filtering;        // Enable measurement filtering
-} SensorConfig_t;
-```
+## Plausibility-Gate-Before-Cache (R28/#36, #136)
 
-## Sensor Modes
+Every channel follows the same discipline — a corrupt read must never poison
+the last-known-good cache that stale mode later serves:
 
-### MS5607 Pressure Sensor
+1. Driver-level gate: MS5607 rejects zero/tiny ADC words and out-of-range
+   results as hard errors (never "calculate anyway").
+2. Aggregation gate: `sys_sensors.c` range-checks **before** the cache accepts
+   (SHT31 −90…+85 °C / 0–100 %; MS5607 1–1200 hPa, defense in depth).
+3. Battery (`#136`): the one sensor feeding the power state machine has the
+   same gate + LKG cache + stale bit in `adc_if.c` (`SYS_GetBatteryVoltage`,
+   `SYS_BatteryIsStale`) — a rejected read serves the cache; with no history
+   it returns 0, the conservative direction (raw < 4300 mV floor → SURVIVAL,
+   never a fantasy full battery).
+4. **Solar is the exception**: no gate, no stale bit → tracked as **#279**.
 
-| Mode | Description | Resolution | Conversion Time | Current |
-|------|-------------|------------|-----------------|---------|
-| OSR 256 | Lowest resolution | 0.11 mbar | 0.6 ms | 0.9 mA |
-| OSR 512 | Low resolution | 0.062 mbar | 1.17 ms | 0.9 mA |
-| OSR 1024 | Standard resolution | 0.039 mbar | 2.28 ms | 0.9 mA |
-| OSR 2048 | High resolution | 0.028 mbar | 4.54 ms | 0.9 mA |
-| OSR 4096 | Ultra high resolution | 0.021 mbar | 9.04 ms | 0.9 mA |
-| Standby | Low power standby | - | - | 0.14 µA |
+`EnvSensors_Read` returns a freshness bitmask (`ENV_SENSORS_FRESH_*`,
+F-030/#59); `EnvSensors_MarkGnssStale` / `EnvSensors_GnssIsStale` carry GNSS
+provenance (F-3/#178 — a stale position may **inhibit** RF but never **switch**
+region, DDR-0015).
 
-### SHT31 Temperature/Humidity Sensor
+## Same-Moment Coherence (LT-03/#271)
 
-| Mode | Description | Resolution | Conversion Time | Current |
-|------|-------------|------------|-----------------|---------|
-| High | High precision | 0.015°C, 0.01% RH | 15 ms | 1.5 mA |
-| Medium | Medium precision | 0.025°C, 0.02% RH | 6 ms | 1.5 mA |
-| Low | Low precision | 0.04°C, 0.04% RH | 4 ms | 1.5 mA |
-| Sleep | Low power sleep | - | - | 0.3 µA |
+The transmit cycle reads sensors twice by design:
 
-## Power Optimization
+1. **Pre-acquisition** read — feeds the power/plan decision.
+2. **Post-acquisition re-sample** — after the GNSS fix (acquisition can run up
+   to 255 s; at 5 m/s ascent that is ~300 m of altitude skew), so the archived
+   record pairs same-moment environment and position (SI-006). Timestamp is
+   taken fresh at write time.
 
-The Environmental Sensor Module implements several strategies to minimize power consumption:
+FR-15 (#96) had removed this re-read as "no new information"; LT-03 refuted
+that across the acquisition gap — the code comment explicitly warns not to
+re-apply FR-15's reasoning. `EnvSensors_MergeGnss` remains the no-I2C way to
+merge a fix into an existing sample.
 
-1. **One-Shot Measurements**: Sensors are only activated for specific readings
-2. **Power Gating**: Complete power-off when sensors are not needed
-3. **Low Power Modes**: Sensors configured for appropriate precision vs. power
-4. **Adaptive Sampling**: Measurement frequency adjusted based on system state
-5. **I2C Optimization**: Efficient I2C transactions to minimize active time
+## What This Module Does NOT Do
 
-## Measurement Strategy
-
-| System State | Measurement Strategy | Sampling Rate | Resolution |
-|--------------|----------------------|---------------|------------|
-| Initialization | Full calibration | Once | Highest |
-| Ascending Mode | Regular measurements | 1 minute | High |
-| Float Mode | Regular measurements | 5 minutes | Standard |
-| Low Power Mode | Essential measurements | 15 minutes | Low |
+- **No altitude calculation**: barometric altitude is derived backend-side
+  from pressure+temperature (documented design; `altitudeBar` deleted D5/#35).
+- **No ascent detection**: launch/float detection is the pressure-reference
+  state machine in `mission_logic.c` (STAB-06/#153, R3-10/#222), not a sensor
+  concern.
+- **No per-mode sampling table**: cadence comes from the mission phase and
+  power model (ASCENT 10 s, FLOAT 5 min, power-mode intervals) — there are no
+  sensor-local measurement schedules.
+- **No sensor power gating GPIOs**: the I2C sensors idle at µA; power strategy
+  is the wake-cycle cadence itself.
 
 ## Error Handling
 
-1. **Communication Errors**:
-   - I2C timeout detection
-   - Bus recovery procedures
-   - Retry mechanism for failed transactions
+Bounded retries at the driver level; a failed read serves the stale cache and
+sets the honesty bit; an uninitialized sensor is a hard error, never an I2C
+probe with garbage calibration (R28). A stuck bus gets the F20 9-clock + STOP
+recovery (`I2C_BusRecover`), with per-read bus-health tracking
+(`I2C_NoteResult`). Recovery is aggressive, bounded, and forgetful (SI-013):
+normal operation resumes immediately on the next good read — no probation, no
+escalation.
 
-2. **Sensor Errors**:
-   - Out-of-range detection
-   - Sensor reset capability
-   - Fallback to last valid reading
+## Cross-References
 
-3. **Calibration Errors**:
-   - Validation of calibration constants
-   - Factory default fallback
-   - Runtime recalibration if needed
-
-## Implementation Notes
-
-- I2C with polling (no DMA required for low data rates)
-- Low-power one-shot measurements
-- Sensor validation against acceptable ranges
-- Error detection for sensor communication
-- Integration with Power Management module for efficient operation
-- Proper handling of sensor power-up and power-down sequences
-- Altitude calculation using international barometric formula
+- `docs/PowerManagement.md` — cadence authority
+- `docs/GNSSModule.md` — the fix pipeline that merges here
+- DDR-0003 (honesty), DDR-0009 (bounded recovery), DDR-0023 (integrity)
