@@ -3,6 +3,13 @@
 ## Overview
 The GNSS Detail packet provides comprehensive satellite tracking and 3D speed telemetry data. This packet is transmitted on **LoRaWAN Port 3** alongside the standard Cayenne LPP environmental sensor data on Port 2.
 
+**Status (2026-08-15):** bench/commissioning only — compiled out of flight
+builds (`ENABLE_GNSS_DETAIL_PACKET = 0` in `payload_format.h`; encoder
+`EncodeGNSSDetailPacket` in `lora_app.c`, verified against this document).
+**Endianness warning:** unlike the production formats (Ports 10/11, all
+little-endian), the 12-byte speed block and HDOP here are **big-endian** —
+that is what the encoder emits; do not "fix" your decoder to LE.
+
 ## Packet Structure
 
 ### Version History
