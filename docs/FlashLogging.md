@@ -2,44 +2,47 @@
 
 ## Overview
 
-The Flash Logging Module provides persistent storage for telemetry data when LoRaWAN connectivity is unavailable. It implements a circular buffer in external flash memory, allowing the device to store high-resolution sensor readings and retrieve them later for transmission.
+The Flash Logging Module (`Core/Src/flash_log.c`, API in `Core/Inc/flash_log.h`)
+is the circular science archive: 64-byte `FlashLog_Record_t` records in external
+NOR flash, written every admitted cycle and replayed opportunistically when
+LoRaWAN connectivity allows. Intent authority: DDR-0004 (archive), DDR-0010
+(persistence), DDR-0011 (storage mechanics); NOR mechanics: FlashStorageNotes.md.
 
 ## Hardware Interface
 
-- **Flash Chip**: W25Q16JV
-- **Interface**: SPI
-- **Pins**:
-  - MOSI: PA10
-  - MISO: PB14
-  - CS: PB9
-  - SCK: PB13
-- **Capacity**: 16 Mbit (2 MB)
+- **Flash Chip**: W25Q16JV (16 Mbit / 2 MB), driver `Core/Src/w25q16jv.c`
+- **Interface**: SPI2
+- **Pins**: MOSI PA10 · MISO PB14 · SCK PB13 · CS PB9 (software CS, pre-initialized HIGH in `main.c` before SPI init)
+- **Erase granularity**: 4 KB sectors (512 total); NOR program can only clear bits
 
 ## Memory Organization
 
 ```
-+---------------------------+
-| Configuration/Calibration |
-+---------------------------+
++---------------------------+  0x000000
+| Header A (sector 0, 4KB)  |
++---------------------------+  0x001000
+| Header B (sector 1, 4KB)  |  <- separate sector: one erase can never kill both
++---------------------------+  0x002000
 |                           |
+|   Records (sectors 2-511) |  circular buffer, ~32,000 records
 |                           |
-|      Telemetry Data       |
-|     (Circular Buffer)     |
-|                           |
-|                           |
-+---------------------------+
++---------------------------+  0x200000
 ```
 
-- **Configuration/Calibration Section**: Small section at the beginning of flash
-- **Telemetry Section**: Majority of flash used for circular buffer of telemetry records
-- **No wear leveling required**: Simple overwrite of oldest data when full
+- **No wear leveling**: simple overwrite of oldest data when full (SI-009: new
+  observations win over old ones)
+- **Erase-ahead**: in a wrapped ring the sector ahead of the write frontier is
+  erased before writing into it; `oldest_addr` advances past erased records
+- **Header checkpointing**: the header is persisted every
+  `HEADER_UPDATE_INTERVAL` (10) records; an unclean reboot loses at most that
+  many records of bookkeeping, which boot recovery re-derives (bounded record
+  loss acceptable, structural integrity inviolable)
 
-## Data Structures
+## Record Layout (64 B, record layout v4 — 2026-08-06, D5/#35)
 
-### Flash record (64 B, record layout v4 — 2026-08-06, D5/#35)
-
-Authoritative definition: `Core/Inc/flash_log.h` (`FlashLog_Record_t`, header version 4).
-All multibyte fields little-endian; CRC32 over the first 60 bytes.
+Authoritative definition: `Core/Inc/flash_log.h` (`FlashLog_Record_t`,
+`_Static_assert` 64 bytes). All multibyte fields little-endian; CRC32 over the
+first 60 bytes.
 
 ```c
 typedef struct __attribute__((packed)) {
@@ -60,122 +63,101 @@ typedef struct __attribute__((packed)) {
     uint16_t solar_mv;          // v4: was never archived before (F-025)
     int16_t  voltage_slope;     // mV/hour at write time (v4)
     uint8_t  power_mode;        // operating mode at write time (v4)
-    uint8_t  flags;             // stale bits: b0 press, b1 temp, b2 hum, b3 gnss
+    uint8_t  flags;             // b0 press_stale, b1 temp_stale, b2 hum_stale,
+                                // b3 gnss_stale, b4 batt_stale (#136),
+                                // b5-b7 TransmitVeto_t at write time (2026-08-11 §6a, DDR-0003)
     uint8_t  reserved[12];
     uint32_t crc32;
-} FlashLog_Record_t;            // exactly 64 bytes (_Static_assert)
+} FlashLog_Record_t;
 ```
 
 `altitude_bar` was deleted in v4 (never assigned; the backend computes barometric
 altitude from pressure+temperature). One version bump covers F-024/F-025/R19.
 
-### Wire record (32 B) — HighResTelemetryRecord_t
+A record that fails validation on read (`FlashLog_VerifyRecord`: magic + CRC32)
+is skipped in place — corruption is local and never wedges traversal (SI-010);
+firmware never repairs science records.
 
-The 32-byte record carried in FPort 11 archive packets. Authoritative definition:
-`Core/Inc/payload_format.h`; byte layout and decoder: `docs/PayloadFormats.md`
-(archive v3).
+## Header (v5) and Power-Failure Recovery
 
-## Metadata Structure
-
-```c
-typedef struct {
-    uint32_t magic;               // Magic number for validation
-    uint32_t write_pointer;       // Current write position
-    uint32_t last_transmitted;    // Last transmitted record pointer
-    uint16_t record_count;        // Number of valid records
-    uint16_t crc;                 // CRC for metadata validation
-} FlashMetadata_t;
-```
-
-## Key Functions
-
-### Initialization
+Two header copies in dedicated sectors 0/1, ping-ponged by a monotonic
+`sequence`/`header_generation` (T4, F-007/R12 #50): on init both are read and
+the valid one with the higher generation wins. Data is written first, header
+second — power loss during a record write costs at most that record; power loss
+during a header write leaves the old header valid.
 
 ```c
-FlashStatus_t Flash_Init(void);
+typedef struct __attribute__((packed)) {
+    uint32_t magic;                // 0xF1A5DEAD
+    uint32_t version;              // header version (current: 5)
+    uint32_t write_addr;           // next write address
+    uint32_t record_count;         // total records written (may exceed capacity)
+    uint32_t sequence;             // header update sequence (ping-pong selection)
+    uint32_t oldest_addr;          // oldest valid record
+    uint32_t flags;
+    uint32_t last_transmitted_seq; // v5: TX HIGH WATER — highest sequence ever
+                                   // handed to the radio (monotonic up)
+    uint32_t reserved[2];          // reserved[0] v5: RECOVERY FRONTIER — the
+                                   // one-pass walker has visited every seq >=
+                                   // frontier (monotonic down)
+    uint32_t crc32;
+} FlashLog_Header_t;
 ```
-- Initializes SPI interface
-- Detects and identifies flash chip
-- Reads metadata and validates integrity
-- Prepares circular buffer for operation
 
-### Writing Data
+Version history: v3 moved headers to dedicated sectors (T4); v4 changed the
+record layout (D5/#35, old headers fail validation → clean init, acceptable
+pre-launch); v5 (R3-04/#218, DDR-0005) redefined the two watermark semantics for
+the one-pass recovery walker.
 
-```c
-FlashStatus_t Flash_WriteRecord(HighResTelemetryRecord_t *record);
-```
-- Writes a high-resolution telemetry record to flash
-- Updates metadata with new write position
-- Handles buffer wrap-around
+## One-Pass Recovery Walker (DDR-0005)
 
-### Reading Data
+`tx_high_water` (monotonic up) and `recovery_frontier` (monotonic down) bracket
+the not-yet-replayed history exactly once: the walker serves records from
+`tx_high_water - 1` downward and retires each below the frontier. It never
+rewalks, never needs a persistent job queue, and tolerates gaps/duplicates
+(SI-018). Explicit backend record-requests outrank the walker (SI-017 —
+requested-record lookup is not yet implemented, see the conformance worklist).
 
-```c
-FlashStatus_t Flash_ReadRecord(uint32_t index, HighResTelemetryRecord_t *record);
-FlashStatus_t Flash_ReadLatestRecord(HighResTelemetryRecord_t *record);
-FlashStatus_t Flash_ReadNextUnsentRecord(HighResTelemetryRecord_t *record);
-```
-- Retrieves records from flash based on index or status
-- Validates record integrity using CRC
+`FlashLog_DeferHeaderSync()` / `FlashLog_FlushHeaderSync()` batch the watermark
+persist across a bulk burst (Finding #8): `MarkRecoverySent` skips the sector
+erase per packet and the caller flushes once at burst end. The
+`pending_tx_committed` gate (C-01/#270) keeps a post-send reset from
+double-committing the watermark ahead of the ACK.
 
-### Packet Conversion
+## API (actual — `flash_log.h`)
 
-```c
-void Flash_ConvertToLowResPacket(HighResTelemetryRecord_t *record, LowResTelemetryPacket_t *packet);
-```
-- Converts high-resolution record to 11-byte LoRaWAN packet
-- Compresses data to fit within size constraints
-- Prioritizes critical information
-
-### Transmission Tracking
-
-```c
-FlashStatus_t Flash_MarkAsSent(uint32_t index);
-FlashStatus_t Flash_GetTransmissionStatus(uint32_t *sent, uint32_t *total);
-```
-- Tracks which records have been successfully transmitted
-- Updates watermark or packet ID markers
-- Provides statistics on transmission status
-
-### Power Management
-
-```c
-FlashStatus_t Flash_EnterLowPowerMode(void);
-FlashStatus_t Flash_ExitLowPowerMode(void);
-```
-- Sends low power shutdown mode command to flash chip
-- Restores normal operation when needed
-
-### Error Handling
-
-```c
-FlashStatus_t Flash_EnterLimpMode(void);
-bool Flash_IsInLimpMode(void);
-```
-- Enters limp mode when flash errors occur
-- Provides status information for system module
+| Function | Purpose |
+|----------|---------|
+| `FlashLog_Init` / `FlashLog_DeInit` | Recover state from headers (or clean-init); release |
+| `FlashLog_WriteRecord` | Append one record (erase-ahead, sequence consumed only on success) |
+| `FlashLog_ReadRecord` / `FlashLog_ReadRecords` | Read by address / batch |
+| `FlashLog_GetRecordCount` / `FlashLog_GetAvailableRecords` / `FlashLog_HasWrapped` | Ring statistics |
+| `FlashLog_SyncHeader` / `FlashLog_DeferHeaderSync` / `FlashLog_FlushHeaderSync` | Header checkpoint control |
+| `FlashLog_VerifyRecord` | Magic + CRC32 validation (lazy, on read) |
+| `FlashLog_GetRecoveryRecords` / `FlashLog_MarkRecoverySent` / `FlashLog_GetUnsentCount` / `FlashLog_HasUnsentData` | Recovery walker + watermarks |
+| `FlashLog_GetStats` | Counters |
+| `FlashLog_CRC32` | Shared CRC helper |
 
 ## Error Handling
 
-The Flash Logging Module implements graceful failure modes:
-
-1. **Retry Mechanism**: Attempts operations multiple times before declaring failure
-2. **Limp Mode**: When flash errors occur, the system enters a limp mode where:
-   - Data can still be transmitted via LoRaWAN
-   - New data cannot be written to flash
-   - Historical data cannot be read from flash
-3. **Error Reporting**: Flash errors are reported to the Error Handler module
+Graceful degradation, no limp mode: write failures cost at most the current
+record (sequence not consumed); read failures skip the corrupt record; header
+loss falls back to the ping-pong copy. Double-header loss currently triggers a
+full-archive rescan — flagged by the 2026-08-14 review as an SI-010 tension
+(#289, open). Errors are counted via `FlashLog_GetStats` and surfaced to the
+system module.
 
 ## Power Considerations
 
-- Flash chip cannot be powered off via hardware
-- Low power shutdown mode command is used to minimize power consumption
-- SPI interface is only enabled when flash operations are needed
+- Flash chip cannot be powered off in hardware; the driver uses the W25Q
+  power-down command between operations
+- CS is driven HIGH before SPI init so the flash never floats selected (main.c)
 
-## Implementation Notes
+## Cross-References
 
-- Fixed-size record format for efficient storage and retrieval
-- Metadata region for tracking write position and transmission status
-- Simple overwrite of oldest data when buffer is full
-- No wear leveling required as specified
-- CRC validation for data integrity
+- `docs/FlashStorageNotes.md` — NOR erase-before-write mechanics and the
+  wrapped-ring frontier rule (sequence discontinuity)
+- `docs/PayloadFormats.md` — the wire encoding these records leave in
+  (Port 11 archive packets, v1–v6)
+- `tests/host/fake_w25q.c` — NOR-faithful flash double (program only clears
+  bits, 4 KB erase) making the invariants host-testable
