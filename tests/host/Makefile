@@ -76,6 +76,11 @@ FIRST_FLIGHT_SRCS := test_first_flight_policy.c ../../Core/Src/first_flight_poli
 # (compiled out of flight builds) is exercised by the contract too.
 PQ_SRCS := test_packet_queue.c ../../Core/Src/packet_queue.c
 
+# Refactor stage 2: module contract for the extracted NVM slot codec
+# (Core/Src/nvm_slot.c) - header build/plausibility, CRC match, generation
+# race with wraparound, torn-write selection scenarios.
+NVM_SRCS := test_nvm_slot.c ../../Core/Src/nvm_slot.c
+
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
 # DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
@@ -152,6 +157,12 @@ test_pq$(EXE): $(PQ_SRCS) ../../Core/Inc/packet_queue.h
 pq: test_pq$(EXE)
 	./test_pq$(EXE)
 
+test_nvm$(EXE): $(NVM_SRCS) ../../Core/Inc/nvm_slot.h
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(NVM_SRCS) -lm
+
+nvm: test_nvm$(EXE)
+	./test_nvm$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -196,7 +207,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -251,7 +262,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_sanitize$(EXE)

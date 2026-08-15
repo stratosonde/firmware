@@ -57,6 +57,7 @@
 #include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
 #include "first_flight_policy.h"
 #include "packet_queue.h"      /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
+#include "nvm_slot.h"          /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -2916,17 +2917,12 @@ static void OnNvmDataChange(LmHandlerNvmContextStates_t state)
  * proven Tier-2 ping-pong pattern (T1/FW-1). Slot A = page 126, slot B =
  * page 127 (the retired legacy store, repurposed). Each slot carries
  * magic/length/generation/CRC; newest valid generation wins. A torn write
- * can only kill the slot being written — the other survives. */
-#define NVM_SLOT_MAGIC    0x4E564D43UL  /* "NVMC" */
+ * can only kill the slot being written — the other survives.
+ * Refactor stage 2: NVM_SLOT_MAGIC, NvmSlotHeader_t and the codec/selection
+ * rules moved verbatim to Core/Inc/nvm_slot.h + Core/Src/nvm_slot.c; the
+ * slot ADDRESSES and all FLASH_IF_* I/O stay here. */
 #define NVM_SLOT_A_ADDR   LORAWAN_NVM_BASE_ADDRESS
 #define NVM_SLOT_B_ADDR   ((void *)((uint32_t)LORAWAN_NVM_BASE_ADDRESS + FLASH_PAGE_SIZE))
-
-typedef struct {
-  uint32_t magic;
-  uint32_t generation;
-  uint32_t length;
-  uint32_t crc32;      /* over the payload only */
-} NvmSlotHeader_t;
 
 static uint32_t g_nvm_generation = 0;
 
@@ -2934,8 +2930,10 @@ static uint32_t g_nvm_generation = 0;
  * store gets (sizeof(LoRaMacNvmData_t)+7)&~7 (measured 1496), restore gets
  * sizeof(LoRaMacNvmData_t) (1492). The header/CRC must use the LOGICAL
  * length so both sides agree; only the physical flash write needs the
- * 64-bit-padded length. These asserts pin that contract at compile time. */
-_Static_assert(sizeof(NvmSlotHeader_t) % 8U == 0U, "NVM slot header must be 8-byte aligned");
+ * 64-bit-padded length. These asserts pin that contract at compile time.
+ * (The 8-byte-alignment assert moved to nvm_slot.c with the struct; this
+ * one stays because it also pins LoRaMacNvmData_t, which the HAL-free
+ * module must not see.) */
 _Static_assert(((sizeof(LoRaMacNvmData_t) + 7U) & ~7U) + sizeof(NvmSlotHeader_t) <= FLASH_PAGE_SIZE,
                "padded NVM payload + header must fit one flash page");
 
@@ -2950,24 +2948,21 @@ static void OnStoreContextRequest(void *nvm, uint32_t nvm_size)
    * padded by LmHandler) for the header made every restore reject every
    * slot (1496 != 1492) and read 4 bytes out of bounds past the object. */
   const uint32_t logical_len = sizeof(LoRaMacNvmData_t);
-  const uint32_t padded_len  = (logical_len + 7U) & ~7U;
+  const uint32_t padded_len  = NvmSlot_PaddedLen(logical_len);
   static uint8_t staging[(sizeof(LoRaMacNvmData_t) + 7U) & ~7U];
 
-  if (nvm == NULL || nvm_size == 0 ||
-      padded_len + sizeof(NvmSlotHeader_t) > FLASH_PAGE_SIZE) {
+  if (!NvmSlot_StoreAdmissible(nvm, nvm_size, padded_len, FLASH_PAGE_SIZE)) {
     SONDE_LOG("NVM store REJECTED (size %lu too large or bad ptr)\r\n",
                       (unsigned long)nvm_size);
     return;  /* honest failure, no silent drop */
   }
 
   /* Ping-pong: write the OTHER slot with the next generation */
-  uint32_t slot_addr = (g_nvm_generation % 2 == 0) ? (uint32_t)NVM_SLOT_A_ADDR
-                                                   : (uint32_t)NVM_SLOT_B_ADDR;
+  uint32_t slot_addr = (NvmSlot_SlotIndexForStore(g_nvm_generation) == 0U) ? (uint32_t)NVM_SLOT_A_ADDR
+                                                                           : (uint32_t)NVM_SLOT_B_ADDR;
   NvmSlotHeader_t hdr;
-  hdr.magic = NVM_SLOT_MAGIC;
-  hdr.generation = g_nvm_generation + 1;
-  hdr.length = logical_len;
-  hdr.crc32 = FlashLog_CRC32((const uint8_t *)nvm, logical_len);
+  NvmSlot_BuildHeader(&hdr, g_nvm_generation + 1U, logical_len,
+                      FlashLog_CRC32((const uint8_t *)nvm, logical_len));
 
   /* Stage the payload so the padded tail is defined bytes, not an
    * out-of-bounds read past the caller's object. */
@@ -3008,12 +3003,10 @@ static void OnRestoreContextRequest(void *nvm, uint32_t nvm_size)
   for (int i = 0; i < 2; i++) {
     NvmSlotHeader_t hdr;
     if (FLASH_IF_Read(&hdr, (void *)slots[i], sizeof(hdr)) != FLASH_IF_OK) continue;
-    if (hdr.magic != NVM_SLOT_MAGIC) continue;
-    if (hdr.length != nvm_size) continue;
-    if (hdr.length + sizeof(hdr) > FLASH_PAGE_SIZE) continue;
+    if (!NvmSlot_HeaderPlausible(&hdr, nvm_size, FLASH_PAGE_SIZE)) continue;
     if (FLASH_IF_Read(scratch, (void *)(slots[i] + sizeof(NvmSlotHeader_t)), hdr.length) != FLASH_IF_OK) continue;
-    if (FlashLog_CRC32(scratch, hdr.length) != hdr.crc32) continue;  /* torn slot: try the other */
-    if (best >= 0 && (int32_t)(hdr.generation - best_hdr.generation) <= 0) continue;
+    if (!NvmSlot_CrcMatches(&hdr, FlashLog_CRC32(scratch, hdr.length))) continue;  /* torn slot: try the other */
+    if (best >= 0 && !NvmSlot_GenerationNewer(hdr.generation, best_hdr.generation)) continue;
     best = i;
     best_hdr = hdr;
   }
