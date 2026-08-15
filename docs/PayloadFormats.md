@@ -276,7 +276,7 @@ Each v6 record is 34 bytes, little-endian:
 | 28 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode at write time |
 | 29 | Flags | uint8 | 1 | bitfield | - | Status flags (table below) |
 | 30 | Sensor Quality | uint8 | 1 | bitfield | - | **v6**: per-sensor staleness at acquisition (table below) |
-| 31 | Veto Reason | uint8 | 1 | enum | 0-4 | **v6**: TransmitVeto_t at write time (0 = none) |
+| 31 | Veto Reason | uint8 | 1 | enum | 0-6 | **v6**: TransmitVeto_t at write time (0 = none) |
 | 32 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-31 (v5 and earlier: bytes 0-29, CRC at 30) |
 
 #### Status Flags (byte 29 of each record)
@@ -303,10 +303,12 @@ Each v6 record is 34 bytes, little-endian:
 | Value | Meaning |
 |------:|---------|
 | 0 | VETO_NONE — cycle was a full go |
-| 1 | VETO_TEMP_STALE — stale temperature treated as cold (fail-safe) |
-| 2 | VETO_TEMP_LOCKOUT — below GPS temperature lockout |
+| 1 | VETO_TEMP_STALE — **DEPRECATED (RV-08/#164, DDR-0021): never produced by current firmware** (stale temperature now falls back to the raw battery reading); retain decoding for historical records |
+| 2 | VETO_TEMP_LOCKOUT — **DEPRECATED (RV-08/#164, DDR-0021): never produced** (the cold lockout is removed); retain decoding for historical records |
 | 3 | VETO_RF_SILENCE — FLIGHT with no valid session (DDR-0018) |
 | 4 | VETO_RESTRICTED_REGION — regulatory RF prohibition |
+| 5 | VETO_GPS_LOSS — GPS-loss silence, position stale beyond the 24 h budget (DR-06/#241, DDR-0015) |
+| 6 | VETO_PRELAUNCH_QUIET — commissioned-but-not-launched quiet watch (DR-06/#241, DDR-0002/0018) |
 
 #### Trailer (4 bytes)
 
