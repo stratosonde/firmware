@@ -19,22 +19,30 @@ The firmware implements a **real-time adaptive power management system** optimiz
 |------|-------------|-----|-------------|
 | **NORMAL** | 5 min | ✅ Yes | Fast charging: slope > +20 mV/h |
 | **CONSERVATIVE** | 10 min | ✅ Yes | Stable/slow charge (slope > 0, and the default) |
-| **REDUCED** | 15 min | ❌ No | Slow discharge: slope < -5 mV/h |
-| **RECOVERY** | 30 min | ❌ No | slope < -15 mV/h **and** time-to-critical < 12 h |
-| **SURVIVAL** | 60 min | ❌ No | Raw voltage < 4300 mV (LTO floor, R10/#37) **or** slope < -30 mV/h with time-to-critical < 6 h |
+| **REDUCED** | 15 min | ✅ Yes for admitted science | Slow discharge: slope < -5 mV/h |
+| **RECOVERY** | 30 min | ✅ Yes for admitted science | slope < -15 mV/h **and** time-to-critical < 12 h |
+| **SURVIVAL** | 60 min cadence/retry | ✅ Yes if admitted | Very fast discharge prediction; below-floor admission instead sleeps with no science record or live telemetry |
 
 The evaluation order is: raw-voltage floor first (a cold-compensated voltage must
 never mask a real brownout — normalization feeds slope/prediction only), then the
 two predictive emergencies, then plain slope thresholds.
 
-**GPS temperature lockout removed (RV-08/#164, DDR-0021):** there is no -55°C GPS
-cutoff. The power model consumes the raw SHT31 temperature, falling back to the
-raw battery reading when stale (#279); temperature affects decisions only through
-voltage normalization.
+**First-flight admission:** the persisted `gps_temperature_lockout` (default
+−55 °C) and `battery_critical_threshold` (default 4300 mV) are minimum fresh
+temperature/raw-battery inputs. Below either threshold, or on stale/invalid
+admission data, the wake schedules `tx_interval_survival` and performs no GNSS,
+archive, probe, or live telemetry. Above both thresholds, REDUCED/RECOVERY keep
+their cadence preferences but admitted science always enables GNSS with a
+nonzero budget. New/default configurations use 4300 mV. Older persisted lower
+values remain loadable for flash compatibility, but the first-flight accessor
+clamps their effective admission threshold to the existing 4300 mV raw
+electrical floor; a configured value above 4300 mV remains effective.
 
 **Mission cadence override (DDR-0002):** when the power model is healthy
 (NORMAL/CONSERVATIVE), mission phase overrides these intervals — ASCENT = 10 s,
-FLOAT = 5 min. REDUCED and below always use the table above.
+FLOAT = 5 min. REDUCED, RECOVERY, and admitted SURVIVAL retain the table cadence;
+the same SURVIVAL interval is used after rejected admission. None is a deliberate
+GNSS-less science mode.
 
 ---
 
@@ -278,10 +286,10 @@ reading does not panic the system):
 
 ```
 If (slope < -30 mV/h AND time_to_critical < 6 hours):
-    → SURVIVAL mode (60 min intervals, no GPS)
+    → SURVIVAL cadence (60 min; admitted wakes still require GNSS)
 
 If (slope < -15 mV/h AND time_to_critical < 12 hours):
-    → RECOVERY mode (30 min intervals, no GPS)
+    → RECOVERY cadence (30 min; admitted wakes still require GNSS)
 ```
 
 This ensures the device **stays alive** even in worst-case scenarios.
@@ -392,7 +400,7 @@ same sentinel; the current one cannot.
 **System Characteristics:**
 - **Simplified Architecture**: baseline/current tracking plus a small RAM-only hysteresis machine instead of complex circular buffers
 - **Asymmetric Responsive**: downgrades within 1 decision cycle; upgrades earned over consecutive cycles
-- **Temperature Aware**: voltage compensation to -65°C; no GPS temperature lockout (removed RV-08/#164, DDR-0021)
+- **Temperature Aware**: voltage compensation plus one first-flight FULL-or-SLEEP temperature admission threshold
 - **Battery Protective**: Conservative defaults with immediate emergency response
 - **Telemetry Rich**: Channels 11, 12, 14 provide slope, time-to-target, and mode data
 

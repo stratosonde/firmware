@@ -40,6 +40,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"  /* memset — R31 full GNSS invalidation (#57) */
+#include "math.h"
 #include "SEGGER_RTT.h"
 #include "sonde_log.h"  /* R50 (#47): compile-time log gate */
 #include "atgm336h.h"
@@ -54,6 +55,7 @@
 #include "reset_cause.h"      /* F13a: deadman breadcrumb register */
 #include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0013) */
 #include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
+#include "first_flight_policy.h"
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -1063,20 +1065,18 @@ static uint32_t DaysFromCivil(int y, unsigned m, unsigned d)
   return (uint32_t)(era * 146097 + (int)doe - 719468);
 }
 
-static void SysTimeSyncFromGnss(void)
+static bool SysTimeSyncFromGnss(void)
 {
   uint32_t d = hgnss.data.date;       /* DDMMYY */
   uint32_t t = hgnss.data.timestamp;  /* HHMMSS */
   /* #132: t==0 is a VALID time (00:00:00 UTC), not "no time".
    * Zero-as-sentinel skipped the sync once per 86400 fixes. Date validity is
    * fully covered by the range check below (d==0 -> day==0 -> rejected). */
-  if (d == 0) return;
+  if (!FirstFlightPolicy_GnssDateTimeValid(d, t)) return false;
 
   int day = (int)(d / 10000U);
   int mon = (int)((d / 100U) % 100U);
   int yr  = 2000 + (int)(d % 100U);
-  if (yr < 2024 || mon < 1 || mon > 12 || day < 1 || day > 31) return;
-
   uint32_t epoch = DaysFromCivil(yr, (unsigned)mon, (unsigned)day) * 86400U
                  + (t / 10000U) * 3600U + ((t / 100U) % 100U) * 60U + (t % 100U);
 
@@ -1087,6 +1087,7 @@ static void SysTimeSyncFromGnss(void)
   s_utc_synced = true;  /* F-1 (#176): explicit sync event for UtcTimeIsValid */
   SONDE_LOG("SysTime disciplined from GPS: %lu epoch seconds\r\n",
                     (unsigned long)epoch);
+  return true;
 }
 /* =============================================================================
  * F-R1 (#74): SendTxData decomposed into phases. Pure code motion — every
@@ -1102,13 +1103,18 @@ static void SysTimeSyncFromGnss(void)
  *        return the GPS to full power-off. Feeds the IWDG during acquisition.
  * @param gps_timeout_ms acquisition bound from the power plan
  * @param ttf_ms out: time-to-fix (0 if no fix / wake failed)
- * @retval true  GPS woke and the cycle ran (fix or documented fallback)
- * @retval false wake from standby failed — caller must skip region selection
+ * @retval explicit wake failure, no complete fresh result, or fresh good fix
  */
-static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
+typedef enum {
+  GNSS_ACQUIRE_WAKE_FAILED = 0,
+  GNSS_ACQUIRE_NO_FRESH_GOOD_FIX,
+  GNSS_ACQUIRE_FRESH_GOOD_FIX
+} GnssAcquisitionResult_t;
+
+static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
+                                              uint32_t *ttf_ms,
+                                              bool *time_disciplined_this_wake)
 {
-  #define GNSS_MIN_SATS_FOR_FIX    4      /* Minimum satellites needed for fix */
-  
   /* Last known GPS position storage (persistent across transmission cycles) */
   /* F-15 (#72): on first use after boot, restore from backup registers if a
    * real fix was parked there; only a true cold boot falls back to the
@@ -1147,6 +1153,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
   /* gps_start local; ttf_ms is the out-param */
   uint32_t gps_start = 0;
   *ttf_ms = 0;  /* Will be updated when fix is obtained */
+  *time_disciplined_this_wake = false;
   
   SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
@@ -1171,7 +1178,7 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     /* Data already invalidated + marked stale above: the science record
      * shows GNSS-unavailable (zeros + stale), never old-but-fresh. */
     SONDE_LOG_STR("GPS: Wake from standby failed!\r\n");
-    return false;
+    return GNSS_ACQUIRE_WAKE_FAILED;
   }
 
     SONDE_LOG_STR("GPS data invalidated - waiting for fresh fix (hot-start <5s)...\r\n");
@@ -1210,8 +1217,13 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
        * 58.6 s). Always in the conservative direction; not worth rescaling. */
       HAL_IWDG_Refresh(&hiwdg);
       
-      /* Check if we have a good quality fix */
-      if (GNSS_IsFixGoodQuality(&hgnss))
+      /* A first-flight GNSS result is not complete when GGA position arrives
+       * before RMC date/time. Keep processing the same wake until both are
+       * present, otherwise a receiver that emits GGA first can be rejected on
+       * every cycle even though a valid RMC sentence was milliseconds away. */
+      if (GNSS_IsFixGoodQuality(&hgnss) &&
+          FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
+                                              hgnss.data.timestamp))
       {
         got_fix = true;
         *ttf_ms = HAL_GetTick() - gps_start;  /* Capture TTF at moment of fix */
@@ -1268,10 +1280,12 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
         /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
-        SysTimeSyncFromGnss();
-        s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
-        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
-                      s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
+        *time_disciplined_this_wake = SysTimeSyncFromGnss();
+        if (*time_disciplined_this_wake) {
+          s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
+          LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
+                        s_last_fresh_fix_s);  /* F-15 + STAB-01 epoch */
+        }
         have_previous_fix = true;
         EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
       }
@@ -1309,10 +1323,12 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
         last_valid_lon = hgnss.data.longitude;
         last_valid_alt = hgnss.data.altitude;
         /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
-        SysTimeSyncFromGnss();
-        s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
-        LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
-                      s_last_fresh_fix_s);  /* F-15 (#72) + STAB-01 (#148) epoch */
+        *time_disciplined_this_wake = SysTimeSyncFromGnss();
+        if (*time_disciplined_this_wake) {
+          s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
+          LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
+                        s_last_fresh_fix_s);  /* F-15 + STAB-01 epoch */
+        }
         have_previous_fix = true;
       }
       EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
@@ -1326,7 +1342,12 @@ static bool AcquireGnssFix(uint32_t gps_timeout_ms, uint32_t *ttf_ms)
     /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
     GNSS_EnterStandby(&hgnss);
     SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
-  return true;
+  /* Only this result authorizes a first-flight science record.  Basic or
+   * restored last-known positions remain useful for legacy region handling,
+   * but are never promoted to this wake's accepted fix. */
+  return (got_fix && GNSS_HasPosition(&hgnss))
+         ? GNSS_ACQUIRE_FRESH_GOOD_FIX
+         : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
 }
 
 /**
@@ -2014,6 +2035,64 @@ static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)
   UTIL_TIMER_Start(&TxTimer);
 }
 
+static void FirstFlightAbortTransmitCycle(void)
+{
+  if (g_tx_state == TX_STATE_PROBE_SF10) return;
+
+  /* A low-energy decision wins over every open transmit state. Flush any
+   * deferred archive watermark before parking the FSM, then discard all
+   * burst-scoped timing so a late callback cannot reopen the old burst. */
+  FlashLog_FlushHeaderSync(&hflashlog);
+  g_tx_state = TX_STATE_PROBE_SF10;
+  g_bulk_packets_sent = 0;
+  g_probe_sent_ms = 0;
+  g_burst_opened_ms = 0;
+}
+
+static bool FirstFlightWakeAdmitted(const sensor_t *sample,
+                                    uint16_t battery_mv_raw)
+{
+  const SystemConfig_t *cfg = Config_Get();
+  FirstFlightPolicyConfig_t policy = {
+    (int16_t)(cfg != NULL ? cfg->gps_temperature_lockout : -55),
+    ConfigGetFirstFlightBatteryMinMv()
+  };
+  FirstFlightAdmissionInput_t input = {
+    sample->temperature,
+    sample->temp_stale == 0U,
+    battery_mv_raw,
+    sample->batt_stale == 0U
+  };
+
+  if (FirstFlightPolicy_Decide(&policy, &input) == FIRST_FLIGHT_RUN_FULL) {
+    return true;
+  }
+
+  FirstFlightAbortTransmitCycle();
+  /* Rebase from now. This helper can run either before the normal science
+   * deadline advances or after GNSS, so phase-advancing the existing deadline
+   * here could accidentally add two intervals. */
+  uint32_t retry_ms = cfg != NULL ? cfg->tx_interval_survival : 3600000UL;
+  g_science_due_ms = HAL_GetTick() + retry_ms;
+  UTIL_TIMER_Stop(&TxTimer);
+  UTIL_TIMER_SetPeriod(&TxTimer, retry_ms);
+  UTIL_TIMER_Start(&TxTimer);
+  ResetCause_ClearBootAttempts();
+  SONDE_LOG_STR("First-flight admission rejected: low/stale/invalid temperature or battery; retrying at survival cadence\r\n");
+  return false;
+}
+
+static uint16_t FirstFlightVoltsToMvOrZero(float voltage)
+{
+  /* A float-to-integer conversion outside the destination range is undefined
+   * in C. Sensor faults must therefore become a conservative zero sample
+   * before the policy sees them, never undefined flight behavior. */
+  if (!isfinite(voltage) || voltage <= 0.0f || voltage > 65.535f) {
+    return 0U;
+  }
+  return (uint16_t)(voltage * 1000.0f + 0.5f);
+}
+
 static void SendTxData(void)
 {
   /* USER CODE BEGIN SendTxData_1 */
@@ -2050,20 +2129,21 @@ static void SendTxData(void)
   /* D8 (#59) / finding #7: windowed-range float detection, each work cycle */
   MissionState_Update(sensor_data.pressure, !sensor_data.press_stale, now_timestamp);
 
-  /* F-8 (#183): ONE battery ADC conversion per cycle - taken inside
-   * EnvSensors_Read above, where the value and its staleness flag are
-   * captured TOGETHER. Every consumer uses that same sample: the plan's
-   * battery_mv_raw is exactly the reading sensor_data.batt_stale describes
-   * (RV-03 can no longer be defeated by a cached/implausible re-read paired
-   * with a fresh flag), and the archived record shows the voltage the power
-   * decision actually used. The bulk-opportunity gate in OnTxData uses it
-   * too via s_cycle_batt_mv. */
-  uint16_t battery_mv_raw = (uint16_t)(sensor_data.battery_voltage * 1000.0f + 0.5f);
+  /* Pre-load admission sample. Voltage and staleness are captured together;
+   * the post-GNSS environment sample below repeats admission under receiver
+   * load and becomes the archive/bulk-opportunity value. */
+  uint16_t battery_mv_raw = FirstFlightVoltsToMvOrZero(sensor_data.battery_voltage);
   s_cycle_batt_mv = battery_mv_raw;
-  uint16_t solar_mv = (uint16_t)(sensor_data.solar_voltage * 1000.0f + 0.5f);
+  uint16_t solar_mv = FirstFlightVoltsToMvOrZero(sensor_data.solar_voltage);
   (void)solar_mv;  /* FR-19: log-only in flight */
 
-  /* R47: mode selection, slope/prediction, GPS temperature lockout and the
+  /* First-flight admission is deliberately one decision.  A stale/invalid
+   * temperature or ADC sample is not evidence that the rail is safe, and a
+   * value below either configured minimum buys only a survival-cadence retry.
+   * Return before GNSS, archive, probe, or live telemetry. */
+  if (!FirstFlightWakeAdmitted(&sensor_data, battery_mv_raw)) return;
+
+  /* R47: mode selection, slope/prediction, cadence and the
    * RF-silence veto all live in the pure decide half (transmit_plan.c) —
    * host-testable with zero hardware. The plan records WHY, not just THAT. */
   TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
@@ -2104,6 +2184,17 @@ static void SendTxData(void)
                MISSION_FLOAT_TX_INTERVAL_MS > plan.tx_interval_ms) {
       plan.tx_interval_ms = MISSION_FLOAT_TX_INTERVAL_MS;
     }
+  }
+
+  /* A full first-flight observation always budgets GNSS.  Keep the selected
+   * cadence/mode for diagnostics and scheduling, but never let a reduced,
+   * recovery, or survival preference create a GNSS-less science wake. */
+  plan.gps_enabled = true;
+  if (plan.gps_timeout_ms == 0U) {
+    const SystemConfig_t *cfg = Config_Get();
+    plan.gps_timeout_ms = (cfg != NULL && cfg->gps_timeout_conservative >= 10U)
+                          ? (uint32_t)cfg->gps_timeout_conservative * 1000UL
+                          : 60000UL;
   }
 
   bool gps_enabled_by_power_mgmt = plan.gps_enabled;
@@ -2164,13 +2255,16 @@ static void SendTxData(void)
   }
 
   /* MISSION-01b (#142): commissioned but not launched = QUIET WATCH. No GPS,
-   * no telemetry TX — the cycle still reads sensors (pressure feeds the
-   * BR-LIFE-007 launch detector in MissionState_Update above) and logs to
-   * flash. Entry to ASCENT is by arming (button hook) or launch detection.
+   * archive record, or telemetry TX — the cycle still reads sensors (pressure
+   * feeds the BR-LIFE-007 launch detector in MissionState_Update above).
+   * Entry to ASCENT is by arming (button hook) or launch detection.
    * Unjoined commissioning is untouched above (join retry path). */
   if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
     Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
-    gps_enabled_by_power_mgmt = false;
+    /* Quiet watch still samples pressure above for launch detection, but it
+     * is not a science observation and must not create an incomplete record. */
+    ResetCause_ClearBootAttempts();
+    return;
   }
 
   /* #141 (maintainer decision 2026-08-11): GPS-LOSS SILENCE. No fresh fix for
@@ -2236,26 +2330,11 @@ static void SendTxData(void)
     if (!MissionState_IsCommissioning() &&
         (utc_now_s - ref_s) > GPS_LOSS_SILENCE_S) {
       Silence(&plan, &rf_silence, VETO_GPS_LOSS);  /* DR-06 (#241) */
-      /* STAB-03 (#150): keep trying GPS until a fresh fix clears the
-       * silence - urgency overrides the power-mode PREFERENCE, never the
-       * hard electrical floor. In MODE_SURVIVAL (raw V below the 4300 mV
-       * LTO floor) a forced GNSS acquisition risks the droop/brownout
-       * loop the stability review traces (brownout -> STAB-01 resets
-       * stale-position age -> repeat). Stay dark and retry next cycle. */
-      if (current_mode != MODE_SURVIVAL) {
-        gps_enabled_by_power_mgmt = true;
-        /* S-A (#211, 2026-08-12): forcing the ENABLE flag without a BUDGET is
-         * a no-op. Every GPS-off mode carries gps_timeout_ms == 0 from
-         * ApplyOperatingMode, so AcquireGnssFix() powered the receiver up,
-         * ran `while ((HAL_GetTick() - gps_start) < 0)` zero times, took the
-         * stale-position branch and powered it back down. s_last_fresh_fix_s
-         * could never advance, so the silence never cleared: a permanently
-         * dark unit paying a full GPS power-cycle every cycle to guarantee
-         * no fix. This is the RV-08 sawtooth re-entering through the modes a
-         * power-starved float actually lives in. */
-        if (gps_timeout_ms == 0U) {
-          gps_timeout_ms = GPS_LOSS_RETRY_TIMEOUT_MS;
-        }
+      /* Admission already enforced the electrical floor. Keep trying GNSS on
+       * every admitted wake until a fresh result can restore RF eligibility. */
+      gps_enabled_by_power_mgmt = true;
+      if (gps_timeout_ms == 0U) {
+        gps_timeout_ms = GPS_LOSS_RETRY_TIMEOUT_MS;
       }
       SONDE_LOG_STR("GPS-LOSS SILENCE: no fresh fix - radio dark, still logging, GPS retry on\r\n");
     }
@@ -2272,27 +2351,28 @@ static void SendTxData(void)
   
   /* Declare ttf_ms at function scope so it's available for telemetry */
   uint32_t ttf_ms = 0;
+  bool time_disciplined_this_wake = false;
+  GnssAcquisitionResult_t gnss_result = GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
   
-  // Check if GPS is disabled by power management or bulk transfer mode
-  // C7a FIX: Skip GPS during bulk transfer - we're sending cached flash data, not live telemetry
+  // C7a FIX: cached bulk recovery skips GNSS; new science never does.
   if (!gps_enabled_by_power_mgmt || g_tx_state == TX_STATE_BULK_TRANSFER) {
-    /* GPS disabled - skip acquisition */
+    /* Bulk callbacks do not create a new observation. The disabled-plan branch
+     * is a defensive backstop; first-flight plans are always GNSS-on. */
     if (g_tx_state == TX_STATE_BULK_TRANSFER) {
       SONDE_LOG_STR("GPS skipped - bulk transfer mode (using cached data)\r\n");
     } else {
-      SONDE_LOG_STR("GPS disabled by power management - skipping acquisition\r\n");
+      SONDE_LOG_STR("Unexpected GNSS-disabled plan - rejecting live observation\r\n");
     }
     /* R31 (#57): FULL invalidation before/without acquisition — clear all of
      * hgnss.data (sats/hdop/lat/lon included), not just valid/fix_quality.
      * The GGA parser skips empty tokens, so a partial sentence must never meet
      * last cycle's fields. Last-known-good lives in the last_valid_* statics. */
     memset(&hgnss.data, 0, sizeof(hgnss.data));
-    EnvSensors_MarkGnssStale(true);  /* DR-15: GPS skipped - s_gnss_stale must not keep the last acquisition's false across REDUCED/RECOVERY/SURVIVAL runs (same class as R3-02/#216) */
+    EnvSensors_MarkGnssStale(true);  /* Never inherit the last acquisition's freshness. */
     ttf_ms = 0;  // No GPS acquisition performed
 
-    /* BURST-03 (#141): the geofence must still run when GPS is skipped —
-     * otherwise every REDUCED/RECOVERY/SURVIVAL cycle (most of a multi-week
-     * float) transmits blind inside restricted regions. Evaluate against the
+    /* BURST-03 (#141): if the defensive GPS-skip branch is ever reached for a
+     * live cycle, still evaluate the last-known position against the
      * backup-register last-known position (DDR-0015 already accepts region
      * decisions on stale position; this extends it to the skip path).
      * INHIBIT ONLY — never auto-switch regions on a stale fix. Bulk cycles
@@ -2325,6 +2405,13 @@ static void SendTxData(void)
   hgnss.data.altitude = 500.0f;     // meters (approximate)
   hgnss.data.satellites = 8;
   hgnss.data.hdop = 1.2f;
+  hgnss.data.position_present = true;
+  hgnss.data.date = 150826U;
+  hgnss.data.timestamp = 120000U;
+  time_disciplined_this_wake = SysTimeSyncFromGnss();
+  gnss_result = (time_disciplined_this_wake && GNSS_IsFixGoodQuality(&hgnss))
+                ? GNSS_ACQUIRE_FRESH_GOOD_FIX
+                : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
   
   ttf_ms = 0;  /* No actual fix acquired */
   
@@ -2332,7 +2419,9 @@ static void SendTxData(void)
   
   #else  
   /* F-R1 (#74): acquisition and region selection are extracted phases. */
-  if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {
+  gnss_result = AcquireGnssFix(gps_timeout_ms, &ttf_ms,
+                               &time_disciplined_this_wake);
+  if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX) {
     SelectRegionAndSession(&rf_silence, &plan);
   } else {
     /* S-02 (#226): a failed GNSS wake still leaves the restricted-region
@@ -2352,6 +2441,15 @@ static void SendTxData(void)
 
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
+  if (g_tx_state != TX_STATE_BULK_TRANSFER &&
+      (gnss_result != GNSS_ACQUIRE_FRESH_GOOD_FIX ||
+       !time_disciplined_this_wake)) {
+    /* An admitted science wake without this wake's accepted GNSS package is
+     * not a science cycle.  Do not archive or transmit a live record. */
+    SONDE_LOG_STR("First-flight observation rejected: no fresh good-quality GNSS fix/time; retry next wake\r\n");
+    ResetCause_ClearBootAttempts();
+    return;
+  }
   /* Add separator before continuing to telemetry */
   SONDE_LOG_STR("\r\n");
   
@@ -2374,6 +2472,31 @@ static void SendTxData(void)
    * MS5607 OSR_4096 + SHT31 cost (ArchiveSample already skips them). */
   if (g_tx_state != TX_STATE_BULK_TRANSFER) {
     EnvSensors_Read(&sensor_data);
+
+    /* The post-GNSS sample is the one archived and transmitted. If the rail
+     * sagged or the temperature crossed the floor under GNSS load, do not add
+     * radio load or create a record that violated admission. */
+    uint16_t post_gnss_battery_mv =
+        FirstFlightVoltsToMvOrZero(sensor_data.battery_voltage);
+    if (!FirstFlightWakeAdmitted(&sensor_data, post_gnss_battery_mv)) return;
+    s_cycle_batt_mv = post_gnss_battery_mv;
+
+    FirstFlightSciencePackage_t package = {
+      time_disciplined_this_wake,
+      gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
+      hgnss.data.position_present && GNSS_HasPosition(&hgnss),
+      sensor_data.temp_stale == 0U && isfinite(sensor_data.temperature),
+      sensor_data.hum_stale == 0U && isfinite(sensor_data.humidity),
+      sensor_data.press_stale == 0U && isfinite(sensor_data.pressure),
+      sensor_data.batt_stale == 0U &&
+          isfinite(sensor_data.battery_voltage) &&
+          sensor_data.battery_voltage > 0.0f
+    };
+    if (!FirstFlightPolicy_PackageComplete(&package)) {
+      SONDE_LOG_STR("First-flight observation rejected: incomplete time/position/environment/battery package\r\n");
+      ResetCause_ClearBootAttempts();
+      return;
+    }
   }
 
   ArchiveSample(&sensor_data, slope_mv_per_hour, current_mode,
@@ -2458,8 +2581,7 @@ static void SendTxData(void)
   
   /* F-6 (#181): a full work cycle COMPLETED - the boot was productive, so
    * the consecutive-boot counter resets here (F-03/#65). A deterministic
-   * in-cycle fatal now accumulates evidence across boots and the FR-23/#104
-   * escape (degrade instead of the 6th reset) can actually engage. */
+   * in-cycle fatal now accumulates diagnostic evidence across boots. */
   ResetCause_ClearBootAttempts();
   SONDE_LOG_STR("=== SendTxData END ===\r\n");
   /* USER CODE END SendTxData_1 */
@@ -2538,7 +2660,8 @@ static void OnTxData(LmHandlerTxParams_t *params)
   if (g_tx_state == TX_STATE_WAIT_PROBE_ACK) {
     g_probe_sent_ms = 0;  /* LT-07 (#277): the wait is resolved one way or the other */
     if (params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
-      /* F-8 (#183): the cycle's one conversion, not a fresh one mid-burst. */
+      /* Use the admitted post-GNSS sample; this prevents receiver-load sag
+       * from opening a cached-data burst on an obsolete pre-load voltage. */
       uint16_t battery_mv = s_cycle_batt_mv;
       bool battery_good = (battery_mv >= CfgBulkBattMin());
       bool has_cache = FlashLog_HasUnsentData(&hflashlog);

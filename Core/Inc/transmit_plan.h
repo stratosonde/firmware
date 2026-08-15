@@ -39,8 +39,8 @@ typedef enum {
 /** @brief Pure-data output of the decide half */
 typedef struct {
     OperatingMode_t power_mode;       /**< selected operating mode */
-    bool     gps_enabled;             /**< wake GPS this cycle */
-    uint32_t gps_timeout_ms;          /**< acquisition bound */
+    bool     gps_enabled;             /**< true for every admitted first-flight cycle */
+    uint32_t gps_timeout_ms;          /**< nonzero acquisition bound */
     uint32_t tx_interval_ms;          /**< next wake interval */
     int16_t  voltage_slope_mv_per_hour; /**< temperature-normalized slope */
     int16_t  time_to_target_h;        /**< signed: +hours to full, -hours to critical, 0 stable */

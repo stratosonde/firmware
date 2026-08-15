@@ -117,14 +117,9 @@ static bool in_function(const char *src, const char *sig, const char *needle)
  *            budget, not just an enable flag                                 */
 /* ========================================================================== */
 /* STAB-03 (#150) forces gps_enabled_by_power_mgmt = true so a silenced unit
- * keeps trying for a fix. But ApplyOperatingMode() sets gps_timeout_ms = 0 for
- * exactly the modes that reach this code (REDUCED / RECOVERY), so
- * AcquireGnssFix(0, ...) evaluates `while ((HAL_GetTick() - gps_start) < 0)`
- * zero times and falls straight through to the stale-position branch, having
- * power-cycled the receiver for nothing. s_last_fresh_fix_s never advances, so
- * the 6 h silence is permanent. (Window is 24 h since 2026-08-13 — DDR-0015
- * BR-STALE-017; "permanent" was the point, and the fix below is what makes
- * BR-STALE-019 "one fix clears it" reachable at all.)
+ * keeps trying for a fix. The first-flight planner now supplies a budget in
+ * every admitted mode, but the executor retains a zero-budget clamp as a
+ * defensive invariant.
  *
  * Invariant the fix must establish: the block that forces the enable flag must
  * also raise a zero gps_timeout_ms. */
@@ -138,19 +133,10 @@ static void test_sa_gps_loss_retry_budget(const char *app)
     printf("   force-enable site present: %s\n", found ? "yes" : "no");
     if (!found) { printf("FATAL: S-A anchor missing\n"); exit(2); }
 
-    /* Walk every force site; the one guarded by MODE_SURVIVAL is STAB-03's. */
-    bool budget_raised = false;
-    const char *p = app;
-    while ((p = strstr(p, "current_mode != MODE_SURVIVAL")) != NULL) {
-        const char *end = strstr(p, "SONDE_LOG_STR(\"GPS-LOSS SILENCE");
-        if (!end) end = p + 900;
-        size_t len = (size_t)(end - p);
-        char *win = (char *)malloc(len + 1);
-        memcpy(win, p, len); win[len] = '\0';
-        if (strstr(win, "gps_timeout_ms") != NULL) budget_raised = true;
-        free(win);
-        p += 20;
-    }
+    const char *end = strstr(force, "SONDE_LOG_STR(\"GPS-LOSS SILENCE");
+    bool budget_raised = end != NULL &&
+                         strstr(force, "gps_timeout_ms == 0U") != NULL &&
+                         strstr(force, "gps_timeout_ms == 0U") < end;
     printf("   forced retry assigns gps_timeout_ms: %s (want yes)\n",
            budget_raised ? "yes" : "no");
     CHECK_REGRESSION(budget_raised, "S-A");

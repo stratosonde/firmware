@@ -3,6 +3,7 @@
 ./Core/Src/config.o
 ./Core/Src/flash_if.o
 ./Core/Src/flash_log.o
+./Core/Src/first_flight_policy.o
 ./Core/Src/main.o
 ./Core/Src/mission_state.o
 ./Core/Src/mission_logic.o

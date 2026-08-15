@@ -54,7 +54,7 @@ Filled at release-candidate time; none of these exist until a candidate is cut (
 - [ ] Valid fix produces fresh position — host: GNSS/mission suites; open: target run
 - [ ] GNSS timeout produces stale/unavailable semantics — code: R28/#136 provenance; caveat: weak-fix promotion → #284
 - [ ] GNSS wake/start failure cannot reuse prior position as fresh — code: LT-04/#276 teardown; caveat → #284
-- [ ] GNSS power/load denial leaves honest stale/unavailable provenance — code: GPS-off modes keep provenance; caveat: FULL/SLEEP admission intent → #288
+- [ ] GNSS power/load denial sleeps without creating a new science record — code: FULL/SLEEP admission + complete-package gate; open: target load test
 - [ ] RF continues only inside stale-position regulatory window — code: 24 h budget verified (`lora_app.h:206`); open: boundary behavioural test (FW-CONF-023)
 - [ ] RF stops after stale-position limit — code: 24 h silence enforced; open: target boundary run
 - [ ] Fresh valid fix automatically restores RF eligibility — **FAILS today** → #285 (H-09): clears on the *next* wake, not the same one

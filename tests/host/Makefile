@@ -69,6 +69,7 @@ GEO_SRCS := test_geo_20260814.c
 GEO_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 
 PWR_SRCS := test_pwr_20260814.c ../../Core/Src/power_model.c
+FIRST_FLIGHT_SRCS := test_first_flight_policy.c ../../Core/Src/first_flight_policy.c
 
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
@@ -134,6 +135,12 @@ test_geo$(EXE): $(GEO_SRCS) $(wildcard ../../Middlewares/Third_Party/h3lite/src/
 test_pwr$(EXE): $(PWR_SRCS)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(PWR_SRCS) -lm
 
+test_first_flight$(EXE): $(FIRST_FLIGHT_SRCS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(FIRST_FLIGHT_SRCS) -lm
+
+first-flight: test_first_flight$(EXE)
+	./test_first_flight$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -178,7 +185,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -233,7 +240,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_sanitize$(EXE)

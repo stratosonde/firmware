@@ -25,11 +25,11 @@ extern "C" {
 
 /* Power Management - Operating Modes */
 typedef enum {
-    MODE_NORMAL = 0,       // 5min interval, GPS enabled
-    MODE_CONSERVATIVE = 1, // 10min interval, GPS enabled
-    MODE_REDUCED = 2,      // 15min interval, GPS disabled
-    MODE_RECOVERY = 3,     // 30min interval, GPS disabled
-    MODE_SURVIVAL = 4      // 60min interval, minimal activity
+    MODE_NORMAL = 0,       // 5 min cadence
+    MODE_CONSERVATIVE = 1, // 10 min cadence
+    MODE_REDUCED = 2,      // 15 min cadence
+    MODE_RECOVERY = 3,     // 30 min cadence
+    MODE_SURVIVAL = 4      // 60 min retry cadence
 } OperatingMode_t;
 
 /* Simplified voltage tracking for slope calculation (2-hour window) */

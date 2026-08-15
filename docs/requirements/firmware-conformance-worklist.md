@@ -49,8 +49,8 @@ Reduce work/cadence before an admitted load collapses the rail.
 **Status:** 🟡 IMPLEMENTED — `DecideTransmitPlan` + `power_model.c` predictions; caveats: −40→−50 compensation-table non-monotonicity #248 (LT-06), FULL/SLEEP admission gap #288 (H-12), cold full-pack false SURVIVAL #297 (PWR-02: fixed 4300 mV raw floor fires below −62.3 °C; red-gated `test_pwr`; bench-derived floor(T) pending #261).
 
 ### FW-CONF-006 — GNSS load admission
-If GNSS cannot be supported, skip it, preserve stale provenance, retry later.
-**Status:** 🟡 IMPLEMENTED — GPS-off modes skip GNSS with stale provenance (`transmit_plan.c`); caveat: intent is FULL/SLEEP admission, not planned GNSS-less wakes → #288 (H-12).
+If GNSS cannot be supported, skip the whole science cycle and retry later.
+**Status:** 🟡 IMPLEMENTED — fresh temperature/raw-battery admission is FULL or SLEEP; all admitted planner modes carry a nonzero GNSS budget. Hardware droop proof remains open.
 
 ### FW-CONF-007 — Automatic return toward configured target
 Temporary power adaptation never rewrites the operator's nominal target.
@@ -175,18 +175,18 @@ Variable wake duration must not accumulate cadence drift.
 `P-PWR-013`.  
 Includes the negative case: prove no code path *deliberately* plans a GNSS-less wake for
 energy reasons. Touches `power_model.c` (divergence 3).
-**Status:** 🔴 OPEN — REDUCED/RECOVERY/SURVIVAL deliberately disable GNSS while keeping a science cadence → #288 (H-12).
+**Status:** 🟡 IMPLEMENTED — first-flight admission rejects stale/invalid or below-threshold temperature/battery inputs at `tx_interval_survival`; every admitted science wake enables GNSS with a nonzero budget. Host policy tests exist; hardware droop proof remains open.
 
 ### FW-CONF-029 — Durable battery/energy trend
 **Intent:** DDR-0016 `BR-PWR-016` · **Proof:** `P-PWR-015`.  
 Reset must not restart cadence adaptation from a neutral assumption.
 **Status:** 🔴 OPEN — voltage trend state is function-static RAM → #288 (H-12).
 
-### FW-CONF-030 — Degradation is failure-driven, not plan-driven
-**Intent:** DDR-0001 `BR-WAKE-003` vs `INV-WAKE-012` · **Proof:** `P-WAKE-013`.  
-An admitted FULL cycle whose GNSS fails still archives honest stale provenance, and that
-path is distinguishable from a SLEEP decision.
-**Status:** 🟡 IMPLEMENTED — veto/provenance rides record.flags b5-b7 (DDR-0003 §6a); archive pairs post-acquisition env + position (LT-03/#271). The SLEEP-vs-degraded distinction holds once FULL/SLEEP admission (#288) lands.
+### FW-CONF-030 — Complete package or no new science record
+**Intent:** first-flight maintainer decision superseding DDR-0001 `BR-WAKE-003` for flight one · **Proof:** `P-WAKE-013`.
+An admitted wake that cannot assemble time + fresh good location + fresh readings
+becomes SLEEP and creates no new science record.
+**Status:** 🟡 IMPLEMENTED — incomplete packages end without archive/live TX; cached bulk recovery remains separate. End-to-end hardware proof remains open.
 
 ## P1 — reset and persistence
 

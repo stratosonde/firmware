@@ -573,12 +573,14 @@ static void test_decide_transmit_plan(void)
         CHECK_REGRESSION(r.power_mode != MODE_NORMAL, "F8-down-immediate");
     }
 
-    /* Brownout floor: normalized floor defeated at -66C is R10's problem;
-     * here raw 4200 at 25C -> SURVIVAL, GPS off, 1h interval */
+    /* Planner retains the survival cadence at 4200 mV. The first-flight
+     * admission gate rejects this voltage before the planner is called; the
+     * plan itself must not encode a reusable GNSS-less degradation mode. */
     memset(&vs, 0, sizeof(vs));
     p = DecideTransmitPlan(&vs, 4200, 25.0f, false, 1000, true, false, false);
     CHECK_EQ_I(p.power_mode, MODE_SURVIVAL);
-    CHECK(!p.gps_enabled);
+    CHECK(p.gps_enabled);
+    CHECK(p.gps_timeout_ms > 0U);
     CHECK_EQ_I(p.tx_interval_ms, 3600000);
 
     /* FLIGHT + no session -> RF silence veto (DDR-0018); commissioning exempt */
@@ -715,7 +717,7 @@ static void test_r2_11_no_history_default_uses_raw_voltage(void)
 {
     /* R2-11 (#115): slope state is RAM-only — after every reset there is no
      * history and SelectModeFromPredictions falls through every branch to
-     * MODE_CONSERVATIVE (10-min cadence, GPS ON) even with a marginal
+     * MODE_CONSERVATIVE (10-min cadence) even with a marginal
      * battery. The no-history default must derive from RAW voltage, not
      * fall through. (The slope baseline is RAM-only — DR12-15 persistence was
      * never implemented; finding #9 corrected the overstated comment.) */
@@ -724,7 +726,7 @@ static void test_r2_11_no_history_default_uses_raw_voltage(void)
     TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false, false);
     CHECK_EQ_I(p.voltage_slope_mv_per_hour, 0);   /* guard: truly no history */
     CHECK_REGRESSION(p.power_mode != MODE_CONSERVATIVE, "R2-11");
-    CHECK_REGRESSION(!p.gps_enabled, "R2-11");
+    CHECK_REGRESSION(p.gps_enabled && p.gps_timeout_ms > 0U, "R2-11");
 }
 
 static void test_r2_17_already_critical_never_reports_stable(void)

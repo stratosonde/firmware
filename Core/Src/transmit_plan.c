@@ -26,84 +26,41 @@
  * @param gps_timeout_ms Output parameter for GPS timeout
  * @return New transmission interval in milliseconds
  */
-static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled, uint32_t *gps_timeout_ms) {
+static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled,
+                                   uint32_t *gps_timeout_ms)
+{
+    const SystemConfig_t *config = Config_Get();
     uint32_t interval_ms;
 
-    // Get configuration pointer (use defaults if not available)
-    const SystemConfig_t *config = Config_Get();
-    if (config == NULL) {
-        // Fallback to hardcoded values if config not available
-        switch(mode) {
-            case MODE_NORMAL:
-                interval_ms = 300000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;
-                break;
-            case MODE_CONSERVATIVE:
-                interval_ms = 600000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;
-                break;
-            case MODE_REDUCED:
-                interval_ms = 900000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            case MODE_RECOVERY:
-                interval_ms = 1800000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            case MODE_SURVIVAL:
-                interval_ms = 3600000;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-            default:
-                interval_ms = 600000;
-                *gps_enabled = true;
-                *gps_timeout_ms = 60000;  // 60 seconds (was 30s - bug fix)
-                break;
-        }
-    } else {
-        // Use configuration values
-        switch(mode) {
-            case MODE_NORMAL:
-                interval_ms = config->tx_interval_normal;
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_normal * 1000;  // Convert to ms
-                break;
+    /* First flight has no intentional GNSS-less degradation mode. Admission
+     * happens before this planner; every admitted mode gets a real budget. */
+    *gps_enabled = true;
+    *gps_timeout_ms = (config != NULL)
+        ? (uint32_t)config->gps_timeout_conservative * 1000U
+        : 60000U;
 
-            case MODE_CONSERVATIVE:
-                interval_ms = config->tx_interval_conservative;
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_conservative * 1000;  // Convert to ms
-                break;
-
-            case MODE_REDUCED:
-                interval_ms = config->tx_interval_reduced;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-
-            case MODE_RECOVERY:
-                interval_ms = config->tx_interval_recovery;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-
-            case MODE_SURVIVAL:
-                interval_ms = config->tx_interval_survival;
-                *gps_enabled = false;
-                *gps_timeout_ms = 0;
-                break;
-
-            default:
-                interval_ms = config->tx_interval_conservative;  // Conservative default
-                *gps_enabled = true;
-                *gps_timeout_ms = config->gps_timeout_conservative * 1000;
-                break;
-        }
+    switch (mode) {
+        case MODE_NORMAL:
+            interval_ms = (config != NULL) ? config->tx_interval_normal : 300000U;
+            if (config != NULL) {
+                *gps_timeout_ms = (uint32_t)config->gps_timeout_normal * 1000U;
+            }
+            break;
+        case MODE_CONSERVATIVE:
+            interval_ms = (config != NULL) ? config->tx_interval_conservative : 600000U;
+            break;
+        case MODE_REDUCED:
+            interval_ms = (config != NULL) ? config->tx_interval_reduced : 900000U;
+            break;
+        case MODE_RECOVERY:
+            interval_ms = (config != NULL) ? config->tx_interval_recovery : 1800000U;
+            break;
+        case MODE_SURVIVAL:
+            interval_ms = (config != NULL) ? config->tx_interval_survival : 3600000U;
+            break;
+        default:
+            interval_ms = (config != NULL) ? config->tx_interval_conservative : 600000U;
+            break;
     }
 
     return interval_ms;
@@ -185,10 +142,10 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                                 battery_mv_raw);
 
     /* R2-11 (#115): with no slope history SelectModeFromPredictions falls
-     * through every branch to MODE_CONSERVATIVE - 10-min cadence, GPS ON -
+     * through every branch to MODE_CONSERVATIVE (10-min cadence)
      * even on a marginal battery right after a brownout reset. Fail the
-     * other way: below 5000 mV raw (marginal supercap), start REDUCED
-     * (GPS off) until a real slope exists. Never loosen a stricter mode
+     * other way: below 5000 mV raw (marginal supercap), start REDUCED cadence
+     * until a real slope exists. Never loosen a stricter mode
      * (the R10 raw floor may already have picked SURVIVAL). NOTE (finding #9,
      * 2026-08-10): the slope baseline is RAM-ONLY — the backup-register
      * persistence (DR12-15) once described here was never implemented. This
@@ -198,8 +155,9 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
         SONDE_LOG_STR("PREDICT: no slope history + marginal raw V -> REDUCED\r\n");
         plan.power_mode = MODE_REDUCED;
     }
-    /* RV-03 (#161): a battery nobody has measured this cycle is not entitled
-     * to the GPS-on modes — cap at REDUCED until a real reading returns. */
+    /* RV-03 (#161): keep a conservative cadence for pure-planner callers with
+     * stale battery input. First-flight orchestration rejects this input before
+     * reaching the planner. */
     if (batt_stale && plan.power_mode < MODE_REDUCED) {
         SONDE_LOG_STR("PREDICT: battery reading stale -> cap at REDUCED\r\n");
         plan.power_mode = MODE_REDUCED;
@@ -283,19 +241,9 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     /* Veto evaluation — first veto wins, record WHY (DDR-0003). */
     plan.veto = VETO_NONE;
 
-    /* RV-08 (#164, DDR-0021 conformance): the temperature-based GPS lockout
-     * is REMOVED. Float-altitude ambient is genuinely -50 to -70 C, so the
-     * veto made GPS impossible exactly when the airframe is at float; composed
-     * with #141's GPS-loss silence it produced a 6 h dark sawtooth for the
-     * entire multi-week float (veto -> dark -> forced fix -> one TX -> veto).
-     * The field evidence (#128) is that the ATGM336H operates at cold/altitude
-     * without special handling. temp_stale still skips normalization above
-     * (R2-10) — data honesty, not a veto. The config field
-     * gps_temperature_lockout remains for backcompat but is no longer read.
-     * NOTE (2026-08-13): the "6 h" above is the HISTORICAL window this defect
-     * was observed against. The silence budget is now 24 h and is owned by
-     * DDR-0015 BR-STALE-017, not by DDR-0016. The removal of the lockout stands
-     * on its own merits either way. */
+    /* The old temperature-only GNSS veto remains absent here. Temperature and
+     * raw battery are now handled together by first-flight admission before
+     * this planner runs; admitted wakes always keep GNSS in the package. */
 
     /* T1 ladder (DDR-0018): FLIGHT with no session = RF silence. The cycle
      * still runs (GPS + flash logging); only the radio stays dark. */

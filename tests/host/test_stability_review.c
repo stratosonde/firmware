@@ -228,13 +228,13 @@ static void test_f2_gps_loop_bound(const char *app, const char *w25q)
     printf("   W25Q_WaitReady has a poll bound (F3 precedent): %s\n",
            w25q_has_bound ? "yes" : "no");
 
-    bool refreshes_iwdg = in_function(app, "static bool AcquireGnssFix(",
+    bool refreshes_iwdg = in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(",
                                       "HAL_IWDG_Refresh");
-    bool tick_bounded   = in_function(app, "static bool AcquireGnssFix(",
+    bool tick_bounded   = in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(",
                                       "while ((HAL_GetTick() - gps_start) < gps_timeout_ms)");
-    bool has_iter_bound = in_function(app, "static bool AcquireGnssFix(", "max_polls") ||
-                          in_function(app, "static bool AcquireGnssFix(", "max_iters") ||
-                          in_function(app, "static bool AcquireGnssFix(", "GNSS_MAX_ACQ_ITERS");
+    bool has_iter_bound = in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(", "max_polls") ||
+                          in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(", "max_iters") ||
+                          in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(", "GNSS_MAX_ACQ_ITERS");
     printf("   AcquireGnssFix: refreshes IWDG=%s tick-bounded=%s iteration-bound=%s\n",
            refreshes_iwdg ? "yes" : "no", tick_bounded ? "yes" : "no",
            has_iter_bound ? "yes" : "NO");

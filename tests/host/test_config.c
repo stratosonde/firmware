@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    test_config.c
-  * @brief   Behavioural regressions for the REAL config.c (S-04, S-07)
+  * @brief   Behavioural regressions for the REAL config.c
   ******************************************************************************
   * S-04 (P2, #228): the deadman timeout must be DERIVED from the configured
   * survival cadence (max(3 h, 3x survival)), not fixed at 3 h while the
@@ -63,6 +63,24 @@ int main(void)
     printf("=== config.c behavioural regressions (S-04, S-07) ===\n\n");
 
     CHECK(Config_Init() == CONFIG_OK);
+
+    /* -- First-flight battery admission floor ------------------------------ */
+    printf("-- first-flight battery admission floor\n");
+    CHECK(g_config.battery_critical_threshold ==
+          CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV);
+    g_config.battery_critical_threshold =
+        CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV - 1U;
+    restamp();
+    CHECK(Config_Validate(&g_config) == CONFIG_OK);  /* legacy config retained */
+    CHECK(ConfigGetFirstFlightBatteryMinMv() ==
+          CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV);    /* but never weakens floor */
+    g_config.battery_critical_threshold = 4400U;
+    restamp();
+    CHECK(ConfigGetFirstFlightBatteryMinMv() == 4400U);
+    g_config.battery_critical_threshold =
+        CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV;
+    restamp();
+    CHECK(Config_Validate(&g_config) == CONFIG_OK);
 
     /* -- S-04 (#228): deadman timeout derived from survival cadence -------- */
     printf("-- S-04 (P2, #228): deadman timeout derived from survival cadence\n");

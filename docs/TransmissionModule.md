@@ -23,10 +23,18 @@ that (DDR-0003).
 
 ## The Transmit Cycle
 
-1. **Plan** (`DecideTransmitPlan`): power mode (with F8 hysteresis), cadence,
-   GPS enable/timeout, and veto. Mission cadence override (DDR-0002): ASCENT
-   10 s / FLOAT 5 min when the power model is healthy.
-2. **Silences** (executor, first veto wins — `TransmitVeto_t`, archived in the
+1. **Admission**: read fresh temperature and raw battery voltage. Below the
+   configured minimum (`gps_temperature_lockout`, default −55 °C;
+   `battery_critical_threshold`, default/hard floor 4300 mV), or on
+   stale/invalid input,
+   schedule `tx_interval_survival` and return to sleep without GNSS, archive,
+   probe, or live telemetry.
+2. **Plan** (`DecideTransmitPlan`): power mode (with F8 hysteresis), cadence,
+   GNSS timeout, and veto. Every admitted science wake enables GNSS with a
+   nonzero acquisition budget; mode cadence selection does not create a
+   deliberate GNSS-less science cycle. Mission cadence override (DDR-0002):
+   ASCENT 10 s / FLOAT 5 min when the power model is healthy.
+3. **Silences** (executor, first veto wins — `TransmitVeto_t`, archived in the
    flash record's flags b5-b7):
    | # | Veto | Cause |
    |---|------|-------|
@@ -36,10 +44,10 @@ that (DDR-0003).
    | 4 | `VETO_RESTRICTED_REGION` | regulatory RF prohibition (geofence) |
    | 5 | `VETO_GPS_LOSS` | position stale beyond the 24 h budget (`> GPS_LOSS_SILENCE_S`, strict, DDR-0015 BR-STALE-017) — science/logging/GNSS retries continue (STAB-03/#150); same-wake restore on a fresh fix is **not yet implemented** (#285) |
    | 6 | `VETO_PRELAUNCH_QUIET` | commissioned-but-not-launched quiet watch (DR-06/#241) |
-3. **Probe**: one compact confirmed heartbeat (Port 10). **The ACK gates all
+4. **Probe**: one compact confirmed heartbeat (Port 10). **The ACK gates all
    further RF work this wake** (SI-016, DDR-0019): no ACK → end of RF work.
    No same-wake probe retry, no backlog dump without probe success.
-4. **Burst** (only after probe ACK): Port 11 archive packets, newest→oldest
+5. **Burst** (only after probe ACK): Port 11 archive packets, newest→oldest
    via the one-pass recovery walker (DDR-0005; `tx_high_water` monotonic up /
    `recovery_frontier` monotonic down — never rewalks). Budget knobs (config,
    §6b): `max_bulk_packets` (20), `bulk_battery_min_mv` (5000),
@@ -48,11 +56,17 @@ that (DDR-0003).
    one flush at burst end (Finding #8), gated by `pending_tx_committed` so a
    post-send reset can't double-commit (C-01/#270). Backend dedups on
    (DevEUI, sequence); gaps and duplicates are acceptable (SI-018).
-5. **Region**: H3 lookup runs only on a fresh, token-present fix
+6. **Region**: H3 lookup runs only on a fresh, token-present fix
    (`GNSS_HasPosition`); a region switch is transactional — radio params are
    verified and the switch rolls back on failure (LT-02/H-04/H-06, #272).
    Restricted regions inhibit RF; the geofence never auto-switches on a stale
    position.
+
+An admitted science record is written/transmitted only when this wake provides
+disciplined GNSS time, a fresh good-quality position, and fresh temperature,
+humidity, pressure, and battery readings. A failed package ends the wake without
+creating a new record. Cached archive recovery may continue in an already-open
+bulk callback path when admission passed.
 
 ## Wire Formats (authoritative: PayloadFormats.md)
 

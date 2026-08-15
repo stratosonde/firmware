@@ -410,28 +410,26 @@ static void test_fatal_escape_scoped(void)
 /* ========================================================================== */
 /* STAB-03 (#150) — GPS-loss silence must not force GNSS over the hard floor   */
 /* ========================================================================== */
-/* lora_app.c forced gps_enabled_by_power_mgmt = true in the GPS-loss silence
- * path UNCONDITIONALLY - including MODE_SURVIVAL (raw battery below the LTO
- * floor). Urgency may reprioritize work; it may never bypass the electrical
- * hard limit. The force must be gated on not being at the floor. */
+/* GPS-loss recovery may force GNSS only after the first-flight admission gate
+ * has accepted the raw electrical floor. Mode names are cadence preferences;
+ * they are no longer a substitute for per-wake load admission. */
 static void test_silence_force_respects_floor(void)
 {
-    printf("-- STAB-03/#150: GPS-loss silence force is hard-floor gated\n");
+    printf("-- STAB-03/#150: GPS-loss retry follows hard-floor admission\n");
 
     char *src = slurp("../../LoRaWAN/App/lora_app.c");
+    char *cfg = slurp("../../Core/Src/config.c");
     const char *force = strstr(src, "gps_enabled_by_power_mgmt = true;");
+    const char *admission = strstr(src,
+        "FirstFlightWakeAdmitted(&sensor_data, battery_mv_raw)");
     CHECK(force != NULL);   /* anchor: the silence-path force */
-    if (force) {
-        /* the hard-floor guard must appear within ~300 chars before/after */
-        const char *start = force - 300;
-        if (start < src) start = src;
-        size_t n = (size_t)(force - start) + 400;
-        char *window = malloc(n + 1);
-        memset(window, 0, n + 1);
-        memcpy(window, start, n);
-        CHECK_REGRESSION(strstr(window, "MODE_SURVIVAL") != NULL, "STAB-03");
-        free(window);
-    }
+    CHECK(admission != NULL);
+    CHECK_REGRESSION(admission != NULL && force != NULL && admission < force,
+                     "STAB-03-order");
+    CHECK_REGRESSION(strstr(cfg,
+        "configured < CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV") != NULL,
+        "STAB-03-floor");
+    free(cfg);
     free(src);
 }
 

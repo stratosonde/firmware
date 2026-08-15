@@ -348,9 +348,9 @@ static void test_dr_p3_hygiene(void)
     free(gnss);
 
     char *app = slurp("../../LoRaWAN/App/lora_app.c");
-    /* DR-13: SysTimeSyncFromGnss called exactly twice in AcquireGnssFix
-     * (once per fix branch) - the unconditional third call is gone. */
-    CHECK_REGRESSION(count_occurrences(app, "SysTimeSyncFromGnss();") == 2, "DR-13");
+    /* DR-13: two production acquisition branches plus one compile-time fake
+     * GNSS test branch. The old unconditional post-branch call stays gone. */
+    CHECK_REGRESSION(count_occurrences(app, "SysTimeSyncFromGnss();") == 3, "DR-13");
     /* DR-15: the GPS-skip memset is paired with a stale mark. */
     CHECK_REGRESSION(strstr(app, "sizeof(hgnss.data));\n    EnvSensors_MarkGnssStale(true);") != NULL, "DR-15");
     /* DR-18: BULK_V6_MAX_RECORDS, not a magic 6. */

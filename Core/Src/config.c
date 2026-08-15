@@ -176,7 +176,17 @@ uint32_t ConfigGetDeadmanTimeoutS(void)
 {
     const SystemConfig_t *c = Config_Get();
     return DeadmanTimeoutForSurvival((c != NULL) ? c->tx_interval_survival
-                                                 : 3600000UL);
+                                                  : 3600000UL);
+}
+
+uint16_t ConfigGetFirstFlightBatteryMinMv(void)
+{
+    const SystemConfig_t *c = Config_Get();
+    uint16_t configured = (c != NULL) ? c->battery_critical_threshold
+                                      : CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV;
+    return (configured < CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV)
+        ? CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV
+        : configured;
 }
 
 ConfigStatus_t Config_Validate(const SystemConfig_t *config)
@@ -268,7 +278,7 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config)
     }
     if (!(config->battery_critical_threshold < config->battery_low_threshold &&
           config->battery_low_threshold < config->bulk_battery_min_mv)) {
-        return CONFIG_ERROR_RANGE;  // critical < low < bulk-min ordering
+        return CONFIG_ERROR_RANGE;  // critical < low < bulk-min
     }
     /* R12 (#197): frame_counter_save_interval is now config-authoritative
      * (CfgFrameCounterSaveInterval in multiregion_context.c) - a 0 would
@@ -309,9 +319,9 @@ ConfigStatus_t Config_LoadDefaults(void)
     
     // Power management thresholds
     g_config.battery_low_threshold = 4500;     // 4.5V low threshold
-    g_config.battery_critical_threshold = 4000; // 4.0V critical
+    g_config.battery_critical_threshold = CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV;
     g_config.bulk_battery_min_mv = 5000;       // 5.0V for bulk transfer
-    g_config.gps_temperature_lockout = -55;    // -55°C GPS lockout
+    g_config.gps_temperature_lockout = -55;    // -55°C first-flight admission minimum
     g_config.power_mode_hysteresis = 10;       // 10% hysteresis
     /* F19 FIX: solar_charging_threshold default removed (field deleted -
      * 6000 mV could never trip on the ~1.1 V two-wafer panel; zero consumers) */
@@ -395,9 +405,11 @@ ConfigStatus_t Config_PrintCurrent(void)
                       g_config.lorawan_confirmed ? "ON" : "OFF");
     
     // Power management
-    SONDE_LOG("Battery: Low=%dmV Critical=%dmV Bulk=%dmV GPS_Lockout=%d°C\r\n",
+    SONDE_LOG("Battery: Low=%dmV CriticalCfg=%dmV FirstFlightEffective=%dmV "
+              "Bulk=%dmV GPS_Lockout=%d°C\r\n",
                       g_config.battery_low_threshold, g_config.battery_critical_threshold,
-                      g_config.bulk_battery_min_mv, g_config.gps_temperature_lockout);
+                      ConfigGetFirstFlightBatteryMinMv(), g_config.bulk_battery_min_mv,
+                      g_config.gps_temperature_lockout);
     
     // Adaptive transmission
     SONDE_LOG("Adaptive: Margin=%ddB Gateways=%d MaxBulk=%d FCntSave=%d\r\n",

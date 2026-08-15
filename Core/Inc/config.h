@@ -94,10 +94,10 @@ typedef struct __attribute__((packed)) {
     uint32_t lorawan_class_b_timeout;  // Class B/C timeout (ms) - default 8000
 
     /* Power management thresholds (12 bytes) */
-    uint16_t battery_low_threshold;    // R12 (#197) RESERVED - no consumer; the live power thresholds are hardcoded in power_model.c
-    uint16_t battery_critical_threshold; // R12 (#197) RESERVED - no consumer; live floors are the R10 raw floor / R2-11 5000 mV in transmit_plan.c
+    uint16_t battery_low_threshold;    // Legacy power-model threshold (layout preserved)
+    uint16_t battery_critical_threshold; // First-flight minimum raw battery admission (mV), default 4300
     uint16_t bulk_battery_min_mv;      // Min battery for bulk transfer (mV) - default 5000. R12: ACTIVE (CfgBulkBattMin)
-    int8_t   gps_temperature_lockout;  // DEPRECATED (RV-08/#164, DDR-0021): never read; kept for layout
+    int8_t   gps_temperature_lockout;  // First-flight minimum admission temperature (C), default -55
     uint8_t  power_mode_hysteresis;    // R12 (#197) RESERVED - no consumer; the live hysteresis is F8_UPGRADE_CONFIRM=3 (transmit_plan.c, #172/#179)
     /* F19 FIX: solar_charging_threshold deleted. The 6000 mV default could
      * never trip on the real ~1.1 V two-wafer panel, and the field had zero
@@ -206,6 +206,10 @@ ConfigStatus_t Config_Validate(const SystemConfig_t *config);
   *        cadence - a 1.5x margin where 3x was intended. */
 uint32_t ConfigGetDeadmanTimeoutS(void);
 
+/** Effective first-flight battery threshold. Legacy persisted values below
+  * the hard floor remain loadable but cannot weaken runtime admission. */
+uint16_t ConfigGetFirstFlightBatteryMinMv(void);
+
 /** @brief Floor for the derived deadman timeout (default survival = 1 h). */
 #define CONFIG_DEADMAN_FLOOR_S   (3U * 3600U)
 
@@ -215,6 +219,10 @@ uint32_t ConfigGetDeadmanTimeoutS(void);
   *        from the validated range again (S-04's deadman-derived 3/4 rule is
   *        always-true above the 3 h floor and cannot serve as the ceiling). */
 #define CONFIG_MAX_TX_INTERVAL_MS   7200000UL
+
+/** First-flight raw battery floor. Provisioning may choose a stricter
+  * threshold, but never one below the existing LTO brownout-protection floor. */
+#define CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV 4300U
 
 /**
  * @brief Reset to factory defaults
@@ -277,6 +285,11 @@ uint32_t Config_CalculateCRC32(const SystemConfig_t *config);
 #define CFG_BATTERY_LOW_THRESHOLD    (Config_Get()->battery_low_threshold)
 #define CFG_BATTERY_CRITICAL_THRESHOLD (Config_Get()->battery_critical_threshold)
 #define CFG_GPS_TEMPERATURE_LOCKOUT  (Config_Get()->gps_temperature_lockout)
+
+/* First-flight admission accessors.  These names describe the active use of
+ * the persisted fields; the underlying fields and flash layout are unchanged. */
+#define CFG_FIRST_FLIGHT_MIN_BATTERY_MV (ConfigGetFirstFlightBatteryMinMv())
+#define CFG_FIRST_FLIGHT_MIN_TEMPERATURE_C (Config_Get()->gps_temperature_lockout)
 
 #define CFG_LINK_MARGIN_THRESHOLD    (Config_Get()->link_margin_threshold)
 #define CFG_GATEWAY_COUNT_THRESHOLD  (Config_Get()->gateway_count_threshold)

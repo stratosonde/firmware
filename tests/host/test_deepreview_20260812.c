@@ -239,7 +239,7 @@ static void test_r302_gnss_wake_stale(const char *app)
 {
     printf("-- R3-02 (P1, #216): GNSS wake failure must not keep a previous fix FRESH\n");
 
-    const char *sig = strstr(app, "static bool AcquireGnssFix(");
+    const char *sig = strstr(app, "static GnssAcquisitionResult_t AcquireGnssFix(");
     CHECK(sig != NULL);
     if (!sig) return;
     const char *wake = strstr(sig, "GNSS_WakeFromStandby(&hgnss)");
@@ -393,7 +393,7 @@ static void test_s02_wakefail_geofence(const char *app)
     /* The wake-fail path is the else of the AcquireGnssFix success branch in
      * SendTxData. It must consult the same GeofenceRestricted policy point
      * the BURST-03 GPS-skip path uses (inhibit only, on last-known pos). */
-    const char *call = strstr(app, "if (AcquireGnssFix(gps_timeout_ms, &ttf_ms)) {");
+    const char *call = strstr(app, "if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX) {");
     CHECK(call != NULL);
     if (!call) return;
     /* Bounded window: the success branch + the else path, up to the first

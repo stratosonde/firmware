@@ -331,9 +331,9 @@ never matched the firmware. These are the `OperatingMode_t` values in
 |-------|------|-------------|-------------|
 | 0 | NORMAL | Normal operation | 300s (5 min) |
 | 1 | CONSERVATIVE | Battery saving | 600s (10 min) |
-| 2 | REDUCED | Low battery, GPS disabled | 900s (15 min) |
-| 3 | RECOVERY | Critical battery | 1800s (30 min) |
-| 4 | SURVIVAL | LTO floor, minimal activity | 3600s (60 min) |
+| 2 | REDUCED | Power-model cadence preference; admitted science still acquires GNSS | 900s (15 min) |
+| 3 | RECOVERY | Power-model cadence preference; admitted science still acquires GNSS | 1800s (30 min) |
+| 4 | SURVIVAL | Slowest cadence preference; also used for low-admission retry | 3600s (60 min) |
 
 Mission cadence (DDR-0002) overrides these only when the power model is
 healthy (NORMAL/CONSERVATIVE): ASCENT = 10 s, FLOAT = 5 min.
