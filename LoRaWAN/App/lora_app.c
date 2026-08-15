@@ -1980,16 +1980,8 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
   return false;
 }
 
-static uint16_t FirstFlightVoltsToMvOrZero(float voltage)
-{
-  /* A float-to-integer conversion outside the destination range is undefined
-   * in C. Sensor faults must therefore become a conservative zero sample
-   * before the policy sees them, never undefined flight behavior. */
-  if (!isfinite(voltage) || voltage <= 0.0f || voltage > 65.535f) {
-    return 0U;
-  }
-  return (uint16_t)(voltage * 1000.0f + 0.5f);
-}
+/* FirstFlightVoltsToMvOrZero moved verbatim to Core/Src/first_flight_policy.c
+ * (refactor stage 6) as FirstFlightPolicy_VoltsToMvOrZero. */
 
 static void SendTxData(void)
 {
@@ -2033,9 +2025,9 @@ static void SendTxData(void)
   /* Pre-load admission sample. Voltage and staleness are captured together;
    * the post-GNSS environment sample below repeats admission under receiver
    * load and becomes the archive/bulk-opportunity value. */
-  uint16_t battery_mv_raw = FirstFlightVoltsToMvOrZero(sensor_data.battery_voltage);
+  uint16_t battery_mv_raw = FirstFlightPolicy_VoltsToMvOrZero(sensor_data.battery_voltage);
   s_cycle_batt_mv = battery_mv_raw;
-  uint16_t solar_mv = FirstFlightVoltsToMvOrZero(sensor_data.solar_voltage);
+  uint16_t solar_mv = FirstFlightPolicy_VoltsToMvOrZero(sensor_data.solar_voltage);
   (void)solar_mv;  /* FR-19: log-only in flight */
 
   /* First-flight admission is deliberately one decision.  A stale/invalid
@@ -2341,9 +2333,9 @@ static void SendTxData(void)
 
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
-  if (g_tx_fsm.state != TX_FSM_BULK_TRANSFER &&
-      (gnss_result != GNSS_ACQUIRE_FRESH_GOOD_FIX ||
-       !time_disciplined_this_wake)) {
+  if (!FirstFlightPolicy_GnssPackagePresent(g_tx_fsm.state == TX_FSM_BULK_TRANSFER,
+                                            gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
+                                            time_disciplined_this_wake)) {
     /* An admitted science wake without this wake's accepted GNSS package is
      * not a science cycle.  Do not archive or transmit a live record. */
     SONDE_LOG_STR("First-flight observation rejected: no fresh good-quality GNSS fix/time; retry next wake\r\n");
@@ -2377,7 +2369,7 @@ static void SendTxData(void)
      * sagged or the temperature crossed the floor under GNSS load, do not add
      * radio load or create a record that violated admission. */
     uint16_t post_gnss_battery_mv =
-        FirstFlightVoltsToMvOrZero(sensor_data.battery_voltage);
+        FirstFlightPolicy_VoltsToMvOrZero(sensor_data.battery_voltage);
     if (!FirstFlightWakeAdmitted(&sensor_data, post_gnss_battery_mv)) return;
     s_cycle_batt_mv = post_gnss_battery_mv;
 

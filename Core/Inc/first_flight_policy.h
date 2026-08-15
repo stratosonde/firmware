@@ -44,4 +44,21 @@ bool FirstFlightPolicy_PackageComplete(
 bool FirstFlightPolicy_GnssDateTimeValid(uint32_t date_ddmmyy,
                                          uint32_t time_hhmmss);
 
+/** Defensive float -> millivolt conversion (refactor stage 6, moved verbatim
+ *  from lora_app.c's FirstFlightVoltsToMvOrZero). A float-to-integer
+ *  conversion outside the destination range is undefined in C, so sensor
+ *  faults (NaN, Inf, non-positive, > 65.535 V) become a conservative zero
+ *  sample BEFORE the policy sees them, never undefined flight behavior. */
+uint16_t FirstFlightPolicy_VoltsToMvOrZero(float voltage);
+
+/** Early GNSS-package gate (refactor stage 6): a bulk continuation services
+ *  cached recovery - never a live record - so it is exempt. A science wake
+ *  may archive/transmit a live record only with THIS wake's accepted GNSS
+ *  fix AND disciplined time. The full 7-field package check
+ *  (FirstFlightPolicy_PackageComplete) still runs later, after the post-GNSS
+ *  sensor re-sample. */
+bool FirstFlightPolicy_GnssPackagePresent(bool is_bulk_continuation,
+                                          bool fresh_good_fix,
+                                          bool time_disciplined);
+
 #endif /* FIRST_FLIGHT_POLICY_H */

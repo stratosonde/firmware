@@ -58,3 +58,28 @@ bool FirstFlightPolicy_GnssDateTimeValid(uint32_t date_ddmmyy,
     }
     return day >= 1U && day <= max_day;
 }
+
+uint16_t FirstFlightPolicy_VoltsToMvOrZero(float voltage)
+{
+    /* A float-to-integer conversion outside the destination range is
+     * undefined in C. Sensor faults must therefore become a conservative
+     * zero sample before the policy sees them, never undefined flight
+     * behavior. */
+    if (!isfinite(voltage) || voltage <= 0.0f || voltage > 65.535f) {
+        return 0U;
+    }
+    return (uint16_t)(voltage * 1000.0f + 0.5f);
+}
+
+bool FirstFlightPolicy_GnssPackagePresent(bool is_bulk_continuation,
+                                          bool fresh_good_fix,
+                                          bool time_disciplined)
+{
+    /* Bulk continuations service cached recovery and are exempt; a science
+     * wake needs this wake's accepted fix AND disciplined time. */
+    if (is_bulk_continuation) {
+        return true;
+    }
+    return fresh_good_fix && time_disciplined;
+}
+

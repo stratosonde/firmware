@@ -26,7 +26,7 @@ red-first commits — never inside a refactor commit.
 | config | 17 | 0 | |
 | dr | 51 | 0 | |
 | sp0813 | 73 | 0 | |
-| firstflight | 19 | 0 | first-flight admission/package contract |
+| firstflight | 35 | 0 | first-flight admission/package contract + stage-6 rail-conversion & early GNSS-package gates |
 | lt0813-gate | 43 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): LT-06 battery normalization non-monotonic −40…−55 °C |
 | geo-gate | 7 | 3 | **red-by-design**: GEO-01/GEO-04 production `REGION_RESTRICTED` data empty |
 | pwr-gate | 6 | 3 | **red-by-design**: PWR-02 legacy power model fixed 4300 mV raw floor |
