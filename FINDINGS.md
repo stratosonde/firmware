@@ -16,7 +16,7 @@ red-first commits — never inside a refactor commit.
 | test (core runner) | 292 | 0 | golden heartbeat-v2 + bulk-v6 vectors intact |
 | flight (flight-readiness) | 66,428 | 0 | |
 | findings | 113 | 0 | |
-| burst | 15 | 0 | scan-configured FSM replay model |
+| burst | 113 | 0 | scan-configured FSM replay model, extended (stage 5 step 1) to a full TX-FSM characterisation: LT-07 stale-wait forcing, R3-01 yield/deadline arithmetic, R3-03 ascent gate, T1/F-5 silence park, abort, bulk failure paths |
 | stability | 49 | 0 | |
 | multiregion | 98 | 0 | |
 | timerif | 31 | 0 | |
