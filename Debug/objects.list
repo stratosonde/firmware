@@ -12,6 +12,7 @@
 ./Core/Src/multiregion_context.o
 ./Core/Src/multiregion_h3.o
 ./Core/Src/payload_encode.o
+./Core/Src/packet_queue.o
 ./Core/Src/power_model.o
 ./Core/Src/transmit_plan.o
 ./Core/Src/SEGGER_RTT.o

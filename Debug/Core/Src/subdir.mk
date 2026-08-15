@@ -20,6 +20,7 @@ C_SRCS += \
 ../Core/Src/multiregion_context.c \
 ../Core/Src/multiregion_h3.c \
 ../Core/Src/payload_encode.c \
+../Core/Src/packet_queue.c \
 ../Core/Src/power_model.c \
 ../Core/Src/transmit_plan.c \
 ../Core/Src/sht31.c \
@@ -53,6 +54,7 @@ OBJS += \
 ./Core/Src/multiregion_context.o \
 ./Core/Src/multiregion_h3.o \
 ./Core/Src/payload_encode.o \
+./Core/Src/packet_queue.o \
 ./Core/Src/power_model.o \
 ./Core/Src/transmit_plan.o \
 ./Core/Src/sht31.o \
@@ -86,6 +88,7 @@ C_DEPS += \
 ./Core/Src/multiregion_context.d \
 ./Core/Src/multiregion_h3.d \
 ./Core/Src/payload_encode.d \
+./Core/Src/packet_queue.d \
 ./Core/Src/power_model.d \
 ./Core/Src/transmit_plan.d \
 ./Core/Src/sht31.d \
@@ -113,6 +116,6 @@ clean: clean-Core-2f-Src
 clean-Core-2f-Src:
 	-$(RM) ./Core/Src/SEGGER_RTT.cyclo ./Core/Src/SEGGER_RTT.d ./Core/Src/SEGGER_RTT.o ./Core/Src/SEGGER_RTT.su ./Core/Src/adc_if.cyclo ./Core/Src/adc_if.d ./Core/Src/adc_if.o ./Core/Src/adc_if.su ./Core/Src/atgm336h.cyclo ./Core/Src/atgm336h.d ./Core/Src/atgm336h.o ./Core/Src/atgm336h.su ./Core/Src/config.cyclo ./Core/Src/config.d ./Core/Src/config.o ./Core/Src/config.su ./Core/Src/flash_if.cyclo ./Core/Src/flash_if.d ./Core/Src/flash_if.o ./Core/Src/flash_if.su ./Core/Src/flash_log.cyclo ./Core/Src/flash_log.d ./Core/Src/flash_log.o ./Core/Src/flash_log.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/ms5607.cyclo ./Core/Src/ms5607.d ./Core/Src/ms5607.o ./Core/Src/ms5607.su ./Core/Src/multiregion_context.cyclo ./Core/Src/multiregion_context.d ./Core/Src/multiregion_context.o ./Core/Src/multiregion_context.su ./Core/Src/multiregion_h3.cyclo ./Core/Src/multiregion_h3.d ./Core/Src/multiregion_h3.o ./Core/Src/multiregion_h3.su ./Core/Src/payload_encode.cyclo ./Core/Src/payload_encode.d ./Core/Src/payload_encode.o ./Core/Src/payload_encode.su ./Core/Src/power_model.cyclo ./Core/Src/power_model.d ./Core/Src/power_model.o ./Core/Src/power_model.su ./Core/Src/transmit_plan.cyclo ./Core/Src/transmit_plan.d ./Core/Src/transmit_plan.o ./Core/Src/transmit_plan.su ./Core/Src/sht31.cyclo ./Core/Src/sht31.d ./Core/Src/sht31.o ./Core/Src/sht31.su ./Core/Src/stm32_lpm_if.cyclo ./Core/Src/stm32_lpm_if.d ./Core/Src/stm32_lpm_if.o ./Core/Src/stm32_lpm_if.su ./Core/Src/stm32wlxx_hal_msp.cyclo ./Core/Src/stm32wlxx_hal_msp.d ./Core/Src/stm32wlxx_hal_msp.o ./Core/Src/stm32wlxx_hal_msp.su ./Core/Src/stm32wlxx_it.cyclo ./Core/Src/stm32wlxx_it.d ./Core/Src/stm32wlxx_it.o ./Core/Src/stm32wlxx_it.su ./Core/Src/sys_app.cyclo ./Core/Src/sys_app.d ./Core/Src/sys_app.o ./Core/Src/sys_app.su ./Core/Src/sys_caps.cyclo ./Core/Src/sys_caps.d ./Core/Src/sys_caps.o ./Core/Src/sys_caps.su ./Core/Src/sys_debug.cyclo ./Core/Src/sys_debug.d ./Core/Src/sys_debug.o ./Core/Src/sys_debug.su ./Core/Src/sys_sensors.cyclo ./Core/Src/sys_sensors.d ./Core/Src/sys_sensors.o ./Core/Src/sys_sensors.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_stm32wlxx.cyclo ./Core/Src/system_stm32wlxx.d ./Core/Src/system_stm32wlxx.o ./Core/Src/system_stm32wlxx.su ./Core/Src/timer_if.cyclo ./Core/Src/timer_if.d ./Core/Src/timer_if.o ./Core/Src/timer_if.su ./Core/Src/usart_if.cyclo ./Core/Src/usart_if.d ./Core/Src/usart_if.o ./Core/Src/usart_if.su ./Core/Src/w25q16jv.cyclo ./Core/Src/w25q16jv.d ./Core/Src/w25q16jv.o ./Core/Src/w25q16jv.su
 
-	-$(RM) ./Core/Src/first_flight_policy.cyclo ./Core/Src/first_flight_policy.d ./Core/Src/first_flight_policy.o ./Core/Src/first_flight_policy.su
+	-$(RM) ./Core/Src/first_flight_policy.cyclo ./Core/Src/first_flight_policy.d ./Core/Src/first_flight_policy.o ./Core/Src/first_flight_policy.su ./Core/Src/packet_queue.cyclo ./Core/Src/packet_queue.d ./Core/Src/packet_queue.o ./Core/Src/packet_queue.su
 
 .PHONY: clean-Core-2f-Src

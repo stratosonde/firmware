@@ -56,6 +56,7 @@
 #include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0013) */
 #include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
 #include "first_flight_policy.h"
+#include "packet_queue.h"      /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
 #include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
 #include "RegionEU868.h"
 #include "RegionAS923.h"
@@ -92,29 +93,8 @@ typedef enum TxEventType_e
 } TxEventType_t;
 
 /* USER CODE BEGIN PTD */
-
-/**
-  * @brief Packet queue entry for deferred LoRaWAN transmission
-  */
-typedef struct
-{
-  uint8_t buffer[150];           // Packet data buffer
-  uint16_t size;                 // Actual packet size
-  uint8_t port;                  // LoRaWAN port number
-  bool valid;                    // Entry is occupied
-} PacketQueueEntry_t;
-
-/**
-  * @brief Simple circular packet queue
-  */
-#define PACKET_QUEUE_SIZE 8      // Max packets in queue
-typedef struct
-{
-  PacketQueueEntry_t entries[PACKET_QUEUE_SIZE];
-  uint8_t head;                  // Write position
-  uint8_t tail;                  // Read position
-  uint8_t count;                 // Current number of packets
-} PacketQueue_t;
+/* PacketQueueEntry_t / PacketQueue_t / PACKET_QUEUE_SIZE moved verbatim to
+ * Core/Inc/packet_queue.h (refactor stage 1). */
 
 /* USER CODE END PTD */
 
@@ -267,12 +247,8 @@ static void OnSystemReset(void);
 /* USER CODE BEGIN PFP */
 #if ENABLE_GNSS_DETAIL_PACKET
 static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size);
-static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port);
 #endif
-static void PacketQueue_Init(PacketQueue_t *queue);
-static bool PacketQueue_Peek(PacketQueue_t *queue, PacketQueueEntry_t *entry);
-static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry);
-static bool PacketQueue_IsEmpty(PacketQueue_t *queue);
+/* PacketQueue_* prototypes now in Core/Inc/packet_queue.h (refactor stage 1). */
 /* USER CODE END PFP */
 
 /* Private variables ---------------------------------------------------------*/
@@ -3073,87 +3049,6 @@ bool LoRaApp_EraseNvmSlots(void)
   return ok;
 }
 
-/**
-  * @brief  Initialize packet queue
-  * @param  queue: Pointer to queue structure
-  * @retval None
-  */
-static void PacketQueue_Init(PacketQueue_t *queue)
-{
-  memset(queue, 0, sizeof(PacketQueue_t));
-}
-
-#if ENABLE_GNSS_DETAIL_PACKET  /* FR-19 (#100): sole producer is the debug packet */
-/**
-  * @brief  Push packet to queue
-  * @param  queue: Pointer to queue structure
-  * @param  data: Packet data
-  * @param  size: Packet size
-  * @param  port: LoRaWAN port
-  * @retval true if successful, false if queue full
-  */
-static bool PacketQueue_Push(PacketQueue_t *queue, const uint8_t *data, uint16_t size, uint8_t port)
-{
-  if (queue->count >= PACKET_QUEUE_SIZE || size > sizeof(queue->entries[0].buffer))
-    return false;
-
-  PacketQueueEntry_t *entry = &queue->entries[queue->head];
-  memcpy(entry->buffer, data, size);
-  entry->size = size;
-  entry->port = port;
-  entry->valid = true;
-
-  queue->head = (queue->head + 1) % PACKET_QUEUE_SIZE;
-  queue->count++;
-
-  return true;
-}
-#endif  /* ENABLE_GNSS_DETAIL_PACKET */
-
-/**
-  * @brief  Peek at the head packet WITHOUT removing it (STAB-P3#7, #243)
-  * @param  queue: Pointer to queue structure
-  * @param  entry: Destination for peeked entry
-  * @retval true if successful, false if queue empty
-  */
-static bool PacketQueue_Peek(PacketQueue_t *queue, PacketQueueEntry_t *entry)
-{
-  if (queue->count == 0)
-    return false;
-
-  *entry = queue->entries[queue->tail];
-  return true;
-}
-
-/**
-  * @brief  Pop packet from queue
-  * @param  queue: Pointer to queue structure
-  * @param  entry: Destination for popped entry
-  * @retval true if successful, false if queue empty
-  */
-static bool PacketQueue_Pop(PacketQueue_t *queue, PacketQueueEntry_t *entry)
-{
-  if (queue->count == 0)
-    return false;
-
-  *entry = queue->entries[queue->tail];
-  queue->entries[queue->tail].valid = false;
-
-  queue->tail = (queue->tail + 1) % PACKET_QUEUE_SIZE;
-  queue->count--;
-
-  return true;
-}
-
-/**
-  * @brief  Check if queue is empty
-  * @param  queue: Pointer to queue structure
-  * @retval true if empty
-  */
-static bool PacketQueue_IsEmpty(PacketQueue_t *queue)
-{
-  return (queue->count == 0);
-}
-
-/* FR-19 (#100): PacketQueue_Count deleted — its only callers were log lines;
- * use g_packet_queue.count directly. */
+/* PacketQueue_Init/_Push/_Peek/_Pop/_IsEmpty moved verbatim to
+ * Core/Src/packet_queue.c (refactor stage 1); the FR-19 (#100) note about
+ * the deleted PacketQueue_Count moved with them. */

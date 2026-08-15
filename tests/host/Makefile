@@ -71,6 +71,11 @@ GEO_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 PWR_SRCS := test_pwr_20260814.c ../../Core/Src/power_model.c
 FIRST_FLIGHT_SRCS := test_first_flight_policy.c ../../Core/Src/first_flight_policy.c
 
+# Refactor stage 1: module contract for the extracted PacketQueue ADT
+# (Core/Src/packet_queue.c). -DENABLE_GNSS_DETAIL_PACKET=1 so the Push path
+# (compiled out of flight builds) is exercised by the contract too.
+PQ_SRCS := test_packet_queue.c ../../Core/Src/packet_queue.c
+
 # SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
 # FE/NE killed the circular DMA because the HAL never consults the
 # DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
@@ -141,6 +146,12 @@ test_first_flight$(EXE): $(FIRST_FLIGHT_SRCS)
 first-flight: test_first_flight$(EXE)
 	./test_first_flight$(EXE)
 
+test_pq$(EXE): $(PQ_SRCS) ../../Core/Inc/packet_queue.h
+	$(CC) $(CFLAGS) -DENABLE_GNSS_DETAIL_PACKET=1 $(INCLUDES) -o $@ $(PQ_SRCS) -lm
+
+pq: test_pq$(EXE)
+	./test_pq$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -185,7 +196,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -240,7 +251,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq ddrmanifest
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_sanitize$(EXE)
