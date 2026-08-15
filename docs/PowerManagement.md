@@ -2,29 +2,39 @@
 
 ## Overview
 
-The firmware implements a **real-time adaptive power management system** optimized for extreme temperature operation (-65°C to +25°C). The system continuously monitors battery voltage slope and immediately adjusts transmission intervals and GPS usage to optimize battery life.
+The firmware implements a **real-time adaptive power management system** optimized for extreme temperature operation (-65°C to +25°C). The system continuously monitors battery voltage slope and adjusts transmission intervals and GPS usage to optimize battery life — downgrading immediately when conditions deteriorate, upgrading only after consecutive confirmation (F8/#172).
 
 **Key Features:**
 - Temperature-compensated voltage measurements (accurate across -65°C to +25°C)
 - Real-time voltage slope calculation (+charging, -discharging in mV/hour)
-- GPS temperature lockout (supercap hardware constraint at -55°C)
 - Five adaptive operating modes (5min to 60min intervals)
-- Predictive time-to-critical and time-to-full calculations
-- **Immediate mode switching** based on real-time conditions
+- Direction-aware time-to-critical and time-to-full predictions (STAB-08/#155)
+- **Immediate downgrades, hysteresis-confirmed upgrades** (F8/#172, S-E/#214)
 
 ---
 
 ## Operating Modes
 
-| Mode | TX Interval | GPS | Temperature | When Used |
-|------|-------------|-----|-------------|-----------|
-| **NORMAL** | 5 min | ✅ Yes* | >-55°C | Fast charging (slope > +20 mV/h) |
-| **CONSERVATIVE** | 10 min | ✅ Yes* | >-55°C | Stable/slow charge (default mode) |
-| **REDUCED** | 15 min | ❌ No | Any | Slow discharge (slope < -5 mV/h) |
-| **RECOVERY** | 30 min | ❌ No | Any | Moderate discharge (slope < -15 mV/h) |
-| **SURVIVAL** | 60 min | ❌ No | Any | Critical voltage or fast discharge |
+| Mode | TX Interval | GPS | When Used (`SelectModeFromPredictions`) |
+|------|-------------|-----|-------------|
+| **NORMAL** | 5 min | ✅ Yes | Fast charging: slope > +20 mV/h |
+| **CONSERVATIVE** | 10 min | ✅ Yes | Stable/slow charge (slope > 0, and the default) |
+| **REDUCED** | 15 min | ❌ No | Slow discharge: slope < -5 mV/h |
+| **RECOVERY** | 30 min | ❌ No | slope < -15 mV/h **and** time-to-critical < 12 h |
+| **SURVIVAL** | 60 min | ❌ No | Raw voltage < 4300 mV (LTO floor, R10/#37) **or** slope < -30 mV/h with time-to-critical < 6 h |
 
-*GPS automatically disabled if temperature < -55°C (supercap fails)
+The evaluation order is: raw-voltage floor first (a cold-compensated voltage must
+never mask a real brownout — normalization feeds slope/prediction only), then the
+two predictive emergencies, then plain slope thresholds.
+
+**GPS temperature lockout removed (RV-08/#164, DDR-0021):** there is no -55°C GPS
+cutoff. The power model consumes the raw SHT31 temperature, falling back to the
+raw battery reading when stale (#279); temperature affects decisions only through
+voltage normalization.
+
+**Mission cadence override (DDR-0002):** when the power model is healthy
+(NORMAL/CONSERVATIVE), mission phase overrides these intervals — ASCENT = 10 s,
+FLOAT = 5 min. REDUCED and below always use the table above.
 
 ---
 
@@ -173,26 +183,33 @@ Time      Battery  Solar  Slope      Mode         Action
 9:00am    5120mV   1500mV 0 mV/h     CONS         Sunrise! Slope stabilizing
 10:00am   5125mV   2800mV +8 mV/h    CONS         Gentle charging detected
 12:00pm   5145mV   3200mV +20 mV/h   CONS         Charging window (slope building)
-1:00pm    5155mV   3400mV +25 mV/h   NORMAL       Slope > 20mV/h → immediate upgrade
+1:00pm    5155mV   3400mV +25 mV/h   NORMAL       Slope > 20mV/h, confirmed over consecutive cycles (F8)
 4:00pm    5192mV   3600mV +22 mV/h   NORMAL       Peak charging continues
-6:00pm    5200mV   1000mV +8 mV/h    CONS         Slope < 20mV/h → downgrade
+6:00pm    5200mV   1000mV +8 mV/h    CONS         Slope < 20mV/h → immediate downgrade
 8:00pm    5195mV   0mV    -3 mV/h    CONS         Light discharge
 11:00pm   5185mV   0mV    -7 mV/h    REDUCED      Slope < -5mV/h → immediate switch
 ```
 
-### Real-Time Responsiveness
+### Responsiveness: asymmetric by design
 
-The system **immediately responds** to changing slope conditions:
-- **Discharge detection**: Slope < -5mV/h triggers REDUCED mode within 1 transmission cycle
-- **Fast charging**: Slope > +20mV/h immediately upgrades to NORMAL mode
-- **Emergency conditions**: Voltage < 4.3V or time-to-critical < 6h forces SURVIVAL mode instantly
+The system responds **asymmetrically** to changing slope conditions (F8/#172):
+- **Downgrades are immediate**: slope < -5 mV/h switches to REDUCED on the next
+  decision; emergency conditions (raw V < 4.3 V, or slope < -30 mV/h with
+  time-to-critical < 6 h) force SURVIVAL instantly. Battery protection never
+  waits.
+- **Upgrades require consecutive confirmation**: one ADC sample of noise
+  (~10 mV) over the slope window is ~60 mV/h — larger than every mode
+  threshold — so a raw proposal chatters. A higher-power mode must be proposed
+  on consecutive evaluations, separated in time (F-4/#179: a same-timestamp
+  burst re-arm cannot confirm an upgrade), and with a consistent target
+  (S-E/#214: a changed upgrade target restarts the streak).
 
-### No Lag by Design
+### Hysteresis state (RAM-only)
 
-Unlike historical systems, this **real-time approach** ensures:
-- **Immediate protection** when battery conditions deteriorate
-- **Quick optimization** when charging conditions improve
-- **Responsive adaptation** to rapidly changing weather/solar conditions
+`VoltageSlope_t` carries the hysteresis machine alongside the slope window:
+`committed_mode`, `upgrade_streak`, `hyst_last_ts`, `hyst_last_proposal`. Like
+the slope history it is intentionally RAM-only — after reset the system simply
+re-earns any upgrade from the conservative default.
 
 ---
 
@@ -218,85 +235,52 @@ Unlike historical systems, this **real-time approach** ensures:
 
 ---
 
-## Voltage-Specific Behavior
+## Decision Cascade
 
-### Real-Time Decision Matrix
+Mode selection is **not** a voltage-level matrix. The model uses exactly one
+voltage test (the raw 4.3 V floor) plus slope and direction-aware predictions
+(`SelectModeFromPredictions` in `Core/Src/power_model.c`, evaluated in this
+order — first match wins):
 
-The system behavior changes based on **current voltage** and **slope direction**:
+| # | Condition | Mode | Why |
+|---|-----------|------|-----|
+| 1 | raw voltage < 4300 mV | **SURVIVAL** | Absolute LTO floor; reads the **raw** voltage so cold compensation can't mask a brownout (R10/#37, BUG 1.5) |
+| 2 | slope < -30 mV/h **and** time-to-critical < 6 h | **SURVIVAL** | Depleting fast, critical imminent |
+| 3 | slope < -15 mV/h **and** time-to-critical < 12 h | **RECOVERY** | Moderate depletion, limited time |
+| 4 | slope < -5 mV/h | **REDUCED** | Slow depletion |
+| 5 | slope > +20 mV/h | **NORMAL** | Fast charging (subject to upgrade hysteresis, F8/#172) |
+| 6 | slope > 0 mV/h | **CONSERVATIVE** | Gentle charging / stable |
+| 7 | (default) | **CONSERVATIVE** | Stable or slight discharge |
 
-#### At 5.5V (Fully Charged)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +20 mV/h | N/A (charging) | 0h (at target) | CONSERVATIVE | Already full, can't charge more |
-| 0 mV/h | N/A (stable) | 0h (at target) | CONSERVATIVE | Stable and full |
-| -10 mV/h | 100h | N/A (discharging) | CONSERVATIVE | Lots of capacity, slow discharge OK |
+Note what this means: at 4.6 V with a flat slope the model stays CONSERVATIVE —
+there is no mid-level voltage derating. Between the 4.3 V floor and full charge,
+only **slope and time-to-critical** move the mode. The selected mode then passes
+through the hysteresis machine: downgrades apply immediately, upgrades need
+consecutive time-separated confirmations of the same target.
 
-#### At 5.2V (80% Capacity)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +20 mV/h | N/A | 15h | **NORMAL** | Fast charging, upgrade mode |
-| +5 mV/h | N/A | 60h | CONSERVATIVE | Slow charging, stay cautious |
-| 0 mV/h | N/A | N/A | CONSERVATIVE | Stable, good capacity |
-| -10 mV/h | 70h | N/A | CONSERVATIVE | Slow discharge, lots of time |
-
-#### At 5.0V (60% Capacity - Normal Operation)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +30 mV/h | N/A | 17h | **NORMAL** | Fast charging, plenty of time |
-| +10 mV/h | N/A | 50h | CONSERVATIVE | Gentle charging |
-| 0 mV/h | N/A | N/A | CONSERVATIVE | Stable at mid-range |
-| -10 mV/h | 50h | N/A | CONSERVATIVE | Slow discharge, monitor |
-| -20 mV/h | 25h | N/A | REDUCED | Moderate discharge, slow down |
-
-#### At 4.8V (40% Capacity - Getting Low)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +20 mV/h | N/A | 35h | **NORMAL** | Charging back up |
-| 0 mV/h | N/A | N/A | CONSERVATIVE | Stable but low capacity |
-| -10 mV/h | 30h | N/A | REDUCED | Discharging with limited time |
-| -30 mV/h | 10h | N/A | **RECOVERY** | Fast discharge (15 mV/h threshold) |
-
-#### At 4.6V (20% Capacity - Low Battery)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +20 mV/h | N/A | 45h | CONSERVATIVE | Charging but from low point |
-| 0 mV/h | N/A | N/A | REDUCED | Stable but very low |
-| -10 mV/h | 10h | N/A | **RECOVERY** | Limited time to critical |
-| -30 mV/h | 3h | N/A | **SURVIVAL** | Emergency! <6h to critical |
-
-#### At 4.5V (5% Capacity - Critical)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| +10 mV/h | N/A | 100h | REDUCED | Charging from critical, be cautious |
-| 0 mV/h | 0h (at target) | N/A | **RECOVERY** | At critical threshold |
-| -10 mV/h | Already critical | N/A | **SURVIVAL** | Below threshold |
-
-#### At 4.3V (1% Capacity - Emergency)
-| Slope | Time to Critical | Time to Full | Mode Decision | Reason |
-|-------|------------------|--------------|---------------|---------|
-| Any | Below threshold | N/A | **SURVIVAL** | Voltage override! |
-
-**Voltage override at <4.3V forces SURVIVAL mode regardless of slope or history.**
+**Voltage override at <4.3V (raw) forces SURVIVAL mode regardless of slope or history.**
 
 ---
 
 ## Key Insights
 
-### 1. Voltage Level Matters More at Extremes
+### 1. Slope and Time-to-Critical Decide; Voltage Only Floors
 
-- **Above 5.0V**: Slope is primary factor (plenty of capacity buffer)
-- **4.5-5.0V**: Both voltage and slope matter (moderate capacity)
-- **Below 4.5V**: Voltage dominates (critical threshold triggering)
+- **Any voltage ≥ 4.3V raw**: slope thresholds and direction-aware predictions
+  decide the mode (see Decision Cascade)
+- **Below 4.3V raw**: the voltage floor dominates — SURVIVAL regardless of slope
 
 ### 2. Time-to-Critical is Most Important
 
-The system prioritizes **avoiding shutdown** over maximizing data collection:
+The system prioritizes **avoiding shutdown** over maximizing data collection
+(predictive emergencies both require an actual discharge slope — a static low
+reading does not panic the system):
 
 ```
-If (time_to_critical < 6 hours):
+If (slope < -30 mV/h AND time_to_critical < 6 hours):
     → SURVIVAL mode (60 min intervals, no GPS)
-    
-If (time_to_critical < 12 hours):
+
+If (slope < -15 mV/h AND time_to_critical < 12 hours):
     → RECOVERY mode (30 min intervals, no GPS)
 ```
 
@@ -332,23 +316,25 @@ This **errs on the side of caution** - quick to protect, slow to trust.
 2. Slope is zero (stable voltage)
 3. Moving away from both targets (e.g., at 5.0V, discharging)
 
-**Expected behavior:**
-- At 4.8V discharging → Negative hours (time to critical)
-- At 5.2V charging → Positive hours (time to full)
-- At 5.0V stable → 0h (not moving toward either)
+**Expected behavior (STAB-08/#155):** the predict functions return an explicit
+`PredictionState_t` — `PRED_AT_OR_PAST`, `PRED_STABLE`, `PRED_MOVING_AWAY`, or
+`PRED_REACHABLE` — and the hours output is meaningful only for `PRED_REACHABLE`
+(clamped at 9999 h). The old API folded "already past" and "never" into the
+same sentinel; the current one cannot.
 
 ### Problem: Mode never changes
 
 **Check real-time conditions:**
-- Mode changes **immediately** when slope thresholds are crossed
-- Emergency voltage override (<4.3V) forces SURVIVAL mode instantly
-- Time-to-critical calculations trigger mode changes in real-time
+- Downgrades apply on the next decision when slope thresholds are crossed
+- Upgrades need consecutive confirmed proposals (F8/#172) — a single good
+  cycle is not enough, by design
+- Raw-voltage override (<4.3V raw, R10/#37) forces SURVIVAL mode instantly
 
 **Expected behavior:**
-- Slope > +20mV/h → NORMAL mode
-- Slope < -5mV/h → REDUCED mode  
-- Slope < -15mV/h → RECOVERY mode
-- Time-to-critical < 6h → SURVIVAL mode
+- Slope > +20mV/h → NORMAL mode (after confirmation)
+- Slope < -5mV/h → REDUCED mode
+- Slope < -15mV/h and time-to-critical < 12h → RECOVERY mode
+- Slope < -30mV/h and time-to-critical < 6h → SURVIVAL mode
 
 ---
 
@@ -356,9 +342,9 @@ This **errs on the side of caution** - quick to protect, slow to trust.
 
 ### Real-Time > Historical
 
-- **Current conditions decide immediately** - Real-time voltage slope analysis
-- **Responsive adaptation** - Mode changes within 1 transmission cycle
-- **No lag by design** - Battery protection happens in real-time when conditions change
+- **Current conditions decide** - Real-time voltage slope analysis
+- **Asymmetric adaptation** - Downgrades within 1 decision cycle; upgrades after consecutive confirmation (F8/#172)
+- **Deliberate upgrade lag** - A single noisy sample must not unlock higher power draw; protection never waits, optimism must be earned
 
 ### Conservative > Aggressive
 
@@ -369,7 +355,7 @@ This **errs on the side of caution** - quick to protect, slow to trust.
 
 ### Simple > Complex
 
-- 2-value tracking (12 bytes) instead of 12-slot buffer (74 bytes)
+- 2-value baseline tracking plus a small RAM-only hysteresis machine (`VoltageSlope_t`: baseline, current, last slope, committed mode, upgrade streak) instead of a 12-slot buffer (74 bytes)
 - mV/hour instead of mAh/hour (no calibration needed)
 - Linear slope calculation (works well with LTO's flat discharge curve)
 - Real-time decision making without complex historical analysis
@@ -382,7 +368,7 @@ This **errs on the side of caution** - quick to protect, slow to trust.
 
 1. **Dual-timescale (short + long-term slope)** - Adds complexity, lag is feature not bug
 2. **mAh/hour energy tracking** - Requires calibration, mV/hour is sufficient
-3. **Instantaneous mode switching** - Causes thrashing, defeats the purpose
+3. **Instantaneous mode switching** - Causes thrashing; upgrades are hysteresis-confirmed instead (F8/#172)
 4. **Outlier rejection/clamping** - Not needed with proper initialization
 
 ### Potential Additions
@@ -400,19 +386,19 @@ This **errs on the side of caution** - quick to protect, slow to trust.
 - ✅ **Real-time voltage slope tracking** with 2-hour baseline window
 - ✅ **Temperature compensation** for accurate measurements (-65°C to +25°C)
 - ✅ **LTO battery optimization** with correct voltage thresholds (4.3V critical, 5.5V full)
-- ✅ **Immediate mode switching** based on real-time slope and voltage conditions
-- ✅ **Emergency protection** with voltage override (<4.3V forces SURVIVAL mode)
+- ✅ **Asymmetric mode switching** — immediate downgrades, hysteresis-confirmed upgrades (F8/#172, S-E/#214)
+- ✅ **Emergency protection** with raw-voltage override (<4.3V raw forces SURVIVAL mode, R10/#37)
 
 **System Characteristics:**
-- **Simplified Architecture**: 2-value tracking (12 bytes) instead of complex circular buffers
-- **Real-Time Responsive**: Mode changes within 1 transmission cycle of threshold crossing
-- **Temperature Aware**: GPS lockout at -55°C, voltage compensation to -65°C
+- **Simplified Architecture**: baseline/current tracking plus a small RAM-only hysteresis machine instead of complex circular buffers
+- **Asymmetric Responsive**: downgrades within 1 decision cycle; upgrades earned over consecutive cycles
+- **Temperature Aware**: voltage compensation to -65°C; no GPS temperature lockout (removed RV-08/#164, DDR-0021)
 - **Battery Protective**: Conservative defaults with immediate emergency response
 - **Telemetry Rich**: Channels 11, 12, 14 provide slope, time-to-target, and mode data
 
 **Result:**
 - ✅ Voltage slopes are **realistic and stable** (typically ±10-50 mV/h)
-- ✅ System **responds immediately** to changing battery conditions
+- ✅ System **protects immediately and upgrades cautiously** as battery conditions change
 - ✅ **LTO chemistry fully supported** with appropriate thresholds
 - ✅ Code is **simple and maintainable** with clear real-time decision logic
 - ✅ **Battery protection prioritized** over data collection frequency
