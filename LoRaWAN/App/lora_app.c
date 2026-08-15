@@ -1932,8 +1932,18 @@ static void RescheduleScienceTimer(uint32_t interval_ms, bool science_cycle)
   } else if (g_science_due_ms == 0) {
     g_science_due_ms = now_ms + interval_ms;
   }
-  uint32_t delay_ms = g_science_due_ms - now_ms;
-  if (delay_ms == 0) delay_ms = 1;
+  /* LT-01 (#269): the re-base guard above runs ONLY on the science path. A bulk
+   * continuation legitimately arrives with g_science_due_ms already in the past
+   * (SendTxData's ScienceIsDue() check is tens of ms earlier - EnvSensors_Read
+   * runs the MS5607 OSR_4096 pair, SHT31 and 3 ADC channels in between), and
+   * this subtraction used to be unsigned: 50 ms overdue became a 4294967246 ms
+   * period, which TIMER_IF_Convert_ms2Tick ALIASES (not saturates) into
+   * ~103079163 ticks = ~28 h of ReloadValue. UTIL_TIMER_Start clamps only
+   * upward, so nothing caught it and only the deadman (3-6 h) recovered.
+   * Clamp in the SIGNED domain: an overdue deadline means "fire now". */
+  int32_t remain_ms = (int32_t)(g_science_due_ms - now_ms);
+  if (remain_ms <= 0) remain_ms = 1;
+  uint32_t delay_ms = (uint32_t)remain_ms;
   UTIL_TIMER_Stop(&TxTimer);
   UTIL_TIMER_SetPeriod(&TxTimer, delay_ms);
   UTIL_TIMER_Start(&TxTimer);
