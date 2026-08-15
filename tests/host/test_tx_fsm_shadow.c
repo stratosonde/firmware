@@ -71,7 +71,9 @@ static void shadow_work(TxFsm_t *f, bool probe_fail, bool bulk_fail,
         (uint8_t)MAX_BULK_PACKETS_PER_CYCLE, (uint32_t)BURST_MAX_OPEN_MS
     };
     TxFsmCycleOutput_t out;
-    TxFsm_OnWorkCycle(f, &in, &out);         /* step side */
+    TxFsm_OnCycleEntry(f, in.now_ms);        /* step side: the firmware's */
+    out.timer_delay_ms = TxFsm_Reschedule(f, in.now_ms, in.interval_ms);
+    TxFsm_Dispatch(f, &in, &out);            /* three phase call sites     */
 
     bool send_ok = true;
     bool lc_issued = false;

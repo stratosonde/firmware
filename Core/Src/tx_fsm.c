@@ -21,16 +21,33 @@ void TxFsm_Init(TxFsm_t *fsm)
     fsm->science_due_ms = 0;
 }
 
-static bool science_is_due(const TxFsm_t *fsm, uint32_t now_ms)
+bool TxFsm_ScienceIsDue(const TxFsm_t *fsm, uint32_t now_ms)
 {
     /* R3-01: wrap-safe absolute deadline; false while unscheduled. */
     return fsm->science_due_ms != 0 &&
            (int32_t)(now_ms - fsm->science_due_ms) >= 0;
 }
 
-static uint32_t reschedule(TxFsm_t *fsm, uint32_t now_ms,
-                           uint32_t interval_ms, bool science_cycle)
+bool TxFsm_BurstStale(const TxFsm_t *fsm, uint32_t now_ms,
+                      uint32_t burst_max_open_ms)
 {
+    return fsm->state == TX_FSM_BULK_TRANSFER && fsm->burst_opened_ms != 0 &&
+           (uint32_t)(now_ms - fsm->burst_opened_ms) > burst_max_open_ms;
+}
+
+void TxFsm_OnCycleEntry(TxFsm_t *fsm, uint32_t now_ms)
+{
+    /* R3-01 (#215): a bulk continuation yields when the science deadline
+     * arrives - current science always wins (DDR-0005 BR-TX-001/002). */
+    if (fsm->state == TX_FSM_BULK_TRANSFER && TxFsm_ScienceIsDue(fsm, now_ms)) {
+        fsm->state = TX_FSM_COMPLETE;
+        fsm->bulk_packets_sent = 0;
+    }
+}
+
+uint32_t TxFsm_Reschedule(TxFsm_t *fsm, uint32_t now_ms, uint32_t interval_ms)
+{
+    bool science_cycle = (fsm->state != TX_FSM_BULK_TRANSFER);
     if (science_cycle) {
         if (fsm->science_due_ms == 0) fsm->science_due_ms = now_ms;
         fsm->science_due_ms += interval_ms;
@@ -46,23 +63,14 @@ static uint32_t reschedule(TxFsm_t *fsm, uint32_t now_ms,
     return (uint32_t)remain_ms;
 }
 
-void TxFsm_OnWorkCycle(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
-                       TxFsmCycleOutput_t *out)
+void TxFsm_Dispatch(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
+                    TxFsmCycleOutput_t *out)
 {
     out->action = TXFSM_ACT_NONE;
     out->linkcheck_req = false;
     out->flush_header_sync = false;
     out->retire_batch = false;
-
-    /* R3-01 (#215): a bulk continuation yields when the science deadline
-     * arrives - current science always wins (DDR-0005 BR-TX-001/002). */
-    if (fsm->state == TX_FSM_BULK_TRANSFER && science_is_due(fsm, in->now_ms)) {
-        fsm->state = TX_FSM_COMPLETE;
-        fsm->bulk_packets_sent = 0;
-    }
-
-    out->timer_delay_ms = reschedule(fsm, in->now_ms, in->interval_ms,
-                                     fsm->state != TX_FSM_BULK_TRANSFER);
+    /* out->timer_delay_ms is owned by TxFsm_Reschedule. */
 
     /* LT-07 (#277): burst-scoped deadlines force a stuck network-wait state
      * out; the stale-state reset below then runs as for any completed

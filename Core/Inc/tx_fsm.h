@@ -88,8 +88,22 @@ typedef struct {
     uint32_t timer_delay_ms;     /* program TxTimer with this (always valid) */
 } TxFsmCycleOutput_t;
 
-void TxFsm_OnWorkCycle(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
-                       TxFsmCycleOutput_t *out);
+/* The work cycle is phased to mirror SendTxData's real call sites:
+ * entry yield (R3-01), then the timer reschedule, then the dispatch
+ * (LT-07 forcing, stale reset, RF-silence park, probe/bulk). The firmware
+ * adapter calls them with a FRESH HAL_GetTick at each phase (a GPS
+ * acquisition can elapse between them); equal now_ms values compose to
+ * the atomic step the shadow-run validates. */
+void     TxFsm_OnCycleEntry(TxFsm_t *fsm, uint32_t now_ms);
+uint32_t TxFsm_Reschedule(TxFsm_t *fsm, uint32_t now_ms, uint32_t interval_ms);
+void     TxFsm_Dispatch(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
+                        TxFsmCycleOutput_t *out);
+
+/* Pure queries for adapter reachability guards (e.g. the adapter must not
+ * read flash for a bulk dispatch that LT-07 forcing will preempt). */
+bool TxFsm_ScienceIsDue(const TxFsm_t *fsm, uint32_t now_ms);
+bool TxFsm_BurstStale(const TxFsm_t *fsm, uint32_t now_ms,
+                      uint32_t burst_max_open_ms);
 
 /* Report the outcome of a mandated send. has_unsent_now is re-queried AFTER
  * the adapter's send-time watermark advance. Probe: ok -> WAIT (stamped),
