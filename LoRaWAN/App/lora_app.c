@@ -1486,8 +1486,10 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
 
 /**
  * @brief F-R1 (#74): archive the freshly-sampled record to the flash ring.
- *        F11: runs AFTER the GPS fix + post-fix sensor re-read so position,
- *        time, and environment describe the same moment. F-07 (#68): bulk
+ *        F11 + LT-03 (#271): runs AFTER the GPS fix AND the post-acquisition
+ *        environment re-sample, so position, time and environment in one
+ *        record describe the same moment (env skew bounded by the archive
+ *        write, not by up to 255 s of GNSS acquisition). F-07 (#68): bulk
  *        retransmit cycles are NOT archived. R45: UTC epoch stamp (SysTime).
  */
 static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
@@ -1495,9 +1497,9 @@ static void ArchiveSample(sensor_t *sensor_data, uint32_t *now_timestamp,
                           uint8_t veto)
 {
   /* ========== FLASH LOGGING: Store high-resolution data ========== */
-  /* F11 FIX: Write the archive record HERE — after the GPS fix and post-fix
-   * sensor re-read — so position, time, and environment in a record describe
-   * the same moment. Timestamp is taken fresh at write time. */
+  /* F11/LT-03 (#271): the record is written after the GPS fix and the
+   * post-acquisition EnvSensors_Read, so its position, time and environment
+   * describe the same moment. Timestamp is taken fresh at write time. */
   /* F-07 (#68): only archive genuine, freshly-sampled telemetry records.
    * OnTxData re-arms this task once per BULK packet (DDR-0005/#34); the bulk
    * path skips GPS entirely (hgnss.data memset above), so archiving those
@@ -2283,9 +2285,25 @@ static void SendTxData(void)
   SONDE_LOG_STR("\r\n");
   
   // CRITICAL: fold in the fresh GPS fix acquired above.
-  // FR-15 (#96): GPS-only merge — a second full EnvSensors_Read() here
-  // re-ran the MS5607 OSR_4096 pair and SHT31 read for no new information.
   EnvSensors_MergeGnss(&sensor_data);
+
+  /* LT-03 (#271): re-sample the environment AFTER acquisition so the archived
+   * record pairs same-moment environment and position. gps_timeout_ms is
+   * 60 s in NORMAL/CONSERVATIVE and config-driven up to 255 s (uint8_t
+   * seconds) - ~300 m of ascent at 5 m/s between the start-of-cycle
+   * EnvSensors_Read and this point. FR-15 (#96) removed a post-fix re-read
+   * here as adding "no new information"; LT-03 refutes that across the
+   * acquisition gap, so do not re-apply FR-15's removal reasoning.
+   * The power/plan decision above deliberately keeps the pre-acquisition
+   * sample: DecideTransmitPlan is NOT re-run (mode hysteresis + the
+   * F-8/#183 one-battery-conversion-per-cycle discipline) - this read feeds
+   * the archive record and the payload only. EnvSensors_Read re-folds the
+   * same hgnss fix internally, so the merge above is not undone.
+   * Science path only: bulk continuations skip GPS and must not pay the
+   * MS5607 OSR_4096 + SHT31 cost (ArchiveSample already skips them). */
+  if (g_tx_state != TX_STATE_BULK_TRANSFER) {
+    EnvSensors_Read(&sensor_data);
+  }
 
   ArchiveSample(&sensor_data, &now_timestamp, slope_mv_per_hour, current_mode,
                 (uint8_t)plan.veto);
