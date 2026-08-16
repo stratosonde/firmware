@@ -60,6 +60,54 @@ typedef struct {
   uint8_t hyst_last_proposal;
 } VoltageSlope_t;
 
+/* BEH-06 (#297): one immutable, versioned power profile. The decision code
+ * consumes it; the values are DATA, reviewable in one place, and the bench
+ * campaign (#248) changes a profile, not control flow. The current
+ * unmeasured values live in the explicitly named UNQUALIFIED_LEGACY profile
+ * until the Nichicon cold bench data replaces them. */
+#define POWER_PROFILE_SCHEMA_VERSION 1U
+#define POWER_PROFILE_UNQUALIFIED_LEGACY_ID 0x554C4547U /* "ULEG" */
+
+typedef struct {
+  int8_t temp_c; /* knots in DESCENDING temperature order */
+  int16_t compensation_mv;
+} PowerProfileTempKnot_t;
+
+typedef struct {
+  uint32_t profile_id;     /* identity (release-manifest input) */
+  uint16_t schema_version; /* POWER_PROFILE_SCHEMA_VERSION */
+  uint16_t knot_count;
+  const PowerProfileTempKnot_t *knots;
+  uint16_t raw_floor_mv;        /* LTO-critical raw floor (SURVIVAL gate) */
+  int16_t slope_emergency_mv_h; /* < this AND hours_emergency -> SURVIVAL */
+  int16_t slope_warning_mv_h;   /* < this AND hours_warning -> RECOVERY */
+  int16_t slope_caution_mv_h;   /* < this -> REDUCED */
+  int16_t slope_charging_mv_h;  /* > this -> NORMAL */
+  uint16_t hours_emergency;     /* time-to-critical gates */
+  uint16_t hours_warning;
+  uint8_t upgrade_confirm; /* F8 hysteresis: consecutive upgrade confirms */
+} PowerProfile_t;
+
+/** The UNQUALIFIED_LEGACY singleton: today's unmeasured values, named. */
+const PowerProfile_t *PowerProfile_Legacy(void);
+/** Validation: schema version, knot table shape/order, plausible fields. */
+bool PowerProfile_Validate(const PowerProfile_t *profile);
+/** Corrupt/missing profile fallback: an invalid candidate yields the
+ *  UNQUALIFIED_LEGACY profile (the conservative current behavior). */
+const PowerProfile_t *PowerProfile_Select(const PowerProfile_t *candidate);
+/** The active profile the decision path consumes; legacy until a validated
+ *  profile is installed. SetActive(NULL or invalid) falls back to legacy. */
+const PowerProfile_t *PowerProfile_Active(void);
+void PowerProfile_SetActive(const PowerProfile_t *candidate);
+
+uint16_t PowerModel_Normalize(const PowerProfile_t *profile,
+                              uint16_t measured_mv, float temp_c);
+OperatingMode_t PowerModel_SelectMode(const PowerProfile_t *profile,
+                                      int16_t current_slope,
+                                      uint16_t current_voltage,
+                                      uint16_t time_to_critical,
+                                      uint16_t raw_voltage_mv);
+
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);
 int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32_t now_timestamp);
 /* STAB-08 (#155): direction-aware threshold prediction. The old

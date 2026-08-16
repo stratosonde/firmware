@@ -235,3 +235,13 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   classes), fix commit follows. TransmissionModule.md section 5 and
   FlashLogging.md updated in-commit (also removed the stale
   pending_tx_committed claim from FlashLogging.md).
+- **BEH-06 / #297 (FIXED, structure-only):** the power model consumes one
+  immutable, versioned PowerProfile (temperature knots, raw floor,
+  slope/hours gates, upgrade-confirm hysteresis, profile identity).
+  Current values are preserved as the named UNQUALIFIED_LEGACY profile;
+  corrupt/missing profiles fall back to it; transmit_plan.c reads the
+  hysteresis count from the active profile. No new guessed data: the two
+  bench-gated PWR-02 regressions stay expected-red until #248; the bare
+  4300-literal structural pin flipped green. Red commit d58238f
+  (red-by-construction: the tests are written against the new API). The
+  selected profile ID is the release-manifest input (Phase 6/7 wiring).

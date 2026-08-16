@@ -113,12 +113,18 @@ bulk callback path when admission passed.
 - **Join failure**: ground problem only — sessions are commissioned on the
   ground; flight never rejoins (SI-015).
 - **Region switch failure**: transactional rollback to the previous region
-  context (#272).
+  context (#272) — and fails closed: the wake archives locally and silences
+  RF unless active == detected after the attempt (BEH-03/#301).
 - **Radio/stack faults**: counted and surfaced; dependent capability degrades,
   everything else continues.
 
 ## Power Considerations
 
+- The power model consumes one immutable, versioned `PowerProfile`
+  (temperature knots, raw floor, slope/hours gates, upgrade-confirm
+  hysteresis, profile identity — BEH-06/#297). Current values are the
+  explicitly named `UNQUALIFIED_LEGACY` profile until the cold bench
+  campaign (#248) replaces them; a corrupt/missing profile falls back to it.
 - Radio is powered down after the receive windows per Class A; the burst
   deadline caps worst-case RF-on time (LT-07).
 - The SF7 archive burst is link-gated: LinkCheck margin ≥ `link_margin_threshold`

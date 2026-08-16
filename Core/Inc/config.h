@@ -98,7 +98,7 @@ typedef struct __attribute__((packed)) {
   uint16_t battery_critical_threshold; // First-flight minimum raw battery admission (mV), default 4300
   uint16_t bulk_battery_min_mv;        // Min battery for bulk transfer (mV) - default 5000. R12: ACTIVE (CfgBulkBattMin)
   int8_t gps_temperature_lockout;      // First-flight minimum admission temperature (C), default -55
-  uint8_t power_mode_hysteresis;       // R12 (#197) RESERVED - no consumer; the live hysteresis is F8_UPGRADE_CONFIRM=3 (transmit_plan.c, #172/#179)
+  uint8_t power_mode_hysteresis;       // R12 (#197) RESERVED - no consumer; the live hysteresis is PowerProfile upgrade_confirm (BEH-06/#297: power_model.c, #172/#179)
   /* F19 FIX: solar_charging_threshold deleted. The 6000 mV default could
    * never trip on the real ~1.1 V two-wafer panel, and the field had zero
    * consumers (verified by grep) — a decorative knob. Kept as reserved to

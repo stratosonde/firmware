@@ -159,12 +159,12 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
     SONDE_LOG_STR("PREDICT: battery reading stale -> cap at REDUCED\r\n");
     plan.power_mode = MODE_REDUCED;
   }
-/* F8 (#172): asymmetric mode hysteresis. DOWNGRADES apply immediately
- * (energy protection must never wait); UPGRADES (toward higher power)
- * require F8_UPGRADE_CONFIRM consecutive cycles proposing the upgrade —
- * one 10 mV ADC deviation is ~60 mV/h of slope noise, larger than every
- * mode threshold, so unfiltered selection chatters at dawn/dusk/load. */
-#define F8_UPGRADE_CONFIRM 3U
+  /* F8 (#172): asymmetric mode hysteresis. DOWNGRADES apply immediately
+   * (energy protection must never wait); UPGRADES (toward higher power)
+   * require upgrade_confirm consecutive cycles proposing the upgrade —
+   * one 10 mV ADC deviation is ~60 mV/h of slope noise, larger than every
+   * mode threshold, so unfiltered selection chatters at dawn/dusk/load.
+   * BEH-06 (#297): the count is power-profile DATA, not a private define. */
   {
     OperatingMode_t proposed = plan.power_mode;
     if (!slope_state->mode_hyst_valid) {
@@ -215,7 +215,8 @@ TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
             slope_state->upgrade_streak++;
           }
           slope_state->hyst_last_proposal = (uint8_t)proposed;
-          confirm = (slope_state->upgrade_streak >= F8_UPGRADE_CONFIRM);
+          confirm = (slope_state->upgrade_streak >=
+                     PowerProfile_Active()->upgrade_confirm);
         }
         if (confirm) {
           slope_state->committed_mode = (uint8_t)proposed;

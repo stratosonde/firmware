@@ -17,59 +17,124 @@
 #include "sonde_log.h" /* R50 (#47): compile-time log gate */
 #include <stdlib.h>    /* abs */
 
-uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c) {
-  // No compensation needed at or above room temperature
-  if (temp_c >= 25.0f) {
-    return measured_mv;
+/* BEH-06 (#297): the UNQUALIFIED_LEGACY profile - the current, unmeasured
+ * values preserved as named DATA until the Nichicon cold bench campaign
+ * (#248) replaces them. The decision code consumes the profile; it never
+ * embeds a table. */
+static const PowerProfileTempKnot_t s_legacy_knots[] = {
+    {25, 0},     // 5500 + 0 = 5500mV (reference)
+    {0, 200},    // Approximate for 0°C to 25°C range
+    {-10, 350},  // Approximate
+    {-20, 500},  // Approximate
+    {-30, 600},  // Approximate
+    {-40, 700},  // Approximate
+    {-50, 450},  // R10 (#37): was 400 — non-monotonic between -40(700) and -55(430)
+    {-55, 430},  // 5070 + 430 = 5500
+    {-56, 660},  // 4840 + 660 = 5500
+    {-57, 690},  // 4810 + 690 = 5500
+    {-58, 700},  // 4800 + 700 = 5500
+    {-59, 730},  // 4770 + 730 = 5500
+    {-60, 800},  // 4700 + 800 = 5500
+    {-61, 950},  // 4550 + 950 = 5500
+    {-62, 1100}, // 4400 + 1100 = 5500
+    {-63, 1400}, // 4100 + 1400 = 5500
+    {-64, 1690}, // 3810 + 1690 = 5500
+    {-65, 2170}, // 3330 + 2170 = 5500 (massive drop!)
+    {-66, 2700}, // 2800 + 2700 = 5500 (non-operational)
+};
+
+static const PowerProfile_t s_legacy_profile = {
+    POWER_PROFILE_UNQUALIFIED_LEGACY_ID,
+    POWER_PROFILE_SCHEMA_VERSION,
+    (uint16_t)(sizeof(s_legacy_knots) / sizeof(s_legacy_knots[0])),
+    s_legacy_knots,
+    4300U, /* raw floor: UNQUALIFIED until the bench floor(T) lands */
+    -30, -15, -5, 20,
+    6U, 12U,
+    3U /* F8 hysteresis */
+};
+
+static const PowerProfile_t *s_active_profile = NULL;
+
+const PowerProfile_t *PowerProfile_Legacy(void) {
+  return &s_legacy_profile;
+}
+
+bool PowerProfile_Validate(const PowerProfile_t *profile) {
+  if (profile == NULL || profile->knots == NULL ||
+      profile->schema_version != POWER_PROFILE_SCHEMA_VERSION ||
+      profile->knot_count < 2U || profile->knot_count > 32U ||
+      profile->raw_floor_mv < 1000U || profile->raw_floor_mv > 6000U ||
+      profile->upgrade_confirm < 1U || profile->upgrade_confirm > 10U ||
+      !(profile->slope_emergency_mv_h < profile->slope_warning_mv_h) ||
+      !(profile->slope_warning_mv_h < profile->slope_caution_mv_h) ||
+      !(profile->slope_caution_mv_h < 0) ||
+      !(profile->slope_charging_mv_h > 0) ||
+      profile->hours_emergency == 0U ||
+      profile->hours_emergency >= profile->hours_warning) {
+    return false;
+  }
+  /* Knots must be strictly descending in temperature with sane
+   * compensations. */
+  for (uint16_t i = 1; i < profile->knot_count; i++) {
+    if (profile->knots[i].temp_c >= profile->knots[i - 1U].temp_c) {
+      return false;
+    }
+  }
+  for (uint16_t i = 0; i < profile->knot_count; i++) {
+    if (profile->knots[i].compensation_mv < 0 ||
+        profile->knots[i].compensation_mv > 4000) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const PowerProfile_t *PowerProfile_Select(const PowerProfile_t *candidate) {
+  return PowerProfile_Validate(candidate) ? candidate : PowerProfile_Legacy();
+}
+
+const PowerProfile_t *PowerProfile_Active(void) {
+  return (s_active_profile != NULL) ? s_active_profile : PowerProfile_Legacy();
+}
+
+void PowerProfile_SetActive(const PowerProfile_t *candidate) {
+  s_active_profile = PowerProfile_Select(candidate);
+}
+
+uint16_t PowerModel_Normalize(const PowerProfile_t *profile,
+                              uint16_t measured_mv, float temp_c) {
+  const PowerProfile_t *p = PowerProfile_Select(profile);
+  const PowerProfileTempKnot_t *knots = p->knots;
+  const uint16_t count = p->knot_count;
+
+  // At or above the top knot: its compensation applies as-is
+  if (temp_c >= (float)knots[0].temp_c) {
+    return measured_mv + (uint16_t)knots[0].compensation_mv;
   }
 
-  // Lookup table from empirical data (Vmax column - no load voltage)
-  // Compensation values bring voltage back to 5500mV (fully charged at 25°C)
-  typedef struct {
-    int8_t temp;
-    int16_t compensation_mv; // mV to add to measured voltage
-  } TempCompPoint_t;
-
-  static const TempCompPoint_t comp_table[] = {
-      {25, 0},     // 5500 + 0 = 5500mV (reference)
-      {0, 200},    // Approximate for 0°C to 25°C range
-      {-10, 350},  // Approximate
-      {-20, 500},  // Approximate
-      {-30, 600},  // Approximate
-      {-40, 700},  // Approximate
-      {-50, 450},  // R10 (#37): was 400 — non-monotonic between -40(700) and -55(430)
-      {-55, 430},  // 5070 + 430 = 5500
-      {-56, 660},  // 4840 + 660 = 5500
-      {-57, 690},  // 4810 + 690 = 5500
-      {-58, 700},  // 4800 + 700 = 5500
-      {-59, 730},  // 4770 + 730 = 5500
-      {-60, 800},  // 4700 + 800 = 5500
-      {-61, 950},  // 4550 + 950 = 5500
-      {-62, 1100}, // 4400 + 1100 = 5500
-      {-63, 1400}, // 4100 + 1400 = 5500
-      {-64, 1690}, // 3810 + 1690 = 5500
-      {-65, 2170}, // 3330 + 2170 = 5500 (massive drop!)
-      {-66, 2700}, // 2800 + 2700 = 5500 (non-operational)
-  };
-
-  const int table_size = sizeof(comp_table) / sizeof(comp_table[0]);
-
   // Find bracketing points for linear interpolation
-  for (int i = 0; i < table_size - 1; i++) {
-    if (temp_c >= comp_table[i + 1].temp && temp_c <= comp_table[i].temp) {
+  for (uint16_t i = 0; i + 1U < count; i++) {
+    if (temp_c >= (float)knots[i + 1U].temp_c &&
+        temp_c <= (float)knots[i].temp_c) {
       // Linear interpolation between two points
-      float temp_range = (float)(comp_table[i].temp - comp_table[i + 1].temp);
-      float temp_fraction = (temp_c - comp_table[i + 1].temp) / temp_range;
-      int16_t comp_range = comp_table[i].compensation_mv - comp_table[i + 1].compensation_mv;
-      int16_t compensation = comp_table[i + 1].compensation_mv +
+      float temp_range = (float)(knots[i].temp_c - knots[i + 1U].temp_c);
+      float temp_fraction = (temp_c - (float)knots[i + 1U].temp_c) / temp_range;
+      int16_t comp_range = knots[i].compensation_mv - knots[i + 1U].compensation_mv;
+      int16_t compensation = knots[i + 1U].compensation_mv +
                              (int16_t)(temp_fraction * comp_range);
 
-      return measured_mv + compensation;
+      return measured_mv + (uint16_t)compensation;
     }
   }
 
-  // Below -66°C: use maximum compensation (battery non-functional anyway)
-  return measured_mv + 2700;
+  // Below the bottom knot: use its (maximum) compensation - the battery is
+  // non-functional down there anyway.
+  return measured_mv + (uint16_t)knots[count - 1U].compensation_mv;
+}
+
+uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c) {
+  return PowerModel_Normalize(PowerProfile_Active(), measured_mv, temp_c);
 }
 
 int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32_t now_timestamp) {
@@ -197,10 +262,12 @@ PredictionState_t PredictTimeToUpperThreshold(uint16_t current_voltage_mv,
   return PRED_REACHABLE;
 }
 
-OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
-                                          uint16_t current_voltage,
-                                          uint16_t time_to_critical,
-                                          uint16_t raw_voltage_mv) {
+OperatingMode_t PowerModel_SelectMode(const PowerProfile_t *profile,
+                                      int16_t current_slope,
+                                      uint16_t current_voltage,
+                                      uint16_t time_to_critical,
+                                      uint16_t raw_voltage_mv) {
+  const PowerProfile_t *p = PowerProfile_Select(profile);
 
   // VOLTAGE-BASED FLOOR: Emergency low voltage (LTO threshold)
   // BUG 1.5 FIX: This MUST be first — at sunrise (positive slope, near-dead battery),
@@ -209,31 +276,35 @@ OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
   // R10 (#37): the floor reads the RAW voltage. Feeding it the normalized
   // value let up to +2700 mV of cold compensation (at -66C) mask a real
   // brownout. Normalization is for slope/prediction only.
-  if (raw_voltage_mv < 4300) {
-    SONDE_LOG_STR("PREDICT: V<4.3V raw (LTO critical) -> SURVIVAL\r\n");
+  // BEH-06 (#297): the floor is profile DATA (UNQUALIFIED_LEGACY until the
+  // bench campaign), not a literal embedded in the decision.
+  if (raw_voltage_mv < p->raw_floor_mv) {
+    SONDE_LOG_STR("PREDICT: V below raw floor (LTO critical) -> SURVIVAL\r\n");
     return MODE_SURVIVAL;
   }
 
   // EMERGENCY: Depleting fast and will hit critical soon
-  if (current_slope < -30 && time_to_critical != 0xFFFF && time_to_critical < 6) {
+  if (current_slope < p->slope_emergency_mv_h && time_to_critical != 0xFFFF &&
+      time_to_critical < p->hours_emergency) {
     SONDE_LOG_STR("PREDICT: Critical in <6h -> SURVIVAL\r\n");
     return MODE_SURVIVAL;
   }
 
   // WARNING: Moderate depletion with limited time
-  if (current_slope < -15 && time_to_critical != 0xFFFF && time_to_critical < 12) {
+  if (current_slope < p->slope_warning_mv_h && time_to_critical != 0xFFFF &&
+      time_to_critical < p->hours_warning) {
     SONDE_LOG_STR("PREDICT: Critical in <12h -> RECOVERY\r\n");
     return MODE_RECOVERY;
   }
 
   // CAUTION: Slow depletion
-  if (current_slope < -5) {
+  if (current_slope < p->slope_caution_mv_h) {
     SONDE_LOG_STR("PREDICT: Slow depletion -> REDUCED\r\n");
     return MODE_REDUCED;
   }
 
   // CHARGING: Good charging rate
-  if (current_slope > 20) {
+  if (current_slope > p->slope_charging_mv_h) {
     SONDE_LOG_STR("PREDICT: Fast charging -> NORMAL\r\n");
     return MODE_NORMAL;
   }
@@ -246,6 +317,15 @@ OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
 
   // DEFAULT: Conservative
   return MODE_CONSERVATIVE;
+}
+
+OperatingMode_t SelectModeFromPredictions(int16_t current_slope,
+                                          uint16_t current_voltage,
+                                          uint16_t time_to_critical,
+                                          uint16_t raw_voltage_mv) {
+  return PowerModel_SelectMode(PowerProfile_Active(), current_slope,
+                               current_voltage, time_to_critical,
+                               raw_voltage_mv);
 }
 
 const char *GetModeName(OperatingMode_t mode) {
