@@ -100,6 +100,26 @@ typedef struct {
 bool GnssAcquire_FixAccepted(const GnssFixCandidate_t *candidate,
                              const GnssFixLimits_t *limits);
 
+/**
+ * @brief  Disposition of a non-package-complete acquisition outcome
+ *         (BEH-02 / #284): what a weak/basic fix may touch. Only an
+ *         ACCEPTED fix earns trusted position (last-known-good RAM copy,
+ *         persistence, the fresh-fix epoch, the stale-flag clearing); a
+ *         rejected candidate keeps its position in the current diagnostic
+ *         sample with stale/weak provenance. RTC discipline is a separate
+ *         time-validity decision: valid date/time may discipline the
+ *         clock, but successful discipline never proves position quality.
+ */
+typedef struct {
+  bool update_trusted_position; /* last-known-good + persistence + epoch */
+  bool mark_gnss_stale;         /* rejected/absent position = stale provenance */
+  bool discipline_time;         /* valid date/time may discipline the RTC */
+} GnssFixDisposition_t;
+
+GnssFixDisposition_t GnssAcquire_Disposition(bool fix_accepted,
+                                             bool position_present,
+                                             bool gnss_datetime_valid);
+
 #ifdef __cplusplus
 }
 #endif

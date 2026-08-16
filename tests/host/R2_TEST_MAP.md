@@ -29,7 +29,7 @@ what each pure module promises.
 | `Core/Src/packet_queue.c` | `test_packet_queue.c` | 45 | stage 1 |
 | `Core/Src/nvm_slot.c` | `test_nvm_slot.c` | 34 | stage 2 |
 | `Core/Src/region_policy.c` | `test_region_policy.c` | 2,071 | stage 3 (incl. exhaustive EU row polygon rasterisation) |
-| `Core/Src/gnss_acquire.c` | `test_gnss_acquire.c` | 17 | stage 4 (one check = exhaustive 1970–2100 civil-date proof, ~47k days) |
+| `Core/Src/gnss_acquire.c` | `test_gnss_acquire.c` | 62 | stage 4 (one check = exhaustive 1970–2100 civil-date proof, ~47k days) + A5 boundary contract + BEH-02/#284 weak-fix disposition (red-first) |
 | `Core/Src/tx_fsm.c` | `test_tx_fsm_shadow.c` | 734,060 | stage 5: step module shadow-run against the scan-locked characterisation model in `test_burst_fsm.c` (scripted + 200k randomized events) |
 | `Core/Src/first_flight_policy.c` | `test_first_flight_policy.c` | 50 | commit A + stage 6 (admission, package, rail conversion, GNSS-package gate) + BEH-01/#300 admitted-wake outcome (red-first) |
 | `Core/Src/gnss_acquire.c` acceptance | `test_gnss_acquire.c` (39) + `test_gnss_fix_acceptance.c` (10) | 49 | A4/A5 (#284): configured boundary contract + hardcoded-threshold characterization + adapter wiring |

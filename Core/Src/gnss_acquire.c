@@ -68,3 +68,20 @@ bool GnssAcquire_FixAccepted(const GnssFixCandidate_t *candidate,
   }
   return (candidate->hdop * 10.0f) <= (float)limits->maximum_hdop_x10;
 }
+
+GnssFixDisposition_t GnssAcquire_Disposition(bool fix_accepted,
+                                             bool position_present,
+                                             bool gnss_datetime_valid) {
+  GnssFixDisposition_t d;
+  (void)fix_accepted;
+  (void)gnss_datetime_valid;
+  /* BEH-02 (#284) red-commit staging: CURRENT lora_app behavior - any
+   * present position becomes trusted, only a position-less timeout is
+   * marked stale, and a present position always attempts RTC discipline.
+   * The fix commit makes trusted/stale follow fix_accepted and discipline
+   * follow gnss_datetime_valid. */
+  d.update_trusted_position = position_present;
+  d.mark_gnss_stale = !position_present;
+  d.discipline_time = position_present;
+  return d;
+}

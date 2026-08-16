@@ -1282,19 +1282,32 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
       if (GNSS_HasPosition(&hgnss))
       {
         SONDE_LOG_STR("GPS: Basic fix (not high quality)\r\n");
-        /* Update last known position even for basic fix */
-        last_valid_lat = hgnss.data.latitude;
-        last_valid_lon = hgnss.data.longitude;
-        last_valid_alt = hgnss.data.altitude;
-        /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
-        *time_disciplined_this_wake = SysTimeSyncFromGnss();
-        if (*time_disciplined_this_wake) {
-          s_last_fresh_fix_s = SysTimeGet().Seconds;  /* #141: UTC epoch */
-          LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
-                        s_last_fresh_fix_s);  /* F-15 + STAB-01 epoch */
+        /* BEH-02 (#284) staging: the weak-fix disposition (trusted-position
+         * update, staleness, RTC discipline) is decided in gnss_acquire.
+         * Red commit = behavior-preserving; the fix commit stops promoting
+         * a weak/basic position to trusted. */
+        const GnssFixDisposition_t disposition = GnssAcquire_Disposition(
+            GnssMissionFixAccepted(&fix_limits),
+            true /* this branch == GNSS_HasPosition */,
+            FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
+                                                hgnss.data.timestamp));
+        if (disposition.update_trusted_position) {
+          /* Update last known position even for basic fix */
+          last_valid_lat = hgnss.data.latitude;
+          last_valid_lon = hgnss.data.longitude;
+          last_valid_alt = hgnss.data.altitude;
+          have_previous_fix = true;
         }
-        have_previous_fix = true;
-        EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh data, not stale */
+        if (disposition.discipline_time) {
+          /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
+          *time_disciplined_this_wake = SysTimeSyncFromGnss();
+          if (*time_disciplined_this_wake) {
+            s_last_fresh_fix_s = SysTimeGet().Seconds; /* #141: UTC epoch */
+            LastPos_Store(last_valid_lat, last_valid_lon, last_valid_alt,
+                          s_last_fresh_fix_s); /* F-15 + STAB-01 epoch */
+          }
+        }
+        EnvSensors_MarkGnssStale(disposition.mark_gnss_stale);
       }
       else
       {

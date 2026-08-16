@@ -165,6 +165,71 @@ int main(void)
         c.satellites = 6; CHECK(GnssAcquire_FixAccepted(&c, &strict));
     }
 
+    /* ---- BEH-02 (#284): weak/basic position never becomes TRUSTED ----
+     * GnssAcquire_Disposition is the one decision for what a
+     * non-package-complete acquisition may touch. Required: trusted
+     * position + freshness update only under the configured accepted-fix
+     * predicate; anything else keeps stale/weak provenance in the current
+     * sample; valid date/time may discipline the RTC on its OWN validity,
+     * never as proof of accepted position quality. */
+    {
+        GnssFixDisposition_t d;
+
+        /* poor HDOP (3.0 > configured 2.5): position stays rejected + stale */
+        c.satellites = 6; c.hdop = 3.0f; c.valid = true; c.position_present = true;
+        c.fix_quality_valid = true; c.coordinates_valid = true;
+        CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+        d = GnssAcquire_Disposition(GnssAcquire_FixAccepted(&c, &limits), true, true);
+        CHECK(!d.update_trusted_position);
+        CHECK(d.mark_gnss_stale);
+        CHECK(d.discipline_time);   /* valid RMC time may still discipline the RTC */
+
+        /* too few satellites (3 < configured 4) */
+        c.satellites = 3; c.hdop = 1.5f;
+        CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+        d = GnssAcquire_Disposition(GnssAcquire_FixAccepted(&c, &limits), true, true);
+        CHECK(!d.update_trusted_position);
+        CHECK(d.mark_gnss_stale);
+
+        /* invalid fix quality */
+        c.satellites = 6; c.fix_quality_valid = false;
+        CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+        d = GnssAcquire_Disposition(GnssAcquire_FixAccepted(&c, &limits), true, true);
+        CHECK(!d.update_trusted_position);
+        CHECK(d.mark_gnss_stale);
+        c.fix_quality_valid = true;
+
+        /* partial sentence state (RMC 'A' latch without position tokens):
+         * nothing trusted, still stale, no discipline from this path */
+        d = GnssAcquire_Disposition(false, false, true);
+        CHECK(!d.update_trusted_position);
+        CHECK(d.mark_gnss_stale);
+        CHECK(!d.discipline_time);
+
+        /* weak fix with INVALID RMC time: no RTC discipline either */
+        d = GnssAcquire_Disposition(false, true, false);
+        CHECK(!d.update_trusted_position);
+        CHECK(d.mark_gnss_stale);
+        CHECK(!d.discipline_time);
+
+        /* boundary-valid accepted fix (sats == min, hdop == max): ALL
+         * authoritative updates occur together */
+        c.satellites = 4; c.hdop = 2.5f;
+        CHECK(GnssAcquire_FixAccepted(&c, &limits));
+        d = GnssAcquire_Disposition(GnssAcquire_FixAccepted(&c, &limits), true, true);
+        CHECK(d.update_trusted_position);
+        CHECK(!d.mark_gnss_stale);
+        CHECK(d.discipline_time);
+
+        /* accepted fix but invalid RMC date/time: trusted position updates,
+         * but the RTC is not disciplined on invalid time (and the position
+         * was never trusted BECAUSE time disciplined) */
+        d = GnssAcquire_Disposition(true, true, false);
+        CHECK(d.update_trusted_position);
+        CHECK(!d.mark_gnss_stale);
+        CHECK(!d.discipline_time);
+    }
+
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;
 }
