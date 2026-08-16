@@ -1,7 +1,7 @@
 # FINDINGS.md — Refactor Baseline and Open Findings
 
-**Baseline commit:** `0a34aeb` (first-flight policy A `61647a2` + B `0a34aeb`)
-**Captured:** 2026-08-15, build box 10.0.0.110 (gcc 10.3.1 host, arm-none-eabi-gcc 10.3.1 target)
+**Baseline commit:** `9fdcccc` (h3lite submodule `5480859` — RESTRICTED dataset landed: 53 cells, Yemen + North Korea)
+**Captured:** 2026-08-15, build box 10.0.0.110 (gcc 10.3.1 host, arm-none-eabi-gcc 10.3.1 target); rebaselined same day from `0a34aeb`/`3da2100` after the h3lite dataset bump
 **Purpose:** Stage-0 baseline for the structural refactor programme in
 `docs/temp/stratosonde-refactor-handoff.md`. After every refactor stage, the
 existing suite summaries and golden vectors below must match this baseline;
@@ -35,36 +35,45 @@ red-first commits — never inside a refactor commit.
 | gnssfix | 10 | 0 | A4/A5 (#284): hardcoded-threshold characterization + one-authoritative-predicate wiring |
 | gpsloss | 9 | 0 | A6/A7 (#285): same-wake accepted-fix clears only the GPS-loss veto, before region selection and TX |
 | lt0813-gate | 43 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): LT-06 battery normalization non-monotonic −40…−55 °C |
-| geo-gate | 7 | 3 | **red-by-design**: GEO-01/GEO-04 production `REGION_RESTRICTED` data empty |
+| geo-gate | 9 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): GEO-04 init/generator guards pending the next h3lite bump; GEO-01 dataset landed `9fdcccc` (53 RESTRICTED cells) — promoted to hard gate + Pyongyang/Sanaa resolve probes |
 | pwr-gate | 6 | 3 | **red-by-design**: PWR-02 legacy power model fixed 4300 mV raw floor |
 | ddrmanifest | — | 0 | `tools/check_ddr_manifest.py` |
 
 `EXPECT_UNFIXED=1` gates exist so CI stays meaningful while owner-gated
-findings are open. The 8 expected failures are pre-existing at the baseline
-and are NOT regressions from the first-flight change. Do not touch the gate
-semantics or `*-gate` targets.
+findings are open. The 7 expected failures (LT-06 ×2, GEO-04 ×2, PWR-02 ×3)
+are pre-existing at the baseline and are NOT regressions from the
+first-flight change; GEO-01's eighth failure closed when the RESTRICTED
+dataset landed (`9fdcccc`). Do not touch the gate semantics or `*-gate`
+targets.
 
 ## ARM target baseline (`make -C Debug -j16 all`)
 
 | configuration | text | data | bss | result |
 |---|---:|---:|---:|---|
-| debug (CI `firmware` job) | 209,264 | 936 | 26,160 | link OK |
-| flight (`-DSONDE_FLIGHT_BUILD`, CI `firmware-flight` job) | 178,760 | 940 | 26,160 | link OK; `SONDE_BUILD:flight` present, `SONDE_BUILD:debug` absent |
+| debug (CI `firmware` job) | 210,736 | 936 | 26,160 | link OK (fresh clone @ `9fdcccc`, build box) |
+| flight (`-DSONDE_FLIGHT_BUILD`, CI `firmware-flight` job) | 180,128 | 940 | 26,160 | link OK; `SONDE_BUILD:flight` present, `SONDE_BUILD:debug` absent (fresh clone @ `9fdcccc`, build box) |
+
+Measured 2026-08-15 on a fresh `9fdcccc` clone (h3lite `5480859`, +54 table
+entries vs `3da2100`): +1,472 B debug / +1,368 B flight text against the
+previously recorded 209,264 / 178,760.
 
 Note: box gcc 10.3.1 rejects `-fcyclomatic-complexity`; the flag is sed'd out
 on box copies only (never committed). CI ubuntu toolchains accept it.
 
 ## Source-scan test inventory (the §3 hazard list)
 
-The host suite reads firmware sources as text: **115 `slurp()` call sites**
-across 10 test files; ~150 positive scans (`strstr(...) != NULL`, fail LOUD)
-and **22 negative scans** (`strstr(...) == NULL`, fail SILENT when code moves).
+The host suite reads firmware sources as text: **129 `slurp()` call sites**
+across 13 test files; ~206 positive scans (`strstr(...) != NULL`, fail LOUD)
+and ~30 negative scans (`strstr(...) == NULL`, fail SILENT when code moves);
+342 `strstr(` total in those files; 7 dated/review-session test filenames.
+Recounted by script 2026-08-15 @ `9fdcccc` (supersedes the stale
+115-sites/10-files figure).
 
-`slurp()` targets by frequency: `lora_app.c` ×23, `main.c` ×10,
-`atgm336h.c` ×6, `multiregion_context.c` ×6, `usart_if.c` ×5,
-`stm32_lpm_if.c` ×5, `mission_state.c` ×4, `lora_app.h` ×4, `adc_if.c` ×4,
-`sys_sensors.c` ×4, then ≤3 each across 23 more files (incl. `h3lite.c`,
-`ci.yml`, docs).
+`slurp()` literal targets by frequency: `lora_app.c` ×26, `main.c` ×10,
+`atgm336h.c` ×7, `multiregion_context.c` ×6, `stm32_lpm_if.c` ×5,
+`usart_if.c` ×5, `lora_app.h` ×4, `tx_fsm.c` ×4, `adc_if.c` ×4,
+`sys_sensors.c` ×4, `mission_state.c` ×4, `sys_app.c` ×3, then ≤3 each
+across the remainder (incl. `h3lite.c`, `ci.yml`, docs).
 
 ### Negative scans — repoint in the same commit that moves the target code
 

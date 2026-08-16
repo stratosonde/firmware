@@ -5,9 +5,11 @@ bug and fails; the root-cause fix must turn that exact test green.** Items that
 cannot be host-tested are marked with their verification path instead —
 undocumented "trust me" fixes are not allowed either.
 
-Run: `make -C tests/host baseline` (EXPECT_UNFIXED=1 — green while fixes are
-pending, fails only on NEW breakage). Post-fix gate: `make -C tests/host all`.
-Module contracts only: `make -C tests/host contracts`.
+Run: `make -C tests/host all` (CI gate — stays green via `EXPECT_UNFIXED=1`
+masking of the owner-gated suites below, so it is NOT a true post-fix gate).
+A no-masking post-fix gate arrives with the hardening-pass `check` target
+(pretest-hardening handoff 2026-08-15, Phase 1). Module contracts only:
+`make -C tests/host contracts`.
 
 ---
 
@@ -47,8 +49,9 @@ what each pure module promises.
 | feature suites (not session archives) | `test_multiregion.c`, `test_config.c`, `test_timerif.c` |
 
 Red-by-design gates (owner-gated, EXPECT_UNFIXED=1): LT-06 ×2
-(`test_lt_20260813.c`), GEO-01/04 ×3 (`test_geo_20260814.c`), PWR-02 ×3
-(`test_pwr_20260814.c`).
+(`test_lt_20260813.c`), GEO-04 ×2 (`test_geo_20260814.c` — GEO-01's dataset
+landed 2026-08-15 @ `9fdcccc` and is now a hard gate with Pyongyang/Sanaa
+resolve probes), PWR-02 ×3 (`test_pwr_20260814.c`).
 
 ---
 

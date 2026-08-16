@@ -9,9 +9,11 @@
   * explicit validated result. No hardware, no file-scope mutable state.
   * The veto vocabulary is the existing TransmitVeto_t (transmit_plan.h) -
   * reused, not duplicated. SP-02 note: policy correctness here is proven
-  * against injected RegionId values, independent of whether the production
-  * h3lite dataset is populated (the empty REGION_RESTRICTED table is an
-  * owner-gated DATA defect, tracked by the geo-gate suite).
+  * against injected RegionId values, independent of the production h3lite
+  * dataset. That dataset is populated since 2026-08-15 (h3lite 5480859:
+  * 53 REGION_RESTRICTED cells, Yemen + North Korea); the geo suite pins
+  * the data side with a hard non-empty gate plus restricted-coordinate
+  * resolve probes.
   ******************************************************************************
   */
 

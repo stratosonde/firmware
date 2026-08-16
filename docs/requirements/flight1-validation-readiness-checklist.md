@@ -1,6 +1,6 @@
 # Stratosonde Flight 1 Validation and Readiness Checklist
 
-**Status:** Living go/no-go instrument (annotated 2026-08-15 against master @ `dc8026a`)  
+**Status:** Living go/no-go instrument (annotated 2026-08-15 against master @ `9fdcccc`, h3lite `5480859`)  
 **Purpose:** Explicit go/no-go evidence cycle for the first-flight firmware/hardware build.
 
 > **Convention (2026-08-15):** a box is checked only when the evidence artifact exists
@@ -29,7 +29,7 @@ Filled at release-candidate time; none of these exist until a candidate is cut (
 # 2. Build and Static Integrity
 
 - [ ] Flight target builds successfully — standing: CI `firmware-flight` job green on every push (re-record against the candidate)
-- [ ] Host/unit regression suite passes — standing: CI `host-tests` job, 13 suites + ASan/UBSan build, green @ `dc8026a`
+- [ ] Host/unit regression suite passes — standing: CI `host-tests` job, 13 suites + ASan/UBSan build, green @ `9fdcccc` (run 31923381786)
 - [ ] Compiler warnings reviewed — open: #268 (first-party `-Wall -Wextra` cleanliness)
 - [ ] Linker layout confirms provisioning/NVM cannot overlap executable application — open: no recorded inspection artifact; the layout to check is the Tier-1 session bank (#270) + backup-register credentials (#158)
 - [ ] Flight-build flags reviewed — standing: CI flight-build marker check (ci.yml)
@@ -57,7 +57,7 @@ Filled at release-candidate time; none of these exist until a candidate is cut (
 - [ ] GNSS power/load denial sleeps without creating a new science record — code: FULL/SLEEP admission + complete-package gate; open: target load test
 - [ ] RF continues only inside stale-position regulatory window — code: 24 h budget verified (`lora_app.h:206`); open: boundary behavioural test (FW-CONF-023)
 - [ ] RF stops after stale-position limit — code: 24 h silence enforced; open: target boundary run
-- [ ] Fresh valid fix automatically restores RF eligibility — **FAILS today** → #285 (H-09): clears on the *next* wake, not the same one
+- [ ] Fresh valid fix automatically restores RF eligibility — host: `gpsloss` suite (A6/A7, #285 closed 2026-08-15): same-wake accepted fix clears only the GPS-loss veto, before region selection and TX; open: target run
 
 ---
 

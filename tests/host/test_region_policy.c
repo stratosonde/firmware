@@ -6,9 +6,10 @@
   * CONTRACT suite, not a findings archive. Proves the geofence/region gate
   * against INJECTED RegionId values (including REGION_RESTRICTED = 15), so
   * policy correctness is established independently of the production h3lite
-  * dataset - SP-02 (#257): the production REGION_RESTRICTED table is empty,
-  * an owner-gated DATA defect tracked by the geo-gate suite; this suite
-  * would have caught a policy-side defect regardless.
+  * dataset - SP-02 (#257, closed 2026-08-15): the production table now
+  * contains 53 REGION_RESTRICTED cells (h3lite 5480859, firmware 9fdcccc),
+  * pinned by the geo suite's hard non-empty gate and Pyongyang/Sanaa
+  * resolve probes; this suite catches policy-side defects regardless.
   *
   * Covered: restricted hit -> silence + VETO_RESTRICTED_REGION; open-ocean
   * (REGION_UNKNOWN) -> no silence; unjoined detected region -> VETO_RF_SILENCE;
