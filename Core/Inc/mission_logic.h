@@ -1,14 +1,14 @@
 /**
-  ******************************************************************************
-  * @file    mission_logic.h
-  * @brief   Pure launch/float pressure detection (STAB-06/#153, STAB-07/#154)
-  ******************************************************************************
-  * Extracted from mission_state.c so the policy is host-testable (R47/R49
-  * precedent: mission_state.c stays the HAL/persistence wrapper). No HAL, no
-  * statics — all state is caller-owned, which also makes reset semantics
-  * explicit at the call site.
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    mission_logic.h
+ * @brief   Pure launch/float pressure detection (STAB-06/#153, STAB-07/#154)
+ ******************************************************************************
+ * Extracted from mission_state.c so the policy is host-testable (R47/R49
+ * precedent: mission_state.c stays the HAL/persistence wrapper). No HAL, no
+ * statics — all state is caller-owned, which also makes reset semantics
+ * explicit at the call site.
+ ******************************************************************************
+ */
 
 #ifndef __MISSION_LOGIC_H
 #define __MISSION_LOGIC_H
@@ -17,9 +17,9 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include "mission_state.h" /* the tuning knobs (MISSION_* macros) */
 #include <stdbool.h>
-#include "mission_state.h"   /* the tuning knobs (MISSION_* macros) */
+#include <stdint.h>
 
 /* STAB-06 (#153): the launch reference maximum is valid only for this long.
  * The old all-time running max let a high-pressure WEATHER system serve as
@@ -41,19 +41,19 @@ extern "C" {
 
 /* --- Launch detector (COMMISSIONING): bounded reference window --- */
 typedef struct {
-    float    ref_max_hpa;   /* highest pressure seen inside the window */
-    uint32_t ref_set_s;     /* when ref_max was (re)seeded */
-    bool     have_ref;
-    bool     pinned;        /* F1 (#167): restored launch ref never ages out */
-    uint32_t cand_since_s;  /* R3-10 (#222): candidate (drop condition) start */
-    bool     candidate;     /* R3-10: drop condition currently holding */
+  float ref_max_hpa;  /* highest pressure seen inside the window */
+  uint32_t ref_set_s; /* when ref_max was (re)seeded */
+  bool have_ref;
+  bool pinned;           /* F1 (#167): restored launch ref never ages out */
+  uint32_t cand_since_s; /* R3-10 (#222): candidate (drop condition) start */
+  bool candidate;        /* R3-10: drop condition currently holding */
 } LaunchDetector_t;
 
 void LaunchDetector_Reset(LaunchDetector_t *d);
 
 /** Feed one pressure sample (call each work cycle in COMMISSIONING).
-  * @retval true when a real pressure departure (>= MISSION_LAUNCH_DP_HPA
-  *         below the bounded reference) indicates launch. */
+ * @retval true when a real pressure departure (>= MISSION_LAUNCH_DP_HPA
+ *         below the bounded reference) indicates launch. */
 bool LaunchDetector_Update(LaunchDetector_t *d, float pressure_hpa,
                            bool pressure_valid, uint32_t now_s);
 
@@ -69,23 +69,23 @@ void LaunchDetector_SetRef(LaunchDetector_t *d, float ref_hpa, uint32_t now_s);
 
 /* --- Float detector (ASCENT): windowed range + min-ascent guard --- */
 typedef struct {
-    float    win_min_hpa;
-    float    win_max_hpa;
-    float    win_first_hpa;  /* window-start pressure: net-displacement guard */
-    uint32_t win_start_s;
-    uint16_t samples;        /* RV-07 (#163): min-sample-count guard */
-    bool     active;
+  float win_min_hpa;
+  float win_max_hpa;
+  float win_first_hpa; /* window-start pressure: net-displacement guard */
+  uint32_t win_start_s;
+  uint16_t samples; /* RV-07 (#163): min-sample-count guard */
+  bool active;
 } FloatDetector_t;
 
 void FloatDetector_Reset(FloatDetector_t *d);
 
 /** Feed one pressure sample (call each work cycle in ASCENT).
-  * @param min_ascent_met: STAB-07 guard — caller computes
-  *        (launch_ref - pressure) >= MISSION_FLOAT_MIN_ASCENT_DP_HPA.
-  * @retval true exactly once when pressure has stayed inside
-  *         MISSION_FLOAT_RANGE_PCT for MISSION_FLOAT_WINDOW_S AND the
-  *         min-ascent guard holds. Guard not met: the window restarts
-  *         (stay in ASCENT — FLOAT is terminal, so never latch cheap). */
+ * @param min_ascent_met: STAB-07 guard — caller computes
+ *        (launch_ref - pressure) >= MISSION_FLOAT_MIN_ASCENT_DP_HPA.
+ * @retval true exactly once when pressure has stayed inside
+ *         MISSION_FLOAT_RANGE_PCT for MISSION_FLOAT_WINDOW_S AND the
+ *         min-ascent guard holds. Guard not met: the window restarts
+ *         (stay in ASCENT — FLOAT is terminal, so never latch cheap). */
 bool FloatDetector_Update(FloatDetector_t *d, float pressure_hpa,
                           bool pressure_valid, uint32_t now_s,
                           bool min_ascent_met);

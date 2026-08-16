@@ -1,12 +1,12 @@
 /**
-  ******************************************************************************
-  * @file    reset_cause.h
-  * @brief   Reset cause capture and condensation (F13b / DDR-0003)
-  ******************************************************************************
+ ******************************************************************************
+ * @file    reset_cause.h
+ * @brief   Reset cause capture and condensation (F13b / DDR-0003)
+ ******************************************************************************
  * Reads RCC->CSR once at boot, condenses to a 2-bit code for the uplink
  * status byte, then clears the flags (RMVF) so the next boot reads clean.
-  ******************************************************************************
-  */
+ ******************************************************************************
+ */
 
 #ifndef __RESET_CAUSE_H
 #define __RESET_CAUSE_H
@@ -24,18 +24,18 @@ extern "C" {
  * PIN folds into SW (both are manual/service resets, irrelevant in flight);
  * LOWPOWER folds into POR_BOR (power-domain resets). */
 typedef enum {
-    RESET_CAUSE_POR_BOR   = 0,  /* POR/BOR (+ low-power reset folded in) */
-    RESET_CAUSE_IWDG      = 1,  /* Independent watchdog reset */
-    RESET_CAUSE_SW        = 2,  /* Software reset / external pin reset */
-    RESET_CAUSE_FAULT     = 3,  /* Fault handler breadcrumb present (see F1) */
+  RESET_CAUSE_POR_BOR = 0, /* POR/BOR (+ low-power reset folded in) */
+  RESET_CAUSE_IWDG = 1,    /* Independent watchdog reset */
+  RESET_CAUSE_SW = 2,      /* Software reset / external pin reset */
+  RESET_CAUSE_FAULT = 3,   /* Fault handler breadcrumb present (see F1) */
 } ResetCause_t;
 
 /** @brief RTC backup register holding the fault breadcrumb (F1).
-  *        R01/R02: moved DR1 -> DR4; DR0-DR2 belong to timer_if SysTime. */
-#define RESET_CAUSE_BKP_FAULT_REG   BKP_REG_RESET_CAUSE_FAULT
+ *        R01/R02: moved DR1 -> DR4; DR0-DR2 belong to timer_if SysTime. */
+#define RESET_CAUSE_BKP_FAULT_REG BKP_REG_RESET_CAUSE_FAULT
 /** @brief Breadcrumb magic: upper 16 bits of the breadcrumb register */
-#define RESET_CAUSE_FAULT_MAGIC     0xF17B0000UL
-#define RESET_CAUSE_FAULT_MASK      0xFFFF0000UL
+#define RESET_CAUSE_FAULT_MAGIC 0xF17B0000UL
+#define RESET_CAUSE_FAULT_MASK 0xFFFF0000UL
 
 /**
  * @brief Capture and condense the reset cause. Call once, early in boot,

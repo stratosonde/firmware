@@ -66,6 +66,17 @@ gates the workflows (first catch: an SC2015 in ci.yml itself).
 mode**: the CubeIDE 2-space files vs 4-space new-module split needs an
 owner style decision before a hard gate is honest. All wired in the CI
 `hygiene` job + root `make lint`.
+
+**Style unification (owner decision 2026-08-16):** the project style is
+**2-space LLVM** (`.clang-format`), matching the CubeIDE majority. The 23
+four-space first-party files were reformatted once, mechanically
+(clang-format 22.1.8, `ColumnLimit: 0`, `DerivePointerAlignment: false`;
+endings preserved; 9 scan anchors updated to the formatter-defined shape).
+The changed-lines check is now a **hard gate**
+(`tools/check_changed_format.py`, `-lines` ranges from `git diff -U0`),
+self-tested on the unification diff and negative-tested with a planted
+bad line. CubeMX-regen files are never reformat-checked (changed-lines
+semantics only).
 | arminventory | 4 proofs | 0 | PIPE-05 (Phase 1): ARM source inventory — 18 active fragments, 115 unique C sources, every production `.c` exactly once, no stale `Debug/` fragments |
 
 **Target structure (Phase 1 / PIPE-02):** `check` = every mandatory suite with

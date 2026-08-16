@@ -1,17 +1,17 @@
 /**
-  ******************************************************************************
-  * @file    payload_format.h
-  * @brief   Custom binary payload structures for Stratosonde telemetry
-  ******************************************************************************
-  * @attention
-  *
-  * This module defines efficient binary packet formats for LoRaWAN transmission:
-  * - CompactTelemetryPacket_t: 11-byte heartbeat packet for SF10 (maximum range w/ LinkCheck)
-  * - HighResTelemetryRecord_t: 34-byte record (v6, STAB-04/#151) for archive transfer
-  * - Bulk wire format: variable-length v6 packets for SF7 archive bursts (0x06)
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    payload_format.h
+ * @brief   Custom binary payload structures for Stratosonde telemetry
+ ******************************************************************************
+ * @attention
+ *
+ * This module defines efficient binary packet formats for LoRaWAN transmission:
+ * - CompactTelemetryPacket_t: 11-byte heartbeat packet for SF10 (maximum range w/ LinkCheck)
+ * - HighResTelemetryRecord_t: 34-byte record (v6, STAB-04/#151) for archive transfer
+ * - Bulk wire format: variable-length v6 packets for SF7 archive bursts (0x06)
+ *
+ ******************************************************************************
+ */
 
 #ifndef PAYLOAD_FORMAT_H
 #define PAYLOAD_FORMAT_H
@@ -21,35 +21,35 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include <stdint.h>
+#include "power_model.h" /* OperatingMode_t (R49: was lora_app.h — much lighter) */
 #include <stdbool.h>
-#include "power_model.h"  /* OperatingMode_t (R49: was lora_app.h — much lighter) */
+#include <stdint.h>
 
 /* Exported defines ----------------------------------------------------------*/
 
 /* LoRaWAN port assignments for different packet types */
-#define LORAWAN_LPP_PORT          2   // CayenneLPP (development/debug)
-#define LORAWAN_GNSS_DETAIL_PORT  3   // GNSS satellite detail (development/debug) 
-#define LORAWAN_COMPACT_PORT      10  // 10-byte compact binary (SF10 probe) - PRODUCTION
-#define LORAWAN_BULK_PORT         11  // 198-byte bulk binary (SF7 bulk) - PRODUCTION
+#define LORAWAN_LPP_PORT 2         // CayenneLPP (development/debug)
+#define LORAWAN_GNSS_DETAIL_PORT 3 // GNSS satellite detail (development/debug)
+#define LORAWAN_COMPACT_PORT 10    // 10-byte compact binary (SF10 probe) - PRODUCTION
+#define LORAWAN_BULK_PORT 11       // 198-byte bulk binary (SF7 bulk) - PRODUCTION
 
 /* Compile-time control flags for debug packet formats */
 #ifndef ENABLE_DEBUG_LPP
-#define ENABLE_DEBUG_LPP           0  // 0 = Default OFF for flight builds (opt-in for debug)
+#define ENABLE_DEBUG_LPP 0 // 0 = Default OFF for flight builds (opt-in for debug)
 #endif
 
 #ifndef ENABLE_GNSS_DETAIL_PACKET
-#define ENABLE_GNSS_DETAIL_PACKET  0  // 0 = Default OFF for flight builds (opt-in for debug)
+#define ENABLE_GNSS_DETAIL_PACKET 0 // 0 = Default OFF for flight builds (opt-in for debug)
 #endif
 
 #ifndef DEBUG_LPP_TX_INTERVAL
-#define DEBUG_LPP_TX_INTERVAL      5  // Send LPP every 5th transmission (reduce airtime)
+#define DEBUG_LPP_TX_INTERVAL 5 // Send LPP every 5th transmission (reduce airtime)
 #endif
 
 /* Status flags bit masks for high-res record flags byte */
-#define GPS_FIX_VALID_MASK    0x01  // Bit 0: GPS fix valid
-#define GPS_SATS_MASK         0x1E  // Bits 1-4: Satellite count (0-15)
-#define POWER_MODE_MASK       0xE0  // Bits 5-7: Power mode (0-7)
+#define GPS_FIX_VALID_MASK 0x01 // Bit 0: GPS fix valid
+#define GPS_SATS_MASK 0x1E      // Bits 1-4: Satellite count (0-15)
+#define POWER_MODE_MASK 0xE0    // Bits 5-7: Power mode (0-7)
 
 /* Status byte (byte 10) bit masks for compact uplink — HEARTBEAT v2 (D2/D4, #33)
  * v2 replaces v1's condensed reset cause (b3-b4) with the GNSS-disciplined-time
@@ -57,48 +57,53 @@ extern "C" {
  * b5 -> b3. Reset cause remains available in the high-res record / flash dump.
  * v1 vs v2 discrimination is by deployment + golden vectors (LoRaWANApplicationProtocol
  * §3/§13): the wire layout changed incompatibly at the same length/port. */
-#define STATUS_GPS_STALE_MASK      0x01  // Bit 0: GPS position is last-known-good
-#define STATUS_TEMP_STALE_MASK     0x02  // Bit 1: temperature is last-known-good
-#define STATUS_HUM_STALE_MASK      0x04  // Bit 2: humidity is last-known-good
-#define STATUS_PRESS_STALE_MASK    0x08  // Bit 3: pressure is last-known-good (was b5 in v1)
-#define STATUS_TIME_GNSS_MASK      0x10  // Bit 4: RTC disciplined by GNSS this cycle (N-03)
-#define STATUS_TS_WRAP_MASK        0x20  // Bit 5: timestamp_min has wrapped 45.5-day range (D4)
-#define STATUS_MISSION_STATE_MASK  0xC0  // Bits 6-7: mission state (mission_state.h)
+#define STATUS_GPS_STALE_MASK 0x01     // Bit 0: GPS position is last-known-good
+#define STATUS_TEMP_STALE_MASK 0x02    // Bit 1: temperature is last-known-good
+#define STATUS_HUM_STALE_MASK 0x04     // Bit 2: humidity is last-known-good
+#define STATUS_PRESS_STALE_MASK 0x08   // Bit 3: pressure is last-known-good (was b5 in v1)
+#define STATUS_TIME_GNSS_MASK 0x10     // Bit 4: RTC disciplined by GNSS this cycle (N-03)
+#define STATUS_TS_WRAP_MASK 0x20       // Bit 5: timestamp_min has wrapped 45.5-day range (D4)
+#define STATUS_MISSION_STATE_MASK 0xC0 // Bits 6-7: mission state (mission_state.h)
 
 /* Heartbeat wire version (v2 = D2/D4 layout; A-005) */
-#define HEARTBEAT_FORMAT_VERSION   2
+#define HEARTBEAT_FORMAT_VERSION 2
 
 /* Packed pressure+humidity word (bytes 7-8, little-endian) — D2 (#33):
  * bits 0-10: pressure in 1 hPa units, 0..2046 valid, 2047 = invalid sentinel.
  *            Covers 2-1100 hPa (stratospheric-useful; v1 collapsed below 950 hPa).
  * bits 11-15: humidity in 5% units, 0..20 valid, 31 = invalid sentinel. */
-#define PRESS_HUM_PRESS_MASK       0x07FF
-#define PRESS_HUM_PRESS_INVALID    0x07FF
-#define PRESS_HUM_HUM_SHIFT        11
-#define PRESS_HUM_HUM_INVALID      0x1F
+#define PRESS_HUM_PRESS_MASK 0x07FF
+#define PRESS_HUM_PRESS_INVALID 0x07FF
+#define PRESS_HUM_HUM_SHIFT 11
+#define PRESS_HUM_HUM_INVALID 0x1F
 
 /* Helper macros for status flag extraction */
-#define GET_GPS_FIX_VALID(flags)    (((flags) & GPS_FIX_VALID_MASK) != 0)
+#define GET_GPS_FIX_VALID(flags) (((flags) & GPS_FIX_VALID_MASK) != 0)
 #define GET_GPS_SATELLITE_COUNT(flags) (((flags) & GPS_SATS_MASK) >> 1)
-#define GET_POWER_MODE(flags)       (((flags) & POWER_MODE_MASK) >> 5)
+#define GET_POWER_MODE(flags) (((flags) & POWER_MODE_MASK) >> 5)
 
 /* Helper macros for status flag packing.
  * Finding #9: explicit (uint8_t) casts on the results — ~MASK promotes to a
  * negative int and the narrowing assignment tripped 6 x -Wsign-conversion
  * warnings (benign but they mask real ones). Behavior is unchanged: the cast
  * truncates exactly the way the implicit conversion did. */
-#define SET_GPS_FIX_VALID(flags, valid)     do { \
-    if (valid) (flags) = (uint8_t)((flags) | GPS_FIX_VALID_MASK); \
-    else (flags) = (uint8_t)((flags) & (uint8_t)~GPS_FIX_VALID_MASK); \
-} while(0)
+#define SET_GPS_FIX_VALID(flags, valid)                            \
+  do {                                                             \
+    if (valid)                                                     \
+      (flags) = (uint8_t)((flags) | GPS_FIX_VALID_MASK);           \
+    else                                                           \
+      (flags) = (uint8_t)((flags) & (uint8_t)~GPS_FIX_VALID_MASK); \
+  } while (0)
 
-#define SET_GPS_SATELLITE_COUNT(flags, count) do { \
+#define SET_GPS_SATELLITE_COUNT(flags, count)                                           \
+  do {                                                                                  \
     (flags) = (uint8_t)(((flags) & (uint8_t)~GPS_SATS_MASK) | (((count) & 0x0F) << 1)); \
-} while(0)
+  } while (0)
 
-#define SET_POWER_MODE(flags, mode) do { \
+#define SET_POWER_MODE(flags, mode)                                                      \
+  do {                                                                                   \
     (flags) = (uint8_t)(((flags) & (uint8_t)~POWER_MODE_MASK) | (((mode) & 0x07) << 5)); \
-} while(0)
+  } while (0)
 
 /* Exported types ------------------------------------------------------------*/
 
@@ -110,13 +115,13 @@ extern "C" {
  * @note Altitude calculated on ground station from pressure + temperature
  */
 typedef struct __attribute__((packed)) {
-    uint16_t timestamp_min;     // Minutes since mission epoch (2 bytes) - 45.5 day wrap, see STATUS_TS_WRAP
-    int16_t  latitude_100m;     // Latitude scaled to full int16 range (2 bytes)
-    int16_t  longitude_100m;    // Longitude scaled to full int16 range (2 bytes)
-    int8_t   temperature_2deg;  // Temperature / 2°C offset +64 (1 byte) - -64°C to +63°C
-    uint16_t press_hum;         // Packed pressure (bits 0-10, 1 hPa) + humidity (bits 11-15, 5%)
-    uint8_t  battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
-    uint8_t  status;            // Status byte v2 (1 byte) - stale bits + time markers + mission state
+  uint16_t timestamp_min;    // Minutes since mission epoch (2 bytes) - 45.5 day wrap, see STATUS_TS_WRAP
+  int16_t latitude_100m;     // Latitude scaled to full int16 range (2 bytes)
+  int16_t longitude_100m;    // Longitude scaled to full int16 range (2 bytes)
+  int8_t temperature_2deg;   // Temperature / 2°C offset +64 (1 byte) - -64°C to +63°C
+  uint16_t press_hum;        // Packed pressure (bits 0-10, 1 hPa) + humidity (bits 11-15, 5%)
+  uint8_t battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
+  uint8_t status;            // Status byte v2 (1 byte) - stale bits + time markers + mission state
 } CompactTelemetryPacket_t;  // Total: 11 bytes (exact fit at US915 DR0, DDR-0019)
 
 /**
@@ -125,25 +130,25 @@ typedef struct __attribute__((packed)) {
  * @note 32-byte aligned size for efficient flash operations
  */
 typedef struct __attribute__((packed)) {
-    uint32_t timestamp;         // Full precision timestamp (4 bytes)
-    int32_t  latitude;          // Full GPS precision (4 bytes) - 1e-7 degree resolution
-    int32_t  longitude;         // Full GPS precision (4 bytes) - 1e-7 degree resolution
-    uint16_t altitude;          // Meters (2 bytes) - 0-65535m
-    int16_t  temperature;       // 0.1°C resolution (2 bytes) - -3276.8 to +3276.7°C
-    uint16_t humidity;          // 0.1% resolution (2 bytes) - 0-655.35%
-    uint16_t pressure;          // 0.1hPa resolution (2 bytes) - 0-6553.5 hPa
-    uint16_t battery_voltage;   // mV (2 bytes) - 0-65.535V
-    uint16_t solar_voltage;     // mV (2 bytes) - 0-65.535V
-    int16_t  voltage_slope;     // mV/hour (2 bytes) - ±32.767 V/hour
-    uint8_t  satellites;        // GPS satellite count (1 byte)
-    uint8_t  hdop;             // GPS HDOP * 10 (1 byte) - 0-25.5 HDOP
-    uint8_t  power_mode;       // Operating mode enum (1 byte)
-    uint8_t  flags;            // Status flags (1 byte): b0 gps_fix_valid, b1-b4 sats, b5-b7 power mode
-    uint8_t  sensor_quality;   // STAB-04 (#151): b0 press_stale, b1 temp_stale, b2 hum_stale,
-                               // b3 gnss_stale, b4 batt_stale, b5-b7 reserved
-    uint8_t  veto_reason;      // STAB-04 (#151): TransmitVeto_t at write time (0 = none)
-    uint16_t crc16;            // Data integrity (2 bytes)
-} HighResTelemetryRecord_t;   // Total: 34 bytes (v6, was 32)
+  uint32_t timestamp;       // Full precision timestamp (4 bytes)
+  int32_t latitude;         // Full GPS precision (4 bytes) - 1e-7 degree resolution
+  int32_t longitude;        // Full GPS precision (4 bytes) - 1e-7 degree resolution
+  uint16_t altitude;        // Meters (2 bytes) - 0-65535m
+  int16_t temperature;      // 0.1°C resolution (2 bytes) - -3276.8 to +3276.7°C
+  uint16_t humidity;        // 0.1% resolution (2 bytes) - 0-655.35%
+  uint16_t pressure;        // 0.1hPa resolution (2 bytes) - 0-6553.5 hPa
+  uint16_t battery_voltage; // mV (2 bytes) - 0-65.535V
+  uint16_t solar_voltage;   // mV (2 bytes) - 0-65.535V
+  int16_t voltage_slope;    // mV/hour (2 bytes) - ±32.767 V/hour
+  uint8_t satellites;       // GPS satellite count (1 byte)
+  uint8_t hdop;             // GPS HDOP * 10 (1 byte) - 0-25.5 HDOP
+  uint8_t power_mode;       // Operating mode enum (1 byte)
+  uint8_t flags;            // Status flags (1 byte): b0 gps_fix_valid, b1-b4 sats, b5-b7 power mode
+  uint8_t sensor_quality;   // STAB-04 (#151): b0 press_stale, b1 temp_stale, b2 hum_stale,
+                            // b3 gnss_stale, b4 batt_stale, b5-b7 reserved
+  uint8_t veto_reason;      // STAB-04 (#151): TransmitVeto_t at write time (0 = none)
+  uint16_t crc16;           // Data integrity (2 bytes)
+} HighResTelemetryRecord_t; // Total: 34 bytes (v6, was 32)
 
 /* ---- Historical bulk v2 (packet_type 0x02): 198 B fixed, 6 x 32B records ----
  * The v2 struct/encoder (BulkTelemetryPacket_t, EncodeBulkPacketFromRecords)
@@ -160,11 +165,11 @@ typedef struct __attribute__((packed)) {
  * and as many as fit the runtime payload budget (LoRaMacQueryTxPossible — current
  * DR + pending FOpts, protocol §11). Decoder branches on payload[0].
  * 0x03 (2+32n+4, no base_seq) shipped <1 day in CI only and never flew — superseded. */
-#define BULK_PACKET_TYPE_LEGACY_FIXED   0x02  // BulkTelemetryPacket_t (v2, 198 B fixed)
-#define BULK_PACKET_TYPE_V3_SUPERSEDED  0x03  // v3: variable, no record identity (never deployed)
-#define BULK_PACKET_TYPE_VARIABLE       0x04  // v4: variable + base_seq identity (superseded by v5, FR-07)
-#define BULK_V3_OVERHEAD                10    // type + count + base_seq + crc32
-#define BULK_V3_MAX_RECORDS             6     // 198 B worst-case budget parity with v2
+#define BULK_PACKET_TYPE_LEGACY_FIXED 0x02  // BulkTelemetryPacket_t (v2, 198 B fixed)
+#define BULK_PACKET_TYPE_V3_SUPERSEDED 0x03 // v3: variable, no record identity (never deployed)
+#define BULK_PACKET_TYPE_VARIABLE 0x04      // v4: variable + base_seq identity (superseded by v5, FR-07)
+#define BULK_V3_OVERHEAD 10                 // type + count + base_seq + crc32
+#define BULK_V3_MAX_RECORDS 6               // 198 B worst-case budget parity with v2
 
 /* ---- Bulk wire format v5 (FR-07 option A, #87): per-record explicit identity ----
  * Layout: [packet_type=0x05][record_count=n][n × (seq u32 LE + 32B record)][crc32]
@@ -184,10 +189,10 @@ typedef struct __attribute__((packed)) {
  * Length = 6 + 38n. A historical record's data-honesty bits (stale sensors,
  * transmit veto) survive the archive hop; unknown/stale can no longer arrive
  * looking fresh (DDR-0007). Type bumped so no decoder can misparse size. */
-#define BULK_PACKET_TYPE_V6_PROVENANCE  0x06  // v6: variable + per-record seq + provenance
-#define BULK_V6_OVERHEAD                6     // type + count + crc32
-#define BULK_V6_RECORD_WIRE             38    // seq u32 LE + 34B record
-#define BULK_V6_MAX_RECORDS             5     // 6 + 38*5 = 196 <= 198 (v2 parity)
+#define BULK_PACKET_TYPE_V6_PROVENANCE 0x06 // v6: variable + per-record seq + provenance
+#define BULK_V6_OVERHEAD 6                  // type + count + crc32
+#define BULK_V6_RECORD_WIRE 38              // seq u32 LE + 34B record
+#define BULK_V6_MAX_RECORDS 5               // 6 + 38*5 = 196 <= 198 (v2 parity)
 
 /* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
 
@@ -201,11 +206,11 @@ typedef struct __attribute__((packed)) {
 void Payload_SetTimestampWrapped(bool wrapped);
 
 /**
-  * @brief  Current UTC timestamp in wire units (minutes since Unix epoch,
-  *         wrap-truncated to 16 bits - 45.5-day range, status bit 5 marks it).
-  *         SP-11/SP-12 (#250): the ONLY path allowed to stamp the compact
-  *         packet's timestamp; RTC-uptime seconds must not reach the wire.
-  */
+ * @brief  Current UTC timestamp in wire units (minutes since Unix epoch,
+ *         wrap-truncated to 16 bits - 45.5-day range, status bit 5 marks it).
+ *         SP-11/SP-12 (#250): the ONLY path allowed to stamp the compact
+ *         packet's timestamp; RTC-uptime seconds must not reach the wire.
+ */
 uint16_t Payload_TimestampMinutesNow(void);
 bool Payload_IsTimestampWrapped(void);
 
@@ -226,7 +231,7 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
 
 /**
  * @brief Encode high-resolution telemetry record for flash storage
- * @param record: Destination record structure  
+ * @param record: Destination record structure
  * @param sensor_data: Source sensor data
  * @param timestamp: Full precision timestamp
  * @param voltage_slope: Voltage slope in mV/hour

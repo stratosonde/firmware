@@ -1,25 +1,25 @@
 /**
-  ******************************************************************************
-  * @file    multiregion_context.h
-  * @brief   Multi-region LoRaWAN context storage and switching
-  ******************************************************************************
-  * @attention
-  *
-  * This module provides context save/restore and seamless switching between
-  * LoRaWAN regions (US915, EU868, AS923, etc.) without requiring re-joins.
-  *
-  * Persistence (FW-1 / DDR-0018, version 2) is two-tier:
-  *   Tier-1: immutable per-region credentials (DevAddr/DevEUI/session keys),
-  *           three redundant CRC'd copies in dedicated pages, written once
-  *           at commissioning and never erased in flight.
-  *   Tier-2: dynamic frame counters only, ping-ponged between two flash
-  *           slots with erase-before-write (brownout-safe, wear-leveled).
-  * Page 127 is now LoRaWAN NVM slot B (F-016/#54). The version-1 single-page
+ ******************************************************************************
+ * @file    multiregion_context.h
+ * @brief   Multi-region LoRaWAN context storage and switching
+ ******************************************************************************
+ * @attention
+ *
+ * This module provides context save/restore and seamless switching between
+ * LoRaWAN regions (US915, EU868, AS923, etc.) without requiring re-joins.
+ *
+ * Persistence (FW-1 / DDR-0018, version 2) is two-tier:
+ *   Tier-1: immutable per-region credentials (DevAddr/DevEUI/session keys),
+ *           three redundant CRC'd copies in dedicated pages, written once
+ *           at commissioning and never erased in flight.
+ *   Tier-2: dynamic frame counters only, ping-ponged between two flash
+ *           slots with erase-before-write (brownout-safe, wear-leveled).
+ * Page 127 is now LoRaWAN NVM slot B (F-016/#54). The version-1 single-page
  * context store is gone; a v1 bank reads as
-  * virgin and the device falls back to COMMISSIONING.
-  *
-  ******************************************************************************
-  */
+ * virgin and the device falls back to COMMISSIONING.
+ *
+ ******************************************************************************
+ */
 
 #ifndef MULTIREGION_CONTEXT_H
 #define MULTIREGION_CONTEXT_H
@@ -29,10 +29,10 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include <stdint.h>
-#include <stdbool.h>
-#include "LoRaMacInterfaces.h"
 #include "LmHandler.h"
+#include "LoRaMacInterfaces.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Exported defines ----------------------------------------------------------*/
 /**
@@ -41,7 +41,7 @@ extern "C" {
  * Set to 1 to enable automatic region switching based to GPS
  */
 #ifndef MULTIREGION_AUTO_SWITCH_ENABLED
-#define MULTIREGION_AUTO_SWITCH_ENABLED  1  // Enabled: auto-switch region based on GPS+H3 in flight
+#define MULTIREGION_AUTO_SWITCH_ENABLED 1 // Enabled: auto-switch region based on GPS+H3 in flight
 #endif
 
 /**
@@ -50,13 +50,13 @@ extern "C" {
  * Reduces flash writes by factor of N (improves endurance from ~83 hours to >800 hours)
  */
 #ifndef FRAME_COUNTER_SAVE_INTERVAL
-#define FRAME_COUNTER_SAVE_INTERVAL      10  // Save every 10 transmissions
+#define FRAME_COUNTER_SAVE_INTERVAL 10 // Save every 10 transmissions
 #endif
 
-#define MAX_REGION_CONTEXTS              7  // US915, EU868, AS923, AU915, IN865, KR920, RU864 (SP-05 #246)
+#define MAX_REGION_CONTEXTS 7 // US915, EU868, AS923, AU915, IN865, KR920, RU864 (SP-05 #246)
 
 /* Magic number for flash storage validation */
-#define MULTIREGION_MAGIC                0xDEADBEEF
+#define MULTIREGION_MAGIC 0xDEADBEEF
 /* v2 = two-tier storage (FW-1/DDR-0018); v3 = Tier-1 banks carry a monotonic
  * generation (R8/#190). No deployed fleet: older banks read as virgin and the
  * device falls back to COMMISSIONING, same precedent as FR-18. */
@@ -68,7 +68,7 @@ extern "C" {
  * (uint32_t magic before crc32, inside the existing CRC span). v4 banks
  * mismatch-reject and re-commission on the bench - same policy as the
  * v3->v4 bump; pre-first-flight, no in-field migration. */
-#define MULTIREGION_VERSION              5
+#define MULTIREGION_VERSION 5
 
 /* Exported types ------------------------------------------------------------*/
 
@@ -77,33 +77,33 @@ extern "C" {
  * Stores only essential session data for region switching including unique DevEUI per region
  */
 typedef struct {
-    LoRaMacRegion_t region;              // 1 byte - US915, EU868, etc.
-    uint8_t dev_eui[8];                  // 8 bytes - Unique DevEUI for this region
-    uint8_t activation;                   // 1 byte - OTAA/ABP
-    uint32_t dev_addr;                    // 4 bytes - Device address
-    
-    // Session keys (32 bytes total)
-    uint8_t app_s_key[16];               // 16 bytes - Application session key
-    uint8_t nwk_s_key[16];               // 16 bytes - Network session key
-    
-    // Frame counters (critical for security)
-    uint32_t uplink_counter;             // 4 bytes
-    uint32_t downlink_counter;           // 4 bytes
-    
-    // Minimal state
-    uint32_t last_rx_mic;                // 4 bytes - Replay protection
-    uint8_t datarate;                    // 1 byte
-    int8_t tx_power;                     // 1 byte
-    uint8_t adr_enabled;                 // 1 byte (using uint8_t instead of bool for packing)
-    
-    // RX2 window params
-    uint32_t rx2_frequency;              // 4 bytes
-    uint8_t rx2_datarate;                // 1 byte
-    
-    // Metadata
-    uint32_t last_used;                  // 4 bytes - LRU timestamp
-    uint16_t crc16;                      // 2 bytes - Context validation
-    
+  LoRaMacRegion_t region; // 1 byte - US915, EU868, etc.
+  uint8_t dev_eui[8];     // 8 bytes - Unique DevEUI for this region
+  uint8_t activation;     // 1 byte - OTAA/ABP
+  uint32_t dev_addr;      // 4 bytes - Device address
+
+  // Session keys (32 bytes total)
+  uint8_t app_s_key[16]; // 16 bytes - Application session key
+  uint8_t nwk_s_key[16]; // 16 bytes - Network session key
+
+  // Frame counters (critical for security)
+  uint32_t uplink_counter;   // 4 bytes
+  uint32_t downlink_counter; // 4 bytes
+
+  // Minimal state
+  uint32_t last_rx_mic; // 4 bytes - Replay protection
+  uint8_t datarate;     // 1 byte
+  int8_t tx_power;      // 1 byte
+  uint8_t adr_enabled;  // 1 byte (using uint8_t instead of bool for packing)
+
+  // RX2 window params
+  uint32_t rx2_frequency; // 4 bytes
+  uint8_t rx2_datarate;   // 1 byte
+
+  // Metadata
+  uint32_t last_used; // 4 bytes - LRU timestamp
+  uint16_t crc16;     // 2 bytes - Context validation
+
 } MinimalRegionContext_t;
 
 /**
@@ -111,14 +111,14 @@ typedef struct {
  * Forces 8-byte alignment to meet flash driver requirements regardless of optimization
  */
 typedef struct {
-    uint32_t magic;                      // 0xDEADBEEF - Validity check
-    uint8_t active_slot;                 // Currently active context index
-    uint8_t num_valid;                   // How many contexts are joined
-    uint16_t version;                    // For future compatibility
-    
-    MinimalRegionContext_t contexts[MAX_REGION_CONTEXTS];
-    
-    uint32_t crc32;                      // Whole structure validation
+  uint32_t magic;      // 0xDEADBEEF - Validity check
+  uint8_t active_slot; // Currently active context index
+  uint8_t num_valid;   // How many contexts are joined
+  uint16_t version;    // For future compatibility
+
+  MinimalRegionContext_t contexts[MAX_REGION_CONTEXTS];
+
+  uint32_t crc32; // Whole structure validation
 } __attribute__((aligned(8))) MultiRegionStorage_t;
 
 /* Exported functions --------------------------------------------------------*/
@@ -202,7 +202,7 @@ LmHandlerErrorStatus_t MultiRegion_AutoSwitchToRegion(LoRaMacRegion_t target_reg
  * @brief Map a LoRaMac region enum to its short name ("US915", ...).
  *        Single shared implementation (#77) — do not open-code per file.
  */
-const char* RegionToString(LoRaMacRegion_t region);
+const char *RegionToString(LoRaMacRegion_t region);
 
 /**
  * @brief Save current active context to flash
@@ -265,8 +265,7 @@ bool MultiRegion_InitializeRegionFromNetworkServer(
     LoRaMacRegion_t region,
     uint32_t dev_addr,
     const uint8_t *app_s_key,
-    const uint8_t *nwk_s_key
-);
+    const uint8_t *nwk_s_key);
 
 /**
  * @brief Display current session keys for Chirpstack ABP configuration

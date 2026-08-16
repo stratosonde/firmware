@@ -1,9 +1,11 @@
-# Style for NEW first-party code (the post-2026-08 extracted modules:
-# tx_fsm, mission_logic, mission_state, region_policy, gnss_acquire,
-# packet_queue, nvm_slot, ...). CubeIDE-generated 2-space files (main.c,
-# lora_app.c, ...) are exempt in practice until their refactors land: the
-# changed-lines check (tools/check_format.sh) is report-mode while the
-# 2-space/4-space split is unresolved - see FINDINGS.md (Phase 3).
+# Project style (owner decision 2026-08-16): 2-space LLVM, matching the
+# CubeIDE-generated majority. The 4-space first-party files were reformatted
+# once in the style-unification commit; changed lines are hard-gated by
+# tools/check_format.sh (CI hygiene job).
+# ColumnLimit 0: no rewrapping - the gate enforces indentation/structure,
+# not line length (long comment blocks are intentional).
+# DerivePointerAlignment false: `char *p` vs `char* p` left as written.
 BasedOnStyle: LLVM
-IndentWidth: 4
-ColumnLimit: 100
+IndentWidth: 2
+ColumnLimit: 0
+DerivePointerAlignment: false

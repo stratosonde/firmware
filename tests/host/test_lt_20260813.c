@@ -288,7 +288,7 @@ static bool lt01_fix_present(const char *txfsm)
         !in_function(txfsm, "uint32_t TxFsm_Reschedule(TxFsm_t *fsm, uint32_t now_ms, uint32_t interval_ms)",
                      "uint32_t delay_ms = fsm->science_due_ms - now_ms;");
     bool signed_clamp_present =
-        (strstr(txfsm, "if (remain_ms <= 0) remain_ms = 1;") != NULL);
+        (strstr(txfsm, "if (remain_ms <= 0)\n    remain_ms = 1;") != NULL);
     return bare_subtraction_gone && signed_clamp_present;
 }
 
@@ -401,7 +401,7 @@ static void test_lt01_structural(const char *app, const char *txfsm)
                      "uint32_t delay_ms = fsm->science_due_ms - now_ms;"),
         "LT-01-unguarded-subtraction");
     CHECK_REGRESSION(
-        strstr(txfsm, "if (remain_ms <= 0) remain_ms = 1;") != NULL,
+        strstr(txfsm, "if (remain_ms <= 0)\n    remain_ms = 1;") != NULL,
         "LT-01-signed-clamp-present");
 }
 
@@ -711,7 +711,7 @@ static void test_c01_flight_door_gated(const char *mstate, const char *mregh)
     /* The latch lives in the Tier-1 bank: persisted-format bump v4 -> v5
      * (v4 banks mismatch-reject and re-commission on the bench, same policy
      * as the v3 -> v4 bump in #246). */
-    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              5") != NULL,
+    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION 5") != NULL,
                      "C-01-version-5");
 }
 

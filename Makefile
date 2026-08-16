@@ -15,9 +15,9 @@ sanitize:         ; $(MAKE) -C tests/host sanitize
 release-gate:     ; $(MAKE) -C tests/host release-gate
 host-clean:       ; $(MAKE) -C tests/host clean
 
-# lint: Phase 3 hygiene gate - cppcheck over first-party sources (gated,
-# error-exitcode) + clang-format changed-lines (report mode while the
-# 2-/4-space style split is open) + actionlint (CI hygiene job). Requires
+# lint: hygiene gate - cppcheck over first-party sources (gated,
+# error-exitcode) + clang-format changed-lines (HARD GATE, 2-space LLVM,
+# owner decision 2026-08-16) + actionlint (CI hygiene job). Requires
 # bash and the tools (build box / CI ubuntu); on Windows run via Git Bash.
 lint:
 	bash tools/run_cppcheck.sh

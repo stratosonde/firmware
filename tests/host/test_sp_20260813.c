@@ -371,9 +371,9 @@ static void test_sp05_structural(const char *conf, const char *app, const char *
      * C-01 (#270) bumped v4 -> v5: the Tier-1 bank now carries the durable
      * PROVISIONED latch; v4 banks mismatch-reject and re-commission on the
      * bench (same policy as the v3 -> v4 bump below). */
-    CHECK_REGRESSION(strstr(mregh, "#define MAX_REGION_CONTEXTS              7") != NULL,
+    CHECK_REGRESSION(strstr(mregh, "#define MAX_REGION_CONTEXTS 7") != NULL,
                      "SP-05-slots-7");
-    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION              5") != NULL,
+    CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION 5") != NULL,
                      "SP-05-version-5");
 
     /* Ground-join-all and boot resume-scan cover the new regions. */
@@ -441,11 +441,11 @@ static void test_sp14_nan_guards(const char *pend)
     /* Value-based NaN probes are a toolchain lottery (float->int UB is
      * diagnosable but not deterministic), so the deterministic assertion is
      * the guard's presence; test_main.c carries the behavioural mirrors. */
-    /* Anchor on the DEFINITION (the ')\n{' suffix separates it from the
+    /* Anchor on the DEFINITION (the ') {' suffix separates it from the
      * forward prototype at the file top - the notes' scan pit). */
-    CHECK_REGRESSION(in_function(pend, "static int8_t ConvertTemperatureToCompact(float temperature_c)\n{",
+    CHECK_REGRESSION(in_function(pend, "static int8_t ConvertTemperatureToCompact(float temperature_c) {",
                                  "isnan"), "SP-14-temp-guard");
-    CHECK_REGRESSION(in_function(pend, "static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts)\n{",
+    CHECK_REGRESSION(in_function(pend, "static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts) {",
                                  "isnan"), "SP-14-batt-guard");
 }
 

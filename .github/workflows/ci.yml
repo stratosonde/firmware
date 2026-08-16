@@ -71,7 +71,7 @@ jobs:
 
   # Phase 3 (pretest-hardening handoff): hygiene gate - cppcheck over
   # first-party sources (gated), actionlint (gated), clang-format
-  # changed-lines (report mode while the 2-/4-space style split is open).
+  # changed-lines (HARD GATE since the 2-space unification, owner decision).
   hygiene:
     runs-on: ubuntu-latest
     steps:
@@ -79,12 +79,14 @@ jobs:
         with:
           submodules: true
       - name: Install hygiene tools
-        run: sudo apt-get update && sudo apt-get install -y cppcheck clang-format
+        run: |
+          sudo apt-get update && sudo apt-get install -y cppcheck
+          python3 -m pip install clang-format==22.1.8
       - name: cppcheck gate (first-party)
         run: bash tools/run_cppcheck.sh
       - name: actionlint
         run: |
           curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
           ./actionlint
-      - name: clang-format changed-lines (report mode)
+      - name: clang-format changed-lines gate
         run: bash tools/check_format.sh "${{ github.event.before }}"
