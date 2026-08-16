@@ -1124,6 +1124,156 @@ static void test_fr12_failed_checkpoint_retried(void)
     fake_w25q_free();
 }
 
+/* ========================================================================== */
+/* BEH-05 (#286) — fresh-outage recovery drains NEWEST-FIRST                  */
+/* ========================================================================== */
+/* Owner disposition 2026-08-16: historical recovery FLIES in Flight 1, so the
+ * traversal/watermark semantics are corrected: the pending-live range drains
+ * descending (newest-first, BR-TX-008) instead of ascending from the oldest
+ * missed record. These checks pin the five handoff classes: fresh-outage
+ * order, partial-packet resume, current-science preemption, ring wrap, reset
+ * resume, and corruption skip. */
+static void test_beh05_fresh_outage_newest_first(void)
+{
+    printf("-- BEH-05 (#286): fresh outage drains newest-first, partial-packet resume\n");
+
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+
+    /* A TX-silent outage: 10 records, never offered to the radio. */
+    for (uint32_t i = 0; i < 10; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 5000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+
+    /* The first recovery batch leads with the NEWEST missed record. */
+    FlashLog_Record_t batch[8];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 6);
+    CHECK_EQ_I(batch[0].sequence, 9);
+    CHECK_EQ_I(batch[5].sequence, 4);
+
+    /* Partial packet: only the first three fit the wire budget; mark exactly
+     * those. The drain must resume directly below the sent prefix - no
+     * stranding, no re-offer. */
+    for (uint32_t i = 0; i < 3; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 8, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 7);
+    CHECK_EQ_I(batch[0].sequence, 6);
+    CHECK_EQ_I(batch[6].sequence, 0);
+
+    /* Drain the rest: nothing unsent remains. */
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
+    CHECK(!FlashLog_HasUnsentData(&hlog));
+
+    fake_w25q_free();
+}
+
+static void test_beh05_preemption_wrap_reset_corruption(void)
+{
+    printf("-- BEH-05 (#286): preemption, ring wrap, reset-resume, corruption skip\n");
+
+    /* --- current-science preemption: a mid-drain write goes out live and the
+     * drain resumes where it stopped --- */
+    fake_w25q_init();
+    W25Q_HandleTypeDef hw;
+    FlashLog_HandleTypeDef hlog;
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < 8; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    FlashLog_Record_t batch[8];
+    uint32_t got = 0, skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 4, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 4);
+    CHECK_EQ_I(batch[0].sequence, 7);
+    /* only the two newest were sent before the science wake preempted */
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 7), FLASH_LOG_OK);
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 6), FLASH_LOG_OK);
+    /* the preempting science wake writes its record and live-sends it */
+    {
+        sensor_t s = make_sensors(99);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 6100U, 0, 0, 0), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 8), FLASH_LOG_OK);   /* live send */
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 8, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 6);                 /* 5,4,3,2,1,0 - no duplicate of 6/7/8 */
+    CHECK_EQ_I(batch[0].sequence, 5);
+    CHECK_EQ_I(batch[5].sequence, 0);
+    fake_w25q_free();
+
+    /* --- reset-resume: the persisted drain edge survives a re-init --- */
+    fake_w25q_init();
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < 10; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 7000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 4, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 4);
+    FlashLog_DeferHeaderSync(&hlog);
+    for (uint32_t i = 0; i < got; i++) {
+        CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+    }
+    CHECK_EQ_I(FlashLog_FlushHeaderSync(&hlog), FLASH_LOG_OK);  /* burst end: watermarks persist */
+    FlashLog_HandleTypeDef re;
+    CHECK_EQ_I(FlashLog_Init(&re, &hw), FLASH_LOG_OK);          /* the reset */
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&re, batch, 8, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 6);
+    CHECK_EQ_I(batch[0].sequence, 5);   /* resumes below the persisted drain edge */
+    CHECK_EQ_I(batch[5].sequence, 0);
+    fake_w25q_free();
+
+    /* --- ring wrap: a TX-silent run past the wrap drains the RESIDENT ring
+     * newest-first --- */
+    fake_w25q_init();
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < FLASH_LOG_MAX_RECORDS + 8U; i++) {
+        sensor_t s = make_sensors((uint16_t)(i & 0xFFFFu));
+        if (FlashLog_WriteRecord(&hlog, &s, 8000U + i, 0, 0, 0) != FLASH_LOG_OK) {
+            CHECK(0);
+            break;
+        }
+    }
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 8, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 8);
+    CHECK_EQ_I(skipped, 0);
+    CHECK_EQ_I(batch[0].sequence, hlog.next_sequence - 1U);   /* newest resident first */
+    fake_w25q_free();
+
+    /* --- corruption skip on the descending drain: a mid-range hole is
+     * skipped honestly --- */
+    fake_w25q_init();
+    CHECK_EQ_I(FlashLog_Init(&hlog, &hw), FLASH_LOG_OK);
+    for (uint32_t i = 0; i < 8; i++) {
+        sensor_t s = make_sensors((uint16_t)i);
+        CHECK_EQ_I(FlashLog_WriteRecord(&hlog, &s, 9000U + i, 0, 0, 0), FLASH_LOG_OK);
+    }
+    fake_w25q_corrupt(FLASH_LOG_DATA_START + 5U * FLASH_LOG_RECORD_SIZE,
+                      FLASH_LOG_RECORD_SIZE);   /* hole at seq 5 */
+    got = 0; skipped = 0;
+    CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 8, &got, &skipped), FLASH_LOG_OK);
+    CHECK_EQ_I(got, 7);
+    CHECK_EQ_I(skipped, 1);
+    CHECK_EQ_I(batch[0].sequence, 7);
+    CHECK_EQ_I(batch[1].sequence, 6);
+    CHECK_EQ_I(batch[2].sequence, 4);   /* the gap, descending */
+    fake_w25q_free();
+}
+
 int main(void)
 {
     printf("=== Stratosonde flight-readiness regression tests ===\n\n");
@@ -1144,6 +1294,8 @@ test_sp19_high_water_never_behind_oldest();
     test_r2_14_ts_wrap_false_latch();
     test_rv01_all_corrupt_window_wedge();
     test_r3_04_one_pass_recovery();
+    test_beh05_fresh_outage_newest_first();
+    test_beh05_preemption_wrap_reset_corruption();
     test_r3_07_double_header_loss_recovers_ring();
     test_r3_07_blank_flash_still_fresh();
     test_fr12_failed_checkpoint_retried();
