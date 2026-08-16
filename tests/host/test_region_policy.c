@@ -50,6 +50,16 @@ int main(void)
     CHECK(RegionPolicy_GeoPermission(true, REGION_UNKNOWN) == GEO_PERMISSION_PERMITTED);   /* open ocean transmits */
     CHECK(RegionPolicy_GeoPermission(true, 3U) == GEO_PERMISSION_PERMITTED);               /* any mapped region */
 
+    /* ---- BEH-04 (#302): UNKNOWN is a distinct, truthful verdict ----
+     * Valid coordinates over an unmapped/ocean cell are GEO_PERMISSION_UNKNOWN,
+     * never silently PERMITTED. The open-ocean transmit decision is the
+     * CALLER's explicit policy (F-006/GEO-03 disposition), not an inherited
+     * "permitted" from the pure verdict. */
+    CHECK(RegionPolicy_GeoPermission(true, REGION_UNKNOWN) == GEO_PERMISSION_UNKNOWN);
+    /* ...while PERMITTED stays reserved for a known, mapped, non-restricted
+     * region - the full split is RESTRICTED / UNKNOWN / PERMITTED. */
+    CHECK(RegionPolicy_GeoPermission(true, 14U) == GEO_PERMISSION_PERMITTED);
+
     /* ---- restricted hit -> silence with VETO_RESTRICTED_REGION ---- */
     RegionDecision_t d = RegionPolicy_Decide(REGION_RESTRICTED, false, true, false);
     CHECK(d.silence_restricted == true);
