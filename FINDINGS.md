@@ -304,3 +304,12 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   and uploads the RC archive. GEO'’'s EXPECT_UNFIXED reader removed (the
   mechanism retired with GEO-04); actions/upload+download-artifact pinned
   by SHA.
+- **PRETEST-DEC-02 (RESOLVED, option 2, owner 2026-08-16):** Flight-1 flies
+  the automatic multi-region profile with US915 as the commissioned home
+  region; the option-1 region lock is deliberately not implemented. The
+  preconditions per handoff option 2 landed in Phase 4: BEH-03 (fail-closed
+  post-switch authorization), the non-empty RESTRICTED dataset (GEO-01),
+  GEO-04 (init+generator guards), and region-session commissioning; the
+  boundary-crossing HIL remains a HIL-phase gate. The identity is recorded
+  in the artifact manifest (region_profile: automatic multi-region,
+  home=US915).

@@ -45,6 +45,8 @@ find Debug -name '*.su' -print0 | xargs -0 cat 2>/dev/null \
   echo "compiler:          $(command -v arm-none-eabi-gcc) $(arm-none-eabi-gcc -dumpversion)"
   echo "linker_script:     $(sha256sum STM32WLE5JCIX_FLASH.ld | awk '{print $1}')"
   echo "embedded_marker:   SONDE_BUILD:$CFG (verified by the CI job)"
+  echo "power_profile:     $(grep -oE 'POWER_PROFILE_UNQUALIFIED_LEGACY_ID 0x[0-9A-F]+U' Core/Inc/power_model.h | head -1) (schema $(grep -oE 'POWER_PROFILE_SCHEMA_VERSION [0-9]+U' Core/Inc/power_model.h | head -1)) - BEH-06"
+  echo "region_profile:    automatic multi-region (PRETEST-DEC-02, option 2); commissioned home region US915"
   (cd "$OUT" && sha256sum ${BASENAME}_$CFG.bin ${BASENAME}_$CFG.elf)
 } > "$OUT/manifest.txt"
 
