@@ -75,3 +75,24 @@ bool FirstFlightPolicy_GnssPackagePresent(bool is_bulk_continuation,
   }
   return fresh_good_fix && time_disciplined;
 }
+
+FirstFlightWakeOutcome_t FirstFlightPolicy_DecideWakeOutcome(
+    const FirstFlightWakeState_t *state) {
+  const FirstFlightWakeOutcome_t park = {false, false};
+  const FirstFlightWakeOutcome_t proceed = {true, true};
+  if (state == NULL) {
+    return park;
+  }
+  if (state->is_bulk_continuation) {
+    return proceed;
+  }
+  /* BEH-01 (#300) red-commit staging: this composition encodes the CURRENT
+   * abort gates verbatim so the lora_app.c rewiring in the same commit is
+   * behavior-preserving. The fix commit drops the two freshness conjuncts:
+   * they are record-quality diagnostics, never abort gates. */
+  if (!state->admitted || !state->gnss_package_present ||
+      !state->package_complete) {
+    return park;
+  }
+  return proceed;
+}

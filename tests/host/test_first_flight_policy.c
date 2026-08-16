@@ -82,6 +82,79 @@ int main(void)
     CHECK(!FirstFlightPolicy_GnssPackagePresent(false, true, false));   /* fix without time = partial */
     CHECK(!FirstFlightPolicy_GnssPackagePresent(false, false, false));
 
+    /* ---- BEH-01 (#300): admitted-wake outcome (DecideWakeOutcome) ----
+     * The all-fresh abort is removed: an admitted science wake ARCHIVES its
+     * record and RUNS the TX FSM regardless of package freshness. The
+     * freshness inputs are record-quality diagnostics; the stale bits ride
+     * the flash record (flash_log.c WriteRecord flags b0-b4 -> the v6 wire
+     * sensor_quality byte, pinned by the STAB-04/flash/payload suites), and
+     * transmission itself is decided downstream by the plan veto / RF
+     * silence (transmit_plan, region_policy and tx_fsm suites). */
+    {
+        FirstFlightSciencePackage_t pkg;
+        FirstFlightWakeState_t st;
+        FirstFlightWakeOutcome_t o;
+
+        /* scenario 1: admitted energy + humidity stale -> archive the record
+         * (hum stale bit b2 is set by WriteRecord); one failed humidity
+         * channel must not decide whether pressure, temperature, battery and
+         * time history exist */
+        pkg = (FirstFlightSciencePackage_t){ true, true, true, true, false, true, true };
+        st = (FirstFlightWakeState_t){ true, false, true,
+                                       FirstFlightPolicy_PackageComplete(&pkg) };
+        o = FirstFlightPolicy_DecideWakeOutcome(&st);
+        CHECK(o.archive_record);
+        CHECK(o.run_tx_fsm);
+
+        /* scenario 2: admitted energy + pressure stale -> archive the other fields */
+        pkg = (FirstFlightSciencePackage_t){ true, true, true, true, true, false, true };
+        st = (FirstFlightWakeState_t){ true, false, true,
+                                       FirstFlightPolicy_PackageComplete(&pkg) };
+        o = FirstFlightPolicy_DecideWakeOutcome(&st);
+        CHECK(o.archive_record);
+        CHECK(o.run_tx_fsm);
+
+        /* scenario 3: admitted energy + GNSS timeout + trusted stale position
+         * within legal age -> archive (gnss stale bit b3 rides the record;
+         * position age is the geo authority's concern, not this gate's) */
+        st = (FirstFlightWakeState_t){ true, false,
+                                       FirstFlightPolicy_GnssPackagePresent(false, false, false),
+                                       false };
+        o = FirstFlightPolicy_DecideWakeOutcome(&st);
+        CHECK(o.archive_record);
+        CHECK(o.run_tx_fsm);
+
+        /* scenario 4: same but RF unauthorized -> archive yes, transmit no.
+         * The outcome carries no RF input by construction:
+         * VETO_RESTRICTED_REGION / RF silence decide transmission downstream
+         * (never this decision), so the RF state cannot block archiving. */
+        CHECK(o.archive_record);
+
+        /* scenario 5: battery or temperature admission failure -> no archive,
+         * no TX, survival-cadence retry (the production admission path
+         * FirstFlightWakeAdmitted parks the TX FSM and rebases the timer) */
+        i = make_input(-60.0f, true, 5000, true);
+        CHECK(FirstFlightPolicy_Decide(&cfg, &i) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+        i = make_input(-20.0f, true, 4000, true);
+        CHECK(FirstFlightPolicy_Decide(&cfg, &i) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+        st = (FirstFlightWakeState_t){ false, false, true, true };
+        o = FirstFlightPolicy_DecideWakeOutcome(&st);
+        CHECK(!o.archive_record);
+        CHECK(!o.run_tx_fsm);
+
+        /* scenario 6: bulk continuation stays independent of live-package
+         * freshness (it services cached recovery, never a live record) */
+        st = (FirstFlightWakeState_t){ false, true, false, false };
+        o = FirstFlightPolicy_DecideWakeOutcome(&st);
+        CHECK(o.archive_record);
+        CHECK(o.run_tx_fsm);
+
+        /* NULL state -> conservative park */
+        o = FirstFlightPolicy_DecideWakeOutcome(NULL);
+        CHECK(!o.archive_record);
+        CHECK(!o.run_tx_fsm);
+    }
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

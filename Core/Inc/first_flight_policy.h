@@ -61,4 +61,30 @@ bool FirstFlightPolicy_GnssPackagePresent(bool is_bulk_continuation,
                                           bool fresh_good_fix,
                                           bool time_disciplined);
 
+/** Wake-outcome decision (BEH-01, #300). Inputs:
+ *  - admitted: energy admission (fresh temperature + raw battery against
+ *    the configured floors) - the ONLY gate on whether a live record
+ *    comes to exist;
+ *  - is_bulk_continuation: services cached recovery, never a live record;
+ *  - gnss_package_present / package_complete: record-quality DIAGNOSTICS
+ *    (the predicates above). They must never decide whether unrelated
+ *    observations exist.
+ *  archive_record: append the current record to the flash ring.
+ *  run_tx_fsm: run the TX state machine; the plan veto / RF silence decide
+ *  transmission downstream - never this decision. */
+typedef struct {
+  bool admitted;
+  bool is_bulk_continuation;
+  bool gnss_package_present;
+  bool package_complete;
+} FirstFlightWakeState_t;
+
+typedef struct {
+  bool archive_record;
+  bool run_tx_fsm;
+} FirstFlightWakeOutcome_t;
+
+FirstFlightWakeOutcome_t FirstFlightPolicy_DecideWakeOutcome(
+    const FirstFlightWakeState_t *state);
+
 #endif /* FIRST_FLIGHT_POLICY_H */
