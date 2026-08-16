@@ -64,6 +64,22 @@ RegionDecision_t RegionPolicy_Decide(RegionId h3_region_id,
                                      bool detected_joined,
                                      bool gnss_stale);
 
+/**
+ * @brief  Post-switch RF authorization (BEH-03 / #301). When a fresh known
+ *         detected region differed from the active region, RF is allowed
+ *         only if the active region equals the detected region AFTER the
+ *         switch attempt. Busy, failed, rolled-back, unjoined and
+ *         sessionless outcomes archive locally and silence RF for the
+ *         wake - a successful rollback recovers the old session, it does
+ *         not authorize using that session at the new location. Retry at
+ *         the next fresh fix. Pure.
+ * @param  switch_was_required: detected != active before the attempt
+ * @param  active_matches_detected: MultiRegion_GetActiveRegion() ==
+ *         detected_region after the attempt
+ */
+bool RegionPolicy_PostSwitchRfAllowed(bool switch_was_required,
+                                      bool active_matches_detected);
+
 /* DR-06 (#241): ONE silence helper for every RF-silence path, so the archive
  * always records WHY a cycle went dark (DDR-0003 §6a), not just THAT. First
  * veto wins (the existing DecideTransmitPlan rule). Previously only the

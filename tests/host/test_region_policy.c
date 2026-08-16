@@ -119,6 +119,34 @@ int main(void)
     if (d.silence_unjoined) RegionPolicy_Silence(&plan, &rf_silence, VETO_RF_SILENCE);
     CHECK(rf_silence == true && plan.veto == VETO_RF_SILENCE);
 
+    /* ---- BEH-03 (#301): fail closed when a required switch does not
+     * complete. RF is allowed after a switch attempt only when the active
+     * region equals the detected region. Busy, failed, rolled-back and
+     * silently-stayed outcomes must silence the wake. (The rest of the
+     * handoff list - same region, successful switch, target unjoined,
+     * stale never switches, restricted always silences - is pinned by the
+     * RegionPolicy_Decide matrix above.) ---- */
+    /* same region: no switch required -> allowed regardless of post state */
+    CHECK(RegionPolicy_PostSwitchRfAllowed(false, true));
+    CHECK(RegionPolicy_PostSwitchRfAllowed(false, false));
+    /* successful switch: required and settled -> allowed */
+    CHECK(RegionPolicy_PostSwitchRfAllowed(true, true));
+    /* MAC busy (deferred): required but active != detected -> silence */
+    CHECK(!RegionPolicy_PostSwitchRfAllowed(true, false));
+    /* switch error + rollback SUCCESS: old session recovered, but that is
+     * not authorization to use it at the new location -> silence */
+    CHECK(!RegionPolicy_PostSwitchRfAllowed(true, false));
+    /* switch error + rollback FAILURE: sessionless and degraded -> silence */
+    CHECK(!RegionPolicy_PostSwitchRfAllowed(true, false));
+    /* composed veto: an unsettled switch archives as VETO_RF_SILENCE */
+    memset(&plan, 0, sizeof(plan));
+    plan.veto = VETO_NONE;
+    rf_silence = false;
+    if (!RegionPolicy_PostSwitchRfAllowed(true, false)) {
+        RegionPolicy_Silence(&plan, &rf_silence, VETO_RF_SILENCE);
+    }
+    CHECK(rf_silence == true && plan.veto == VETO_RF_SILENCE);
+
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;
 }

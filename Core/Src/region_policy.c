@@ -38,3 +38,15 @@ void RegionPolicy_Silence(TransmitPlan_t *plan, bool *rf_silence, TransmitVeto_t
     plan->veto = why;
   }
 }
+
+bool RegionPolicy_PostSwitchRfAllowed(bool switch_was_required,
+                                      bool active_matches_detected) {
+  (void)switch_was_required;
+  (void)active_matches_detected;
+  /* BEH-03 (#301) red-commit staging: CURRENT lora_app behavior - the
+   * switch outcome is logged and the wake proceeds on the old region's
+   * plan regardless. The fix commit enforces the fail-closed invariant:
+   * RF allowed only when no switch was required or the attempt settled
+   * with active == detected. */
+  return true;
+}

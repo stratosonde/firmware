@@ -1546,6 +1546,15 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
           SONDE_LOG_STR("MultiRegion: Switch FAILED and rollback FAILED - radio degraded\r\n");
         }
       }
+      /* BEH-03 (#301) staging: the post-switch authorization check. Red
+       * commit = behavior-preserving (the staging predicate always
+       * allows); the fix commit makes an unsettled switch - busy, failed,
+       * rolled-back, or silently stayed - silence RF for the wake. */
+      if (!RegionPolicy_PostSwitchRfAllowed(before_region != detected_region,
+                                            MultiRegion_GetActiveRegion() == detected_region)) {
+        SONDE_LOG_STR("MultiRegion: switch not settled - RF silence for this wake, archiving locally (BEH-03)\r\n");
+        RegionPolicy_Silence(plan, rf_silence, VETO_RF_SILENCE);
+      }
       }
     }
     else
