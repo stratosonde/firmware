@@ -68,3 +68,23 @@ jobs:
           arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/flight.bin
           grep -q "SONDE_BUILD:flight" /tmp/flight.bin || { echo "FATAL: flight build marker missing"; exit 1; }
           grep -q "SONDE_BUILD:debug" /tmp/flight.bin && { echo "FATAL: debug build marker present"; exit 1; } || true
+
+  # Phase 3 (pretest-hardening handoff): hygiene gate - cppcheck over
+  # first-party sources (gated), actionlint (gated), clang-format
+  # changed-lines (report mode while the 2-/4-space style split is open).
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install hygiene tools
+        run: sudo apt-get update && sudo apt-get install -y cppcheck clang-format
+      - name: cppcheck gate (first-party)
+        run: bash tools/run_cppcheck.sh
+      - name: actionlint
+        run: |
+          curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
+          ./actionlint
+      - name: clang-format changed-lines (report mode)
+        run: bash tools/check_format.sh "${{ github.event.before }}"

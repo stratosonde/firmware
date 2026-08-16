@@ -72,7 +72,7 @@ SHT31_StatusTypeDef SHT31_Init(SHT31_HandleTypeDef *hsht31)
   SONDE_LOG_STR("SHT31_Init: Starting\r\n");
 
   /* Check if I2C bus is ready by doing a simple I2C bus scan for the device */
-  HAL_StatusTypeDef i2c_status;
+  HAL_StatusTypeDef i2c_status = HAL_ERROR; /* cppcheck: loop below always assigns (retry=5); init silences the uninit diagnostic */
   uint8_t i2c_retry = 5; // Increase retry count
   
   /* Turn on LED to indicate initialization start (R09: commissioning only) */

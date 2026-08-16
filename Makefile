@@ -15,11 +15,13 @@ sanitize:         ; $(MAKE) -C tests/host sanitize
 release-gate:     ; $(MAKE) -C tests/host release-gate
 host-clean:       ; $(MAKE) -C tests/host clean
 
-# lint: compiler-warning gate + cppcheck + changed-file clang-format +
-# actionlint. Lands in Phase 3 of the handoff; a target that pretends would
-# be worse than an honest stub.
+# lint: Phase 3 hygiene gate - cppcheck over first-party sources (gated,
+# error-exitcode) + clang-format changed-lines (report mode while the
+# 2-/4-space style split is open) + actionlint (CI hygiene job). Requires
+# bash and the tools (build box / CI ubuntu); on Windows run via Git Bash.
 lint:
-	@echo "lint: arrives in Phase 3 (cppcheck report mode first, then gates)" & exit 1
+	bash tools/run_cppcheck.sh
+	bash tools/check_format.sh
 
 arm-debug:
 	$(MAKE) -C Debug clean

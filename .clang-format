@@ -1,0 +1,9 @@
+# Style for NEW first-party code (the post-2026-08 extracted modules:
+# tx_fsm, mission_logic, mission_state, region_policy, gnss_acquire,
+# packet_queue, nvm_slot, ...). CubeIDE-generated 2-space files (main.c,
+# lora_app.c, ...) are exempt in practice until their refactors land: the
+# changed-lines check (tools/check_format.sh) is report-mode while the
+# 2-space/4-space split is unresolved - see FINDINGS.md (Phase 3).
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100

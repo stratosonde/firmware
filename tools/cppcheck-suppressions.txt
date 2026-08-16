@@ -1,0 +1,7 @@
+// Phase 3 baseline (pretest-hardening): audited suppressions for the
+// cppcheck gate (tools/run_cppcheck.sh). Each entry must carry its reason.
+
+// Vendor CMSIS startup idiom: the init loops deliberately order-compare
+// addresses of DISTINCT linker-generated symbols (__copy_table_start__/__end__
+// etc.). Well-known embedded false positive; the header is ST vendor code.
+comparePointers:Drivers/CMSIS/Include/cmsis_gcc.h
