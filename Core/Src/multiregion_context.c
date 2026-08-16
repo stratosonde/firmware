@@ -1369,8 +1369,8 @@ bool MultiRegion_PreJoinAllRegions(void) {
 
   /* MISSION-01b (#142, DDR-0002 amendment): commissioning no longer enters
    * FLIGHT. A freshly commissioned unit holds COMMISSIONING (quiet watch:
-   * no GPS, no telemetry TX) until deliberate arming (button hook - needs a
-   * free GPIO, see mission_state.h) or autonomous launch detection
+   * no GPS, no telemetry TX) until deliberate arming (PB13 button,
+   * arming_input.c - PRETEST-DEC-01 2026-08-16) or autonomous launch detection
    * (BR-LIFE-007 pressure departure, in MissionState_Update). The old
    * join-triggered EnterFlight put a bench unit into the 10 s ASCENT
    * cadence with GPS powered for the whole commissioning-to-launch gap.

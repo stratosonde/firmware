@@ -48,7 +48,7 @@ that (DDR-0003).
    | 3 | `VETO_RF_SILENCE` | FLIGHT with no valid session (DDR-0018) |
    | 4 | `VETO_RESTRICTED_REGION` | regulatory RF prohibition (geofence) |
    | 5 | `VETO_GPS_LOSS` | position stale beyond the 24 h budget (`> GPS_LOSS_SILENCE_S`, strict, DDR-0015 BR-STALE-017) — science/logging/GNSS retries continue (STAB-03/#150); a same-wake accepted fix clears only this veto, before region selection and TX (H-09/#285, A6/A7) |
-   | 6 | `VETO_PRELAUNCH_QUIET` | commissioned-but-not-launched quiet watch (DR-06/#241) |
+   | 6 | `VETO_PRELAUNCH_QUIET` | commissioned-but-not-launched quiet watch (DR-06/#241); exit via the PB13 arming button (active-low to GND on the shared SPI2_SCK net, debounced across consecutive wakes — commissioning-only, no flash traffic) or pressure launch detection (PRETEST-DEC-01, #142) |
 4. **Probe**: one compact confirmed heartbeat (Port 10). **The ACK gates all
    further RF work this wake** (SI-016, DDR-0019): no ACK → end of RF work.
    No same-wake probe retry, no backlog dump without probe success.

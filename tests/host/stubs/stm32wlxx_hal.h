@@ -14,11 +14,15 @@ typedef enum { GPIO_PIN_RESET = 0, GPIO_PIN_SET } GPIO_PinState;
 #define GPIOB               ((GPIO_TypeDef *)0x1)
 #define GPIO_PIN_6          (1u << 6)
 #define GPIO_PIN_7          (1u << 7)
+#define GPIO_PIN_13         (1u << 13)
 #define GPIO_MODE_INPUT     0u
 #define GPIO_MODE_OUTPUT_PP 1u
+#define GPIO_MODE_AF_PP     2u
 #define GPIO_MODE_ANALOG    3u
 #define GPIO_NOPULL         0u
+#define GPIO_PULLUP         1u
 #define GPIO_SPEED_FREQ_LOW 0u
+#define GPIO_AF5_SPI2       5u
 static inline void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
 /* R9 (#194) observability: GPIO writes are recorded so transactional-cleanup
  * tests can assert final pin state. Per-TU statics (unused attribute) -
@@ -35,7 +39,12 @@ static inline void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinStat
         g_host_gpio_log_n++;
     }
 }
-static inline GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin) { (void)p; (void)pin; return GPIO_PIN_RESET; }
+/* PRETEST-DEC-01 (#142): controllable read state for the arming-input suite.
+ * Defaults to RESET - the long-standing fixed behavior, so existing suites
+ * are unaffected. Suites that drive it #include the unit under test (same
+ * TU, like the write log above). */
+static GPIO_PinState g_host_gpio_read_state __attribute__((unused)) = GPIO_PIN_RESET;
+static inline GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin) { (void)p; (void)pin; return g_host_gpio_read_state; }
 
 /* ---- UART / DMA ---- */
 typedef struct { volatile uint32_t CNDTR; } HostDMA_Regs_t;

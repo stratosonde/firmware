@@ -111,10 +111,11 @@ MissionState_t MissionState_Get(void);
 bool MissionState_IsCommissioning(void);
 
 /** @brief One-way COMMISSIONING -> FLIGHT (ASCENT). Deliberate ground action:
- *        call from a button/arming hook. NOTE (#142): no free GPIO is
- *        currently assigned — the SOS button pin PB3 went analog (solar) in
- *        F24. Until a pin is assigned, the pressure-based launch detector in
- *        MissionState_Update() is the entry path. */
+ *        called by the arming input (arming_input.c, PRETEST-DEC-01 2026-08-16:
+ *        PB13, active-low to GND, sharing the SPI2_SCK net — sampled only in
+ *        commissioning, where the quiet watch performs no flash logging) or
+ *        by the pressure-based launch detector in MissionState_Update(). The
+ *        call must never live in lora_app.c (R6/#192). */
 void MissionState_EnterFlight(void);
 
 /** @brief Call each work cycle: ASCENT -> FLOAT by windowed pressure range

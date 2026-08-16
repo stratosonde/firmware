@@ -37,37 +37,38 @@
 #include "flash_if.h"
 
 /* USER CODE BEGIN Includes */
-#include "stdio.h"
-#include "stdlib.h"
-#include "string.h"  /* memset — R31 full GNSS invalidation (#57) */
-#include "math.h"
-#include "SEGGER_RTT.h"
-#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
-#include "atgm336h.h"
-#include "multiregion_h3.h"
-#include "multiregion_context.h"
-#include "sys_caps.h"  /* F-01 (#245): SYS_CAP_RADIO degrade marking */
-#include "timer_if.h"
-#include "payload_format.h"
-#include "flash_log.h"
-#include "config.h"
-#include "mission_state.h"
-#include "reset_cause.h"      /* F13a: deadman breadcrumb register */
-#include "stm32_systime.h"    /* F12: SysTimeSet (DDR-0013) */
-#include "transmit_plan.h"    /* R47 (#44): DecideTransmitPlan */
-#include "first_flight_policy.h"
-#include "packet_queue.h"      /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
-#include "nvm_slot.h"          /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
-#include "region_policy.h"     /* refactor stage 3: geofence/region policy extracted to Core/Src/region_policy.c */
-#include "gnss_acquire.h"      /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
-#include "tx_fsm.h"            /* refactor stage 5: TX state machine decision core extracted to Core/Src/tx_fsm.c */
-#include "RegionUS915.h"      /* R03 (#32): region Datarates*[] tables for the SF resolver */
-#include "RegionEU868.h"
 #include "RegionAS923.h"
 #include "RegionAU915.h"
-#include "RegionIN865.h"      /* R7 (#193): all six advertised regions need a complete SF mapping */
+#include "RegionEU868.h"
+#include "RegionIN865.h" /* R7 (#193): all six advertised regions need a complete SF mapping */
 #include "RegionKR920.h"
-#include "RegionRU864.h"      /* SP-05 (#246): seventh compiled region needs its Datarates table too */
+#include "RegionRU864.h" /* SP-05 (#246): seventh compiled region needs its Datarates table too */
+#include "RegionUS915.h" /* R03 (#32): region Datarates*[] tables for the SF resolver */
+#include "SEGGER_RTT.h"
+#include "arming_input.h" /* PRETEST-DEC-01 (#142): PB13 commissioning button */
+#include "atgm336h.h"
+#include "config.h"
+#include "first_flight_policy.h"
+#include "flash_log.h"
+#include "gnss_acquire.h" /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
+#include "math.h"
+#include "mission_state.h"
+#include "multiregion_context.h"
+#include "multiregion_h3.h"
+#include "nvm_slot.h"     /* refactor stage 2: NVM slot codec/selection extracted to Core/Src/nvm_slot.c */
+#include "packet_queue.h" /* refactor stage 1: PacketQueue_* extracted to Core/Src/packet_queue.c */
+#include "payload_format.h"
+#include "region_policy.h" /* refactor stage 3: geofence/region policy extracted to Core/Src/region_policy.c */
+#include "reset_cause.h"   /* F13a: deadman breadcrumb register */
+#include "sonde_log.h"     /* R50 (#47): compile-time log gate */
+#include "stdio.h"
+#include "stdlib.h"
+#include "stm32_systime.h" /* F12: SysTimeSet (DDR-0013) */
+#include "string.h"        /* memset — R31 full GNSS invalidation (#57) */
+#include "sys_caps.h"      /* F-01 (#245): SYS_CAP_RADIO degrade marking */
+#include "timer_if.h"
+#include "transmit_plan.h" /* R47 (#44): DecideTransmitPlan */
+#include "tx_fsm.h"        /* refactor stage 5: TX state machine decision core extracted to Core/Src/tx_fsm.c */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -2223,6 +2224,11 @@ static void SendTxData(void)
    * Entry to ASCENT is by arming (button hook) or launch detection.
    * Unjoined commissioning is untouched above (join retry path). */
   if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
+    /* PRETEST-DEC-01 (#142): poll the PB13 arming button (active-low to GND,
+     * sharing the SPI2_SCK net - safe here because the quiet watch performs
+     * no flash logging). A confirmed hold enters FLIGHT via arming_input.c
+     * (the EnterFlight call deliberately lives there, not in this file). */
+    ArmingInput_Poll();
     RegionPolicy_Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
     /* Quiet watch still samples pressure above for launch detection, but it
      * is not a science observation and must not create an incomplete record. */

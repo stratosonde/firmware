@@ -245,3 +245,12 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   4300-literal structural pin flipped green. Red commit d58238f
   (red-by-construction: the tests are written against the new API). The
   selected profile ID is the release-manifest input (Phase 6/7 wiring).
+- **PRETEST-DEC-01 / #142 (RESOLVED, option 1):** the PB13 arming input is
+  implemented: active-low button to GND on the shared SPI2_SCK net, sampled
+  only during commissioning (the quiet watch performs no flash logging, so
+  the clock net is idle), debounced across consecutive commissioning wakes
+  (ARMING_CONFIRM_WAKES=2). The EnterFlight call lives in arming_input.c
+  (never lora_app.c, R6/#192). Pressure-based launch detection remains as
+  the autonomous path. Operator readiness indication (fix/ACK/sensor
+  health) stays on the commissioning UART/RTT output - the pre-launch
+  checklist item.
