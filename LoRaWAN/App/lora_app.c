@@ -904,9 +904,11 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
                       margin, CfgLinkMargin(), gw_count, CfgGatewayCount(),
                       link_good ? "BURST CONTINUES" : "FALLBACK");
     TxFsmRxInput_t fsm_in = {
-      linkcheck_received, margin, gw_count,
-      CfgLinkMargin(), CfgGatewayCount(),
-      FlashLog_HasUnsentData(&hflashlog), CfgMaxBulkPkts()
+      .linkcheck_received = linkcheck_received, .margin = margin,
+      .gateways = gw_count,
+      .margin_min = CfgLinkMargin(), .gateways_min = CfgGatewayCount(),
+      .has_unsent = FlashLog_HasUnsentData(&hflashlog),
+      .max_bulk_packets = CfgMaxBulkPkts()
     };
     TxFsmEventOutput_t fsm_out;
     TxFsm_OnRx(&g_tx_fsm, &fsm_in, &fsm_out);
@@ -1736,8 +1738,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
   }
 
   TxFsmCycleInput_t fsm_in = {
-    now_ms, 0, rf_silence, has_unsent, recovery_empty, unconvertible,
-    no_budget, CfgMaxBulkPkts(), BURST_MAX_OPEN_MS
+    .now_ms = now_ms, .interval_ms = 0, .rf_silence = rf_silence,
+    .has_unsent = has_unsent, .recovery_empty = recovery_empty,
+    .unconvertible = unconvertible, .no_budget = no_budget,
+    .max_bulk_packets = CfgMaxBulkPkts(), .burst_max_open_ms = BURST_MAX_OPEN_MS
   };
   TxFsmCycleOutput_t fsm_out;
   TxFsm_Dispatch(&g_tx_fsm, &fsm_in, &fsm_out);
@@ -1956,10 +1960,10 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
     ConfigGetFirstFlightBatteryMinMv()
   };
   FirstFlightAdmissionInput_t input = {
-    sample->temperature,
-    sample->temp_stale == 0U,
-    battery_mv_raw,
-    sample->batt_stale == 0U
+    .temperature_c = sample->temperature,
+    .temperature_fresh = sample->temp_stale == 0U,
+    .battery_mv_raw = battery_mv_raw,
+    .battery_fresh = sample->batt_stale == 0U
   };
 
   if (FirstFlightPolicy_Decide(&policy, &input) == FIRST_FLIGHT_RUN_FULL) {
@@ -2374,13 +2378,13 @@ static void SendTxData(void)
     s_cycle_batt_mv = post_gnss_battery_mv;
 
     FirstFlightSciencePackage_t package = {
-      time_disciplined_this_wake,
-      gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
-      hgnss.data.position_present && GNSS_HasPosition(&hgnss),
-      sensor_data.temp_stale == 0U && isfinite(sensor_data.temperature),
-      sensor_data.hum_stale == 0U && isfinite(sensor_data.humidity),
-      sensor_data.press_stale == 0U && isfinite(sensor_data.pressure),
-      sensor_data.batt_stale == 0U &&
+      .disciplined_time = time_disciplined_this_wake,
+      .fresh_good_fix = gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
+      .fresh_position = hgnss.data.position_present && GNSS_HasPosition(&hgnss),
+      .fresh_temperature = sensor_data.temp_stale == 0U && isfinite(sensor_data.temperature),
+      .fresh_humidity = sensor_data.hum_stale == 0U && isfinite(sensor_data.humidity),
+      .fresh_pressure = sensor_data.press_stale == 0U && isfinite(sensor_data.pressure),
+      .fresh_battery = sensor_data.batt_stale == 0U &&
           isfinite(sensor_data.battery_voltage) &&
           sensor_data.battery_voltage > 0.0f
     };
