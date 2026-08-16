@@ -222,9 +222,95 @@ static void test_pwr02_floor_temp_scheduled(const char *pm)
         "PWR-02-floor-references-temp");
 }
 
+/* ========================================================================== */
+/* BEH-06 (#297) — versioned PowerProfile: structure, consumption, fallback    */
+/* ========================================================================== */
+/* Separate policy from characterized data BEFORE the cold bench campaign: one
+ * immutable, versioned profile carries the temperature knots, thresholds and
+ * hysteresis; the decision code consumes it; the current unmeasured values
+ * live in the explicitly named UNQUALIFIED_LEGACY profile. These tests pin
+ * the structure. They are written against the new API, so this suite does not
+ * even BUILD until the fix commit lands (red-by-construction). */
+static void test_beh06_power_profile(const char *pm, const char *tp)
+{
+    printf("BEH-06 (#297): versioned PowerProfile structure\n");
+
+    const PowerProfile_t *legacy = PowerProfile_Legacy();
+    CHECK(legacy != NULL);
+    CHECK(legacy->profile_id == POWER_PROFILE_UNQUALIFIED_LEGACY_ID);
+    CHECK(legacy->schema_version == POWER_PROFILE_SCHEMA_VERSION);
+    CHECK(PowerProfile_Validate(legacy));
+    CHECK(legacy->raw_floor_mv == 4300U);   /* preserved, named, unqualified */
+    CHECK(legacy->upgrade_confirm == 3U);
+
+    /* value preservation: the legacy profile reproduces the current table
+     * exactly (knot + midpoint samples) */
+    CHECK(PowerModel_Normalize(legacy, 4000U, 30.0f) == 4000U);   /* above top knot */
+    CHECK(PowerModel_Normalize(legacy, 4000U, 25.0f) == 4000U);
+    CHECK(PowerModel_Normalize(legacy, 4000U, -55.0f) == 4430U);  /* knot */
+    CHECK(PowerModel_Normalize(legacy, 4000U, -45.0f) == 4575U);  /* midpoint -50/-40 */
+    CHECK(PowerModel_Normalize(legacy, 4000U, -70.0f) == 6700U);  /* below bottom knot: max */
+
+    /* monotonic interpolation inside a knot pair (0 -> -10: 200 -> 350 mV) */
+    {
+        uint16_t prev = 0;
+        for (int t = 0; t >= -10; t--) {
+            uint16_t v = PowerModel_Normalize(legacy, 4000U, (float)t);
+            CHECK(v >= prev);
+            prev = v;
+        }
+    }
+
+    /* the decision consumes the profile floor (both transition directions) */
+    CHECK(PowerModel_SelectMode(legacy, 0, 5500U, 0xFFFFU, 4400U) != MODE_SURVIVAL);
+    CHECK(PowerModel_SelectMode(legacy, 0, 5500U, 0xFFFFU, 4200U) == MODE_SURVIVAL);
+
+    /* a custom profile moves the floor - proving consumption, not embedding */
+    static const PowerProfileTempKnot_t warm_knots[] = { {25, 0}, {-40, 300} };
+    const PowerProfile_t custom = {
+        POWER_PROFILE_UNQUALIFIED_LEGACY_ID + 1U, POWER_PROFILE_SCHEMA_VERSION,
+        2U, warm_knots,
+        3000U, -30, -15, -5, 20, 6U, 12U, 3U
+    };
+    CHECK(PowerProfile_Validate(&custom));
+    CHECK(PowerModel_SelectMode(&custom, 0, 5500U, 0xFFFFU, 3500U) != MODE_SURVIVAL);
+    CHECK(PowerModel_Normalize(&custom, 4000U, -40.0f) == 4300U);
+
+    /* corrupt/missing profile fallback selects the legacy profile */
+    CHECK(PowerProfile_Select(NULL) == legacy);
+    CHECK(PowerProfile_Select(&custom) == &custom);
+    {
+        PowerProfile_t bad = custom;
+        bad.schema_version = 999U;
+        CHECK(!PowerProfile_Validate(&bad));
+        CHECK(PowerProfile_Select(&bad) == legacy);
+        bad = custom;
+        bad.knots = NULL;
+        CHECK(PowerProfile_Select(&bad) == legacy);
+        PowerProfile_t bad2 = custom;
+        bad2.knot_count = 0U;
+        CHECK(PowerProfile_Select(&bad2) == legacy);
+    }
+
+    /* selection drives the active profile the decision path consumes */
+    PowerProfile_SetActive(&custom);
+    CHECK(PowerProfile_Active() == &custom);
+    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 3500U) != MODE_SURVIVAL);
+    PowerProfile_SetActive(NULL);   /* missing -> legacy fallback */
+    CHECK(PowerProfile_Active() == legacy);
+    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 3500U) == MODE_SURVIVAL);
+
+    /* scan pins: the decision function carries no bare floor literal, and the
+     * hysteresis count is profile data consumed by transmit_plan */
+    CHECK(strstr(pm, "PowerProfile") != NULL);
+    CHECK(strstr(tp, "upgrade_confirm") != NULL);
+    CHECK(strstr(tp, "F8_UPGRADE_CONFIRM") == NULL);
+}
+
 int main(void)
 {
     char *pm = strip_comments(slurp("../../Core/Src/power_model.c"));
+    char *tp = strip_comments(slurp("../../Core/Src/transmit_plan.c"));
 
     printf("=== PWR-series review regressions (2026-08-14) ===\n\n");
 
@@ -233,6 +319,8 @@ int main(void)
     test_pwr02_survival_still_catches_brownout();
     printf("\n");
     test_pwr02_floor_temp_scheduled(pm);
+    printf("\n");
+    test_beh06_power_profile(pm, tp);
     printf("\n");
 
     /* pooled scan buffers: freed at exit (scan_pool_track) */
