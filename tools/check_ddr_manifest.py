@@ -10,12 +10,12 @@ Checks (hard failures):
   6. every DDR-XXXX token in source (Core/Src, Core/Inc, LoRaWAN/App) and in
      docs/decisions/*.md resolves to a canonical id, OR a declared alias
 
-Ambiguity policy: ids 0014-0021 exist in BOTH the canonical and the retired
-(alias) generations - a bare reference is unresolvable. Those are WARNINGS
-(human judgment required), not hard failures. Unambiguous alias resolutions
-are also warnings (new text must use canonical ids).
+Ambiguity policy: retired 2026-08-15 (DOC-01). The 0014-0021 both-generations
+band no longer exists (audit found every in-repo reference means the canonical
+generation; see manifest.yaml). Any reference to a still-declared retired
+alias (0028-0034), and any ambiguity should one ever reappear, FAILS the gate.
 
-Exit 0 = pass (warnings allowed), 1 = any hard failure.
+Exit 0 = pass with 0 failures AND 0 warnings; 1 otherwise.
 """
 import os
 import re
@@ -139,7 +139,7 @@ def main():
 
     print("\nDDR manifest check: %d records, %d aliases, %d failures, %d warnings"
           % (len(records), len(aliases), failures, warnings))
-    return 1 if failures else 0
+    return 1 if (failures or warnings) else 0
 
 if __name__ == "__main__":
     sys.exit(main())

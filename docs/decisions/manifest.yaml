@@ -39,23 +39,21 @@ records:
   - { id: DDR-0027, file: 0027-long-lived-wire-protocol-compatibility.md, title: Long-Lived Wire Protocol Compatibility, status: Draft }
 
 # Retired aliases from the pre-2026-08-09 V2 numbering (README table era).
-# Alias references in older prose still resolve, but are reported as
-# warnings; new text must use canonical IDs.
+# Alias references in older prose still resolve, but FAIL the gate; new text
+# must use canonical IDs.
 # Note: old-generation aliases 0022-0026 were retired 2026-08-12 when the
 # canonical DDR-0022..DDR-0026 records were added; no live references to the
 # old-generation meaning remained.
 # Note: old-generation alias 0027 (-> DDR-0014) was retired 2026-08-13 when the
 # canonical DDR-0027 (Long-Lived Wire Protocol Compatibility) was added; no live
 # references to the old-generation meaning remained.
+# Note: old-generation aliases 0014-0021 (-> DDR-0001..DDR-0008) were retired
+# 2026-08-15 (pretest-hardening Phase 2 / DOC-01) after a full audit of all 247
+# in-repo DDR-0014..0021 occurrences (Core, LoRaWAN/App, docs/decisions,
+# README) found every reference means the canonical generation. The old V2
+# meanings survive in git history. This also eliminates the both-generations
+# ambiguity band, so the manifest gate now enforces 0 failures / 0 warnings.
 aliases:
-  - { alias: DDR-0014, of: DDR-0001 }
-  - { alias: DDR-0015, of: DDR-0002 }
-  - { alias: DDR-0016, of: DDR-0003 }
-  - { alias: DDR-0017, of: DDR-0004 }
-  - { alias: DDR-0018, of: DDR-0005 }
-  - { alias: DDR-0019, of: DDR-0006 }
-  - { alias: DDR-0020, of: DDR-0007 }
-  - { alias: DDR-0021, of: DDR-0008 }
   - { alias: DDR-0028, of: DDR-0015 }
   - { alias: DDR-0029, of: DDR-0016 }
   - { alias: DDR-0030, of: DDR-0017 }
