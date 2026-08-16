@@ -13,7 +13,7 @@ env:
 # PIPE-06: third-party actions pinned by full commit SHA:
 #   checkout v4.2.2  = 11bd71901bbe5b1630ceea73d27597364c9af683
 #   upload-artifact v4.6.2 = ea165f8d65b6e75b540449e92b4886f43607fa02
-#   download-artifact v4.3.0 = d3f86a1065b71730e2b17b3c747857c80f9a61d1
+#   download-artifact v4.3.0 = d3f86a106a0bac45b974a628896c90dbdf5c8093
 
 jobs:
   # Job 2 - host GCC: full merge gate + separate characterization report.
@@ -211,7 +211,7 @@ jobs:
           echo "h3lite submodule: $(git submodule status Middlewares/Third_Party/h3lite)"
           grep sha256 Middlewares/Third_Party/h3lite/include/h3lite_regions_table.h | head -4
       - name: Download the exact ARM evidence (no rebuild)
-        uses: actions/download-artifact@d3f86a1065b71730e2b17b3c747857c80f9a61d1
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: arm-evidence
           path: dist/
