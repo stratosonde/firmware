@@ -313,3 +313,11 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   boundary-crossing HIL remains a HIL-phase gate. The identity is recorded
   in the artifact manifest (region_profile: automatic multi-region,
   home=US915).
+- **FREEZE A — flight1-hil-rc1 (tagged 2026-08-16 at 1a02d66):** Phase 0-6 of
+  the pretest-hardening handoff complete; architecture/control-flow freeze
+  in effect. The release-gate CI job packaged and hash-verified the exact
+  arm-matrix artifact (no rebuild) - the only flight-flash candidate.
+  Pipeline validation across the tag required three CI-internal fixes
+  (zero-SHA format-gate base on tag pushes, download-artifact SHA
+  correction, sha256sums self-hash exclusion) - all CI glue, no source
+  changes, disclosed per the freeze rules as commentary-level.
