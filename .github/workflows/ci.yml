@@ -3,12 +3,19 @@ name: CI
 on:
   push:
   pull_request:
+  # flight1-hil-rc1-phase6-pipe08: deterministic log environment (LC_ALL/TZ).
+  # (Phase 6 PIPE-08; tag handling for the release gate lands in P6c.)
+
+env:
+  LC_ALL: C
+  TZ: UTC
 
 jobs:
   host-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # PIPE-06: actions pinned by full commit SHA (v4.2.2).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           # F-013 (#210): the stability suite scans h3lite.c (a submodule) -
           # without this the host gate exits 2 on the missing file.
@@ -22,15 +29,17 @@ jobs:
         run: make -C tests/host sanitize
 
   firmware:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           submodules: recursive
-      - name: Install ARM toolchain
+      - name: Install ARM toolchain (pinned, PIPE-06)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi
+          # noble (ubuntu-24.04) release version, apt integrity-verified
+          sudo apt-get install -y gcc-arm-none-eabi=15:13.2.rel1-2
+          arm-none-eabi-gcc --version
       - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
         run: python3 tools/check_project_cppflags.py
       - name: Build firmware
@@ -45,15 +54,16 @@ jobs:
 
   # FR-20 (#101): the binary that flies must be the binary CI builds.
   firmware-flight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           submodules: recursive
-      - name: Install ARM toolchain
+      - name: Install ARM toolchain (pinned, PIPE-06)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi
+          sudo apt-get install -y gcc-arm-none-eabi=15:13.2.rel1-2
+          arm-none-eabi-gcc --version
       - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
         run: python3 tools/check_project_cppflags.py
       - name: Build flight configuration (flags, not source mutation; PIPE-04/#265)
@@ -77,9 +87,9 @@ jobs:
   # first-party sources (gated), actionlint (gated), clang-format
   # changed-lines (HARD GATE since the 2-space unification, owner decision).
   hygiene:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           submodules: true
           fetch-depth: 0  # the format gate diffs against github.event.before
@@ -91,9 +101,12 @@ jobs:
         run: python3 tools/check_project_cppflags.py
       - name: cppcheck gate (first-party)
         run: bash tools/run_cppcheck.sh
-      - name: actionlint
+      # PIPE-06: checksum-verified actionlint (v1.7.7).
+      - name: actionlint (pinned + sha256-verified)
         run: |
-          curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
+          curl -sSL -o /tmp/actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar xzf /tmp/actionlint.tar.gz actionlint
           ./actionlint
       - name: clang-format changed-lines gate
         run: bash tools/check_format.sh "${{ github.event.before }}"
