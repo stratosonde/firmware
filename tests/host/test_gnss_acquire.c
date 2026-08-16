@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 #include "gnss_acquire.h"
 
@@ -108,6 +109,61 @@ int main(void)
     CHECK(GnssAcquire_PackageComplete(true, false) == false);   /* position w/o valid RMC time */
     CHECK(GnssAcquire_PackageComplete(false, true) == false);   /* time w/o good-quality fix */
     CHECK(GnssAcquire_PackageComplete(false, false) == false);
+
+    /* ---- A5 (#284/H-08): GnssAcquire_FixAccepted contract ----
+     * The coordinate/token facts arrive as candidate fields; their
+     * computation (GNSS_ValidateCoordinates range check, genuine (0,0)
+     * acceptance, token presence) is covered by the DR-02/R2-16 suites in
+     * test_dr_20260812.c. The time/position package split is the
+     * PackageComplete truth table above. */
+    const GnssFixLimits_t limits = { .minimum_satellites = 4, .maximum_hdop_x10 = 25 };
+    GnssFixCandidate_t c = {
+        .valid = true, .position_present = true, .fix_quality_valid = true,
+        .coordinates_valid = true, .satellites = 6, .hdop = 1.5f
+    };
+    CHECK(GnssAcquire_FixAccepted(&c, &limits));                 /* all good: accept */
+
+    /* satellites: one below / exactly at / above the configured minimum */
+    c.satellites = 3; CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    c.satellites = 4; CHECK(GnssAcquire_FixAccepted(&c, &limits));   /* boundary equality accepts */
+    c.satellites = 5; CHECK(GnssAcquire_FixAccepted(&c, &limits));
+
+    /* HDOP: below / exactly at / above the configured maximum (x10 exact) */
+    c.hdop = 2.4f;  CHECK(GnssAcquire_FixAccepted(&c, &limits));
+    c.hdop = 2.5f;  CHECK(GnssAcquire_FixAccepted(&c, &limits));     /* boundary equality accepts */
+    c.hdop = 2.55f; CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+
+    /* non-finite / negative / unrepresentable HDOP: reject before conversion */
+    c.hdop = NAN;       CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    c.hdop = INFINITY;  CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    c.hdop = -INFINITY; CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    c.hdop = -0.1f;     CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    c.hdop = 1e38f;     CHECK(!GnssAcquire_FixAccepted(&c, &limits)); /* *10 overflows or compares huge */
+    c.hdop = 1.5f;
+
+    /* every candidate invariant is load-bearing */
+    c.valid = false;             CHECK(!GnssAcquire_FixAccepted(&c, &limits)); c.valid = true;
+    c.position_present = false;  CHECK(!GnssAcquire_FixAccepted(&c, &limits)); c.position_present = true;
+    c.fix_quality_valid = false; CHECK(!GnssAcquire_FixAccepted(&c, &limits)); c.fix_quality_valid = true;
+    c.coordinates_valid = false; CHECK(!GnssAcquire_FixAccepted(&c, &limits)); c.coordinates_valid = true;
+
+    /* null safety */
+    CHECK(!GnssAcquire_FixAccepted(NULL, &limits));
+    CHECK(!GnssAcquire_FixAccepted(&c, NULL));
+
+    /* the limits are CONSUMED, not hardcoded: HDOP 3.0 (accepted by the old
+     * hardcoded 5.0 driver predicate - see test_gnss_fix_acceptance.c) is
+     * rejected under the configured 2.5, and the boundary moves with config */
+    c.hdop = 3.0f; CHECK(!GnssAcquire_FixAccepted(&c, &limits));
+    {
+        const GnssFixLimits_t loose = { .minimum_satellites = 4, .maximum_hdop_x10 = 50 };
+        CHECK(GnssAcquire_FixAccepted(&c, &loose));
+    }
+    {
+        const GnssFixLimits_t strict = { .minimum_satellites = 6, .maximum_hdop_x10 = 25 };
+        c.hdop = 1.5f; c.satellites = 5; CHECK(!GnssAcquire_FixAccepted(&c, &strict));
+        c.satellites = 6; CHECK(GnssAcquire_FixAccepted(&c, &strict));
+    }
 
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;

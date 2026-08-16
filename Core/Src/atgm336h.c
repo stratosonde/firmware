@@ -523,6 +523,11 @@ bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss)
   * @param  hgnss: Pointer to GNSS handle structure
   * @retval true if fix is good quality, false otherwise
   * @note   Good quality defined as: valid, 3D fix, 4+ satellites, HDOP <= 5.0
+  * @note   A5 (#284/H-08): this is a low-level driver invariant with
+  *         HARDCODED thresholds - NOT the mission fix-acceptance predicate.
+  *         The one authoritative, configured acceptance rule is
+  *         GnssAcquire_FixAccepted() (gnss_acquire.c); lora_app.c routes
+  *         every location-freshness decision through it.
   */
 bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss)
 {

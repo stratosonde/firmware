@@ -1082,6 +1082,37 @@ typedef enum {
   GNSS_ACQUIRE_FRESH_GOOD_FIX
 } GnssAcquisitionResult_t;
 
+/* A5 (#284/H-08): the ONE authoritative fix-acceptance decision. The
+ * configured limits are snapshotted once per acquisition/cycle; the
+ * candidate is built from the current hgnss fields with designated
+ * initializers and judged by the pure gnss_acquire predicate. Replaces the
+ * hardcoded 4-sat / HDOP <= 5.0 driver predicate on this path - a
+ * below-configured-threshold fix must never become fresh or authoritative
+ * (reset the freshness budget, clear stale, persist trusted position, or
+ * authorize a region switch). */
+static GnssFixLimits_t GnssMissionFixLimits(void)
+{
+  GnssFixLimits_t limits = {
+    .minimum_satellites = Config_Get()->gps_min_satellites,
+    .maximum_hdop_x10 = Config_Get()->gps_max_hdop_x10
+  };
+  return limits;
+}
+
+static bool GnssMissionFixAccepted(const GnssFixLimits_t *limits)
+{
+  const GnssFixCandidate_t candidate = {
+    .valid = hgnss.data.valid,
+    .position_present = hgnss.data.position_present,
+    .fix_quality_valid = (hgnss.data.fix_quality != GNSS_FIX_INVALID),
+    .coordinates_valid = GNSS_ValidateCoordinates(hgnss.data.latitude,
+                                                  hgnss.data.longitude),
+    .satellites = hgnss.data.satellites,
+    .hdop = hgnss.data.hdop
+  };
+  return GnssAcquire_FixAccepted(&candidate, limits);
+}
+
 static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
                                               uint32_t *ttf_ms,
                                               bool *time_disciplined_this_wake)
@@ -1125,6 +1156,10 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
   uint32_t gps_start = 0;
   *ttf_ms = 0;  /* Will be updated when fix is obtained */
   *time_disciplined_this_wake = false;
+
+  /* A5 (#284/H-08): configured acceptance limits, snapshotted once per
+   * acquisition; every freshness decision below uses the one predicate. */
+  const GnssFixLimits_t fix_limits = GnssMissionFixLimits();
   
   SONDE_LOG("Waking GPS from standby for fix acquisition (%lus max)...\r\n", 
                     (unsigned long)(gps_timeout_ms / 1000));
@@ -1192,7 +1227,7 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
        * before RMC date/time. Keep processing the same wake until both are
        * present, otherwise a receiver that emits GGA first can be rejected on
        * every cycle even though a valid RMC sentence was milliseconds away. */
-      if (GnssAcquire_PackageComplete(GNSS_IsFixGoodQuality(&hgnss),
+      if (GnssAcquire_PackageComplete(GnssMissionFixAccepted(&fix_limits),
                                       FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
                                                                           hgnss.data.timestamp)))
       {
@@ -2305,7 +2340,8 @@ static void SendTxData(void)
   hgnss.data.date = 150826U;
   hgnss.data.timestamp = 120000U;
   time_disciplined_this_wake = SysTimeSyncFromGnss();
-  gnss_result = (time_disciplined_this_wake && GNSS_IsFixGoodQuality(&hgnss))
+  const GnssFixLimits_t fix_limits = GnssMissionFixLimits();  /* A5 (#284) */
+  gnss_result = (time_disciplined_this_wake && GnssMissionFixAccepted(&fix_limits))
                 ? GNSS_ACQUIRE_FRESH_GOOD_FIX
                 : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
   

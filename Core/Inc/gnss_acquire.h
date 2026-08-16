@@ -60,6 +60,46 @@ uint32_t GnssAcquire_IterationBudget(uint32_t timeout_ms);
   */
 bool GnssAcquire_PackageComplete(bool fix_good_quality, bool gnss_datetime_valid);
 
+/**
+  * @brief  The ONE authoritative, configured mission fix-acceptance rule
+  *         (2026-08-15 handoff A5; tracker #284/H-08). Pure: no HAL, no
+  *         configuration storage, no globals - the adapter snapshots the
+  *         configured limits once per acquisition/cycle and builds the
+  *         candidate from the current fix fields with designated
+  *         initializers.
+  *
+  *         Every location-freshness decision must use this one result. Only
+  *         an accepted fix may return GNSS_ACQUIRE_FRESH_GOOD_FIX, clear the
+  *         EnvSensors GNSS stale state, update the fresh-fix epoch, persist
+  *         the trusted last position, or authorize a region switch. A
+  *         rejected candidate may still discipline the RTC via valid RMC
+  *         time; its position stays rejected and stale.
+  */
+typedef struct {
+    bool    valid;               /* fix latch (RMC 'A' / data.valid) */
+    bool    position_present;    /* real lat/lon tokens (STAB-P1#1/#237) */
+    bool    fix_quality_valid;   /* fix_quality != GNSS_FIX_INVALID */
+    bool    coordinates_valid;   /* range check; (0,0) is genuine (R32/#57) */
+    uint8_t satellites;
+    float   hdop;
+} GnssFixCandidate_t;
+
+typedef struct {
+    uint8_t minimum_satellites;  /* config gps_min_satellites (default 4) */
+    uint8_t maximum_hdop_x10;    /* config gps_max_hdop_x10 (default 25 = 2.5) */
+} GnssFixLimits_t;
+
+/**
+  * @brief  Configured acceptance: all candidate invariants hold, satellites
+  *         >= the configured minimum, and HDOP <= the configured maximum.
+  *         Equality at both configured boundaries is accepted. Non-finite or
+  *         negative HDOP is rejected before any conversion/comparison; the
+  *         comparison stays in the float domain (the x10 limit is exact), so
+  *         no unsafe float-to-integer conversion ever runs. NULL -> false.
+  */
+bool GnssAcquire_FixAccepted(const GnssFixCandidate_t *candidate,
+                             const GnssFixLimits_t *limits);
+
 #ifdef __cplusplus
 }
 #endif

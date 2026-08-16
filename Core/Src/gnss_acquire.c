@@ -11,6 +11,9 @@
 
 #include "gnss_acquire.h"
 
+#include <math.h>
+#include <stddef.h>
+
 uint32_t GnssAcquire_DaysFromCivil(int y, unsigned m, unsigned d)
 {
   y -= (m <= 2);
@@ -41,3 +44,28 @@ bool GnssAcquire_PackageComplete(bool fix_good_quality, bool gnss_datetime_valid
 {
   return fix_good_quality && gnss_datetime_valid;
 }
+
+bool GnssAcquire_FixAccepted(const GnssFixCandidate_t *candidate,
+                             const GnssFixLimits_t *limits)
+{
+  if (candidate == NULL || limits == NULL) {
+    return false;
+  }
+  if (!candidate->valid || !candidate->position_present ||
+      !candidate->fix_quality_valid || !candidate->coordinates_valid) {
+    return false;
+  }
+  /* Non-finite or negative HDOP is rejected BEFORE any conversion or
+   * comparison. The comparison itself stays in the float domain with the
+   * x10 limit exact, so no unsafe float-to-integer conversion ever runs;
+   * hdop * 10 overflow yields +Inf, which fails the comparison, so
+   * unrepresentable values reject safely. Boundary equality accepts. */
+  if (!isfinite(candidate->hdop) || candidate->hdop < 0.0f) {
+    return false;
+  }
+  if (candidate->satellites < limits->minimum_satellites) {
+    return false;
+  }
+  return (candidate->hdop * 10.0f) <= (float)limits->maximum_hdop_x10;
+}
+
