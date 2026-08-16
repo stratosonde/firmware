@@ -222,3 +222,16 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   unchanged - the policy state is now honest. The h3lite.c global-
   coverage claim correction is submodule-side and rides with the GEO-04
   guard commit + bump.
+- **BEH-05 / #286 (FIXED):** the recovery traversal is newest-first end
+  to end. A third edge, pending_frontier (persisted in header
+  reserved[1]; legacy zero restarts the drain at the top, deduped),
+  drains the pending-live range descending with per-record send-time
+  marking; a RAM-only drain_top folds completed episodes so mid-drain
+  writes never cause re-offers (one deduped re-offer per preempting
+  live-sent record per episode). Legacy ascending-order pins re-based
+  to the descending contract; the RV-01 anti-wedge test now proves the
+  corrupt run no longer gates the good records above it. Red commit
+  b11f86c (15 intentionally failing checks across the five handoff
+  classes), fix commit follows. TransmissionModule.md section 5 and
+  FlashLogging.md updated in-commit (also removed the stale
+  pending_tx_committed claim from FlashLogging.md).

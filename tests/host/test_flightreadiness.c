@@ -238,15 +238,15 @@ static void test_flashlog_basic_roundtrip(void)
     CHECK_EQ_I(FlashLog_ReadRecord(&hlog, &r, 4), FLASH_LOG_OK);
     CHECK_EQ_I(r.sequence, 0);
 
-    /* R3-04 (#218): recovery read; a fresh log is all pending-live, read
-     * ascending from the high water. */
+    /* R3-04 (#218) + BEH-05 (#286): recovery read; a fresh log is all
+     * pending-live, read DESCENDING from the drain edge (newest-first). */
     FlashLog_Record_t batch[6];
     uint32_t got = 0, skipped = 0;
     CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, 6, &got, &skipped), FLASH_LOG_OK);
     CHECK_EQ_I(got, 5);
     CHECK_EQ_I(skipped, 0);
-    CHECK_EQ_I(batch[0].sequence, 0);
-    CHECK_EQ_I(batch[4].sequence, 4);
+    CHECK_EQ_I(batch[0].sequence, 4);
+    CHECK_EQ_I(batch[4].sequence, 0);
 
     /* advance at send time, per record */
     for (uint32_t i = 0; i < got; i++) {
@@ -345,7 +345,10 @@ static void test_sp19_high_water_never_behind_oldest(void)
     CHECK(oldest > 0U);   /* the ring really wrapped */
     CHECK_REGRESSION(skipped == 0U, "SP-19-no-dead-probes");
     CHECK_REGRESSION(got == 64U, "SP-19-full-batch");
-    CHECK_REGRESSION(got == 64U && batch[0].sequence == oldest, "SP-19-first-is-oldest");
+    /* BEH-05 (#286): the drain is newest-first - the batch leads with the
+     * newest RESIDENT record, not the oldest. */
+    CHECK_REGRESSION(got == 64U && batch[0].sequence == hlog.next_sequence - 1U,
+                     "SP-19-first-is-newest");
     /* The discriminating assertion: H was lifted to oldest (pre-fix it
      * still sits at 0 while the ring starts at 64). */
     CHECK_REGRESSION(hlog.tx_high_water == oldest, "SP-19-h-lifted");
@@ -388,21 +391,25 @@ static void test_fifo_skip_contract(void)
 
     /* The returned array is NOT contiguous in sequence (the machine-checkable
      * statement of FR-07): the v6 wire format carries per-record explicit
-     * sequence identity precisely because of this. */
-    CHECK_EQ_I(batch[0].sequence, 0);
-    CHECK_EQ_I(batch[1].sequence, 1);
-    CHECK_EQ_I(batch[2].sequence, 3);   /* NOT 2 — the gap */
-    CHECK(batch[2].sequence != batch[1].sequence + 1U);
+     * sequence identity precisely because of this. BEH-05 (#286): the order
+     * is descending, so the hole at seq 2 sits between batch[2] and
+     * batch[3]. */
+    CHECK_EQ_I(batch[0].sequence, 5);
+    CHECK_EQ_I(batch[1].sequence, 4);
+    CHECK_EQ_I(batch[2].sequence, 3);
+    CHECK_EQ_I(batch[3].sequence, 1);   /* NOT 2 — the gap */
+    CHECK(batch[3].sequence != batch[2].sequence - 1U);
 
-    /* R3-04: per-record advance at send. The corrupt record 2 is skipped on
-     * every read; marking the good records leaves exactly it behind until a
-     * later leading-run retire. */
+    /* R3-04 + BEH-05: per-record advance at send. The corrupt record 2 is
+     * skipped on every read; marking the good records descends the drain
+     * edge past them and folds the bottom edge when the range completes. */
     CHECK_EQ_I(hlog.tx_high_water, 0);
     for (uint32_t i = 0; i < got; i++) {
         CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
     }
-    /* 0,1 marked live-ascending -> H = 2; 3,4,5 raise H to 6. */
-    CHECK_EQ_I(hlog.tx_high_water, 6);
+    /* 5,4,3 descend B to 3; 1 descends B to 1 (jumping the corrupt 2); 0
+     * meets H and folds the range closed. */
+    CHECK_EQ_I(hlog.pending_frontier, hlog.tx_high_water);
     CHECK(!FlashLog_HasUnsentData(&hlog));   /* 2 is corrupt: unrecoverable, excluded */
 
     fake_w25q_free();
@@ -519,9 +526,18 @@ static void test_header_pingpong_survives_failed_writes(void)
 
     /* Advance the transmission watermark so the header-loss check below is
      * load-bearing (an untouched watermark is 0 on both sides of the bug).
-     * R3-04: per-record advance; marking seq 9 raises H to 10. */
-    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 9U), FLASH_LOG_OK);
-    CHECK_EQ_I(hlog.tx_high_water, 10);
+     * R3-04 + BEH-05 (#286): per-record advance; offering and sending the
+     * 10 newest records descends the drain edge to 30. */
+    {
+        FlashLog_Record_t b10[10];
+        uint32_t got10 = 0, skip10 = 0;
+        CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, b10, 10, &got10, &skip10), FLASH_LOG_OK);
+        CHECK_EQ_I(got10, 10);
+        for (uint32_t i = 0; i < got10; i++) {
+            CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, b10[i].sequence), FLASH_LOG_OK);
+        }
+        CHECK_EQ_I(hlog.pending_frontier, 30);
+    }
 
     /* Control: ONE failed write must survive even on the unfixed tree (the
      * second header copy carries the unit). Guards the test itself. */
@@ -531,7 +547,7 @@ static void test_header_pingpong_survives_failed_writes(void)
         FlashLog_HandleTypeDef reload1;
         CHECK_EQ_I(FlashLog_Init(&reload1, &hw), FLASH_LOG_OK);
         CHECK_EQ_I(reload1.record_count, 40);
-        CHECK_EQ_I(reload1.tx_high_water, 10);
+        CHECK_EQ_I(reload1.pending_frontier, 30);   /* BEH-05: the drain edge persists */
     }
 
     /* The bug: a SECOND consecutive failed write. On the unfixed tree the
@@ -543,7 +559,7 @@ static void test_header_pingpong_survives_failed_writes(void)
         FlashLog_HandleTypeDef reload2;
         CHECK_EQ_I(FlashLog_Init(&reload2, &hw), FLASH_LOG_OK);
         CHECK_REGRESSION(reload2.record_count == 40, "FINDING-4");
-        CHECK_REGRESSION(reload2.tx_high_water == 10, "FINDING-4");
+        CHECK_REGRESSION(reload2.pending_frontier == 30, "FINDING-4");
         printf("   after 2 failed writes: record_count=%lu (want 40)\n",
                (unsigned long)reload2.record_count);
     }
@@ -750,21 +766,21 @@ static void test_r2_02_watermark_overadvance_on_wrap(void)
     }
     CHECK_REGRESSION(reached == 1, "R2-02-reach");
 
-    /* The first good record read is the oldest still retained. */
-    CHECK_EQ_I(batch[0].sequence,
-               hlog.next_sequence - FlashLog_GetAvailableRecords(&hlog));
+    /* BEH-05 (#286): the first good record read is the NEWEST still
+     * retained (the drain is descending). */
+    CHECK_EQ_I(batch[0].sequence, hlog.next_sequence - 1U);
 
-    /* Mark exactly what was sent, by absolute sequence; the high water must
-     * land exactly past it. */
+    /* Mark exactly what was sent, by absolute sequence; the drain edge must
+     * land exactly on the lowest sent. */
     uint32_t last_sent = batch[got - 1].sequence;
     for (uint32_t i = 0; i < got; i++) {
         CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
     }
-    CHECK_REGRESSION(hlog.tx_high_water == last_sent + 1U, "R2-02");
+    CHECK_REGRESSION(hlog.pending_frontier == last_sent, "R2-02");
 
-    /* And the API must refuse to move the watermark backward. */
-    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, 1U), FLASH_LOG_OK);
-    CHECK_EQ_I(hlog.tx_high_water, last_sent + 1U);
+    /* And a repeat mark of an already-covered record is a no-op. */
+    CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[0].sequence), FLASH_LOG_OK);
+    CHECK_EQ_I(hlog.pending_frontier, last_sent);
 
     fake_w25q_free();
 }
@@ -882,32 +898,37 @@ static void test_rv01_all_corrupt_window_wedge(void)
     FlashLog_Record_t batch[BULK_V6_MAX_RECORDS];
     uint32_t got = 0, skipped = 0;
 
-    /* Ten consecutive bulk cycles, no TX (nothing reads clean). The log must
-     * make forward progress across the unrecoverable run WITHOUT needing a
-     * successful transmission. R3-04: the leading corrupt run retires inline
-     * (live range ascending from the high water). */
-    int cycles_with_no_progress = 0;
-    for (int cycle = 0; cycle < 10; cycle++) {
+    /* BEH-05 (#286): the drain descends, so the 100 GOOD records at the top
+     * of the ring are offered and sent first (newest-first) - the corrupt
+     * run no longer gates them at all. */
+    uint32_t guard = 0;
+    while (hlog.pending_frontier > 300U && guard++ < 1000U) {
         got = 0; skipped = 0;
-        uint32_t wm = hlog.tx_high_water;
+        CHECK_EQ_I(FlashLog_GetRecoveryRecords(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped), FLASH_LOG_OK);
+        CHECK_EQ_I(skipped, 0);
+        for (uint32_t i = 0; i < got; i++) {
+            CHECK_EQ_I(FlashLog_MarkRecoverySent(&hlog, batch[i].sequence), FLASH_LOG_OK);
+        }
+    }
+    CHECK_REGRESSION(hlog.pending_frontier == 300U, "RV-01-good-first");
+
+    /* Now the drain edge sits on the 300-long corrupt run. Consecutive
+     * no-TX cycles must still make progress: the leading corrupt run
+     * retires inline (B descends through it, bounded by the 256-probe
+     * budget per call) until nothing unsendable remains. */
+    int cycles_with_no_progress = 0;
+    for (int cycle = 0; cycle < 10 && FlashLog_HasUnsentData(&hlog); cycle++) {
+        got = 0; skipped = 0;
+        uint32_t wm = hlog.pending_frontier;
         FlashLog_GetRecoveryRecords(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
-        if (got == 0 && hlog.tx_high_water == wm) {
+        if (got == 0 && hlog.pending_frontier == wm) {
             cycles_with_no_progress++;
         }
     }
-    printf("   after 10 no-TX cycles: high water=%lu (was %lu)\n",
-           (unsigned long)hlog.tx_high_water, (unsigned long)watermark_before);
+    printf("   after no-TX cycles: drain edge=%lu high water=%lu\n",
+           (unsigned long)hlog.pending_frontier, (unsigned long)hlog.tx_high_water);
     CHECK_REGRESSION(cycles_with_no_progress == 0, "RV-01");
-    CHECK_REGRESSION(hlog.tx_high_water > watermark_before, "RV-01-wm");
-
-    /* The 100 good records behind the corrupt run must become reachable. */
-    int reached_good = 0;
-    for (int cycle = 0; cycle < 400 && !reached_good; cycle++) {
-        got = 0; skipped = 0;
-        FlashLog_GetRecoveryRecords(&hlog, batch, BULK_V6_MAX_RECORDS, &got, &skipped);
-        if (got > 0) reached_good = 1;
-    }
-    CHECK_REGRESSION(reached_good == 1, "RV-01-reach");
+    CHECK_REGRESSION(!FlashLog_HasUnsentData(&hlog), "RV-01-drained");
 
     fake_w25q_free();
 }

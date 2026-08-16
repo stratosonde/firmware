@@ -99,7 +99,9 @@ typedef struct __attribute__((packed)) {
                                    // handed to the radio (monotonic up)
     uint32_t reserved[2];          // reserved[0] v5: RECOVERY FRONTIER — the
                                    // one-pass walker has visited every seq >=
-                                   // frontier (monotonic down)
+                                   // frontier (monotonic down);
+                                   // reserved[1]: PENDING FRONTIER (BEH-05/#286)
+                                   // — the descending pending-live drain edge
     uint32_t crc32;
 } FlashLog_Header_t;
 ```
@@ -109,21 +111,26 @@ record layout (D5/#35, old headers fail validation → clean init, acceptable
 pre-launch); v5 (R3-04/#218, DDR-0005) redefined the two watermark semantics for
 the one-pass recovery walker.
 
-## One-Pass Recovery Walker (DDR-0005)
+## One-Pass Recovery Walker (DDR-0005, BEH-05/#286)
 
-`tx_high_water` (monotonic up) and `recovery_frontier` (monotonic down) bracket
-the not-yet-replayed history exactly once: the walker serves records from
-`tx_high_water - 1` downward and retires each below the frontier. It never
-rewalks, never needs a persistent job queue, and tolerates gaps/duplicates
-(SI-018). Explicit backend record-requests outrank the walker (SI-017 —
+Three edges bracket the not-yet-replayed history exactly once, all served
+newest-first: `pending_frontier` (B, persisted in `reserved[1]`) drains the
+pending-live range `[tx_high_water, B)` descending — a fresh outage begins
+with the NEWEST missed record; `recovery_frontier` (F) walks the backlog
+`[oldest, F)` descending; `tx_high_water` (H) is the bottom edge the drain
+folds into when an episode completes (the RAM-only `drain_top` remembers the
+episode's top). A write mid-episode defers to the episode fold, so an
+in-flight drain never re-offers what it sent; a preempting live-sent record
+re-offers at most once per episode (deduped, SI-018). It never rewalks,
+never needs a persistent job queue, and tolerates gaps/duplicates (SI-018).
+Explicit backend record-requests outrank the walker (SI-017 —
 requested-record lookup is not yet implemented, see the conformance worklist).
 
 `FlashLog_DeferHeaderSync()` / `FlashLog_FlushHeaderSync()` batch the watermark
 persist across a bulk burst (Finding #8): `MarkRecoverySent` skips the sector
-erase per packet and the caller flushes once at burst end. The
-`pending_tx_committed` gate (C-01/#270) keeps a reset between send and
-watermark persist from double-committing — the reset-edge duplicate lands on
-the backend, which dedups (SI-018).
+erase per packet and the caller flushes once at burst end. A reset between
+send and watermark persist replays at most the in-flight burst — the
+reset-edge duplicate lands on the backend, which dedups (SI-018).
 
 ## API (actual — `flash_log.h`)
 

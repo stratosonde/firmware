@@ -53,8 +53,14 @@ that (DDR-0003).
    further RF work this wake** (SI-016, DDR-0019): no ACK → end of RF work.
    No same-wake probe retry, no backlog dump without probe success.
 5. **Burst** (only after probe ACK): Port 11 archive packets, newest→oldest
-   via the one-pass recovery walker (DDR-0005; `tx_high_water` monotonic up /
-   `recovery_frontier` monotonic down — never rewalks). Budget knobs (config,
+   via the one-pass recovery walker (DDR-0005). Three edges: `pending_frontier`
+   (B, the pending-live drain edge, persisted in header `reserved[1]`) drains
+   `[tx_high_water, B)` descending, `recovery_frontier` (F) walks the backlog
+   `[oldest, F)` descending, and `tx_high_water` (H) is the bottom edge the
+   drain folds into (BEH-05/#286: a fresh outage now drains newest-first;
+   a mid-episode write defers to the episode fold, so an in-flight drain
+   never re-offers what it sent — at most one deduped re-offer of a
+   preempting live-sent record per episode). Budget knobs (config,
    §6b): `max_bulk_packets` (20), `bulk_battery_min_mv` (5000),
    `bulk_timeout_ms` (60 s). The burst runs under a hard deadline with no
    timer re-arm (LT-07/#277). Watermarks advance at send time (no commit-on-ACK,

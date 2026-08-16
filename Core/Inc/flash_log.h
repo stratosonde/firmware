@@ -164,7 +164,9 @@ typedef struct __attribute__((packed)) {
   uint32_t reserved[2];          /**< reserved[0] v5: RECOVERY FRONTIER - the
                                          one-pass walker has visited every
                                          sequence >= frontier (monotonic
-                                         down); reserved[1] free */
+                                         down); reserved[1]: PENDING
+                                          FRONTIER (BEH-05/#286) - the
+                                          pending-live drain edge */
   uint32_t crc32;                /**< CRC32 of preceding bytes */
 } FlashLog_Header_t;
 
@@ -180,6 +182,19 @@ typedef struct {
   uint32_t next_sequence;     /**< Next record sequence number */
   uint32_t tx_high_water;     /**< v5: highest sequence ever handed to the radio (monotonic up) */
   uint32_t recovery_frontier; /**< v5: one-pass walker watermark — every seq >= frontier visited (monotonic down) */
+  uint32_t pending_frontier;  /**< BEH-05 (#286): pending-live drain edge — the
+                                   unsent pending range is [tx_high_water,
+                                   pending_frontier), drained DESCENDING
+                                   (newest-first). Persisted in header
+                                   reserved[1]; headers that predate it
+                                   (reserved[1] == 0) restart the drain at
+                                   next_sequence (one re-walk, deduped). */
+  uint32_t drain_top;         /**< BEH-05 (#286): top of the current drain
+                                   episode (RAM-only). When the drain edge
+                                   meets tx_high_water the episode is done:
+                                   H lifts to drain_top and the edge folds
+                                   to next_sequence, picking up whatever
+                                   accumulated above it mid-episode. */
   uint32_t header_generation; /**< F-007/R12 (#50): monotonic header generation, incremented every write */
   uint8_t active_header;      /**< Active header slot (0 or 1) */
   uint8_t sync_deferred;      /**< Finding #8: MarkRecoverySent skips SyncHeader while set (bulk burst) */

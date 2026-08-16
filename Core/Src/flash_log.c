@@ -109,10 +109,10 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog) {
     return false;
   }
 
-  /* v5 one-pass (R3-04/#218): sendable = pending-live (seq >= tx_high_water,
-   * never handed to the radio) UNION walker-eligible (oldest <= seq <
-   * recovery_frontier). Invariant: recovery_frontier <= tx_high_water. */
-  if (hlog->next_sequence > hlog->tx_high_water) {
+  /* v5 one-pass (R3-04/#218) + BEH-05 (#286): sendable = pending-drain
+   * ([tx_high_water, pending_frontier)) UNION walker-eligible (oldest <=
+   * seq < recovery_frontier). Invariant: F <= H <= B <= next_sequence. */
+  if (hlog->pending_frontier > hlog->tx_high_water) {
     return true; /* pending-live */
   }
   return (hlog->recovery_frontier > FlashLog_OldestSequence(hlog));
@@ -121,17 +121,21 @@ bool FlashLog_HasUnsentData(FlashLog_HandleTypeDef *hlog) {
 /* R3-04 (#218, DDR-0005 BR-TX-008..011): one-pass recovery read.
  * Supersedes FlashLog_GetUnsentRecordsFIFO (C4/F15).
  *
- * Exact O(1)-state model (invariant F <= H; offered = [F, H) ALWAYS):
- *   tx_high_water H     - pending-live = [H, next_sequence): records written
- *                         but never sent. Read ASCENDING and marked per
- *                         record (H := seq + 1) — exact, no resend, no
- *                         stranding even when a payload budget cuts a batch.
+ * Exact O(1)-state model (invariants F <= H <= B <= next):
+ *   pending_frontier B  - BEH-05 (#286): pending-live = [H, B), drained
+ *                         DESCENDING (newest-first, BR-TX-008) and marked
+ *                         per record (B := seq). A fresh outage therefore
+ *                         begins with the NEWEST missed record, not the
+ *                         oldest. B is persisted in header reserved[1].
+ *   tx_high_water H     - bottom edge of the pending drain; rises only when
+ *                         the drain edge meets it (the whole pending range
+ *                         is then sent/retired) or on the legacy bottom-
+ *                         edge live-send lift.
  *   recovery_frontier F - the BACKLOG walker: unsent = [oldest_seq, F).
- *                         Read DESCENDING (BR-TX-008 newest-first archive
- *                         recovery) and marked per record (F := seq).
- * The live range leads the batch only while the live backlog is small
- * (the common case: the current cycle's record goes out in its own
- * opportunity, BR-TX-005); the deep archive drains newest-first via F.
+ *                         Read DESCENDING and marked per record (F := seq).
+ * The pending drain leads the batch (the common case: the current cycle's
+ * record goes out in its own opportunity, BR-TX-005); the deep archive
+ * drains newest-first via F.
  * Corrupt/torn records are skipped and counted; a contiguous corrupt run at
  * a leading edge is retired once after the loop (T4/RV-01/S-G anti-wedge
  * discipline); holes past a good record retire when a later send marks
@@ -184,14 +188,30 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
     hlog->tx_high_water = oldest;
   }
 
+  /* BEH-05: keep the drain edge and episode top inside
+   * [tx_high_water, next_sequence]. */
+  if (hlog->pending_frontier > hlog->next_sequence) {
+    hlog->pending_frontier = hlog->next_sequence;
+  }
+  if (hlog->pending_frontier < hlog->tx_high_water) {
+    hlog->pending_frontier = hlog->tx_high_water;
+  }
+  if (hlog->drain_top > hlog->next_sequence) {
+    hlog->drain_top = hlog->next_sequence;
+  }
+  if (hlog->drain_top < hlog->pending_frontier) {
+    hlog->drain_top = hlog->pending_frontier;
+  }
+
   uint32_t sendable = FlashLog_GetUnsentCount(hlog);
   if (max_count > sendable) {
     max_count = sendable;
   }
 
-  /* Live range [tx_high_water, next_sequence) ASCENDING first, then the
-   * walker range (recovery_frontier - 1 .. oldest) DESCENDING. int64 loop
-   * vars: the walker range can legitimately reach seq 0. */
+  /* BEH-05 (#286): pending-live [tx_high_water, pending_frontier) DESCENDING
+   * first (a fresh outage drains newest-first), then the walker range
+   * (recovery_frontier - 1 .. oldest) DESCENDING. int64 loop vars: both
+   * ranges can legitimately reach seq 0. */
   uint32_t retire_live = 0; /* S-G (#214): deferred leading-run retire */
   uint32_t retire_walker = 0;
   bool live_retire_pending = false;
@@ -200,23 +220,20 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
   for (int range = 0; range < 2 && (*actual_count) < max_count &&
                       probes < FLASH_LOG_MAX_PROBES_PER_CALL;
        range++) {
-    int64_t seq, seq_end, step;
+    int64_t seq, seq_end;
     if (range == 0) {
-      if (hlog->next_sequence <= hlog->tx_high_water)
+      if (hlog->pending_frontier <= hlog->tx_high_water)
         continue;
-      seq = (int64_t)hlog->tx_high_water; /* ascending */
-      seq_end = (int64_t)hlog->next_sequence - 1;
-      step = 1;
+      seq = (int64_t)hlog->pending_frontier - 1; /* descending */
+      seq_end = (int64_t)hlog->tx_high_water;
     } else {
       if (hlog->recovery_frontier <= oldest)
         continue;
       seq = (int64_t)hlog->recovery_frontier - 1; /* descending */
       seq_end = (int64_t)oldest;
-      step = -1;
     }
 
-    for (; (step > 0) ? (seq <= seq_end) : (seq >= seq_end);
-         seq += step) {
+    for (; seq >= seq_end; seq--) {
       if ((*actual_count) >= max_count ||
           probes >= FLASH_LOG_MAX_PROBES_PER_CALL)
         break;
@@ -243,17 +260,14 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
           (*skipped_count)++;
         }
         if (*actual_count == 0) {
+          /* BEH-05: BOTH ranges now walk descending, so both track the
+           * LOWEST corrupt of the leading run; the deferred retire
+           * (B := seq for the pending drain, F := seq for the walker)
+           * covers the contiguous run down from the range's top edge. */
           if (range == 0) {
-            /* ascending: the leading corrupt run is contiguous
-             * from tx_high_water; tracking the LAST (highest)
-             * corrupt lets the deferred retire H := seq + 1 cover
-             * the whole run. */
             retire_live = (uint32_t)seq;
             live_retire_pending = true;
           } else {
-            /* descending: track the LOWEST corrupt of the leading
-             * run; retiring it (F := seq) covers the contiguous
-             * run down from recovery_frontier - 1. */
             retire_walker = (uint32_t)seq;
             walker_retire_pending = true;
           }
@@ -267,10 +281,11 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
 
   /* S-G (#214): one deferred retire per range, after the loop — never a
    * header sector erase per corrupt record. MarkRecoverySent honors the
-   * deferred-header batching (#8) and both monotonicities. The leading
-   * corrupt run is contiguous while *actual_count == 0:
-   *   live (ascending):   retire_live = HIGHEST corrupt; H := it + 1
-   *   walker (descending): retire_walker = LOWEST corrupt; F := it */
+   * deferred-header batching (#8) and the edge monotonicities. The leading
+   * corrupt run is contiguous while *actual_count == 0; both ranges walk
+   * descending (BEH-05), so both retire the LOWEST corrupt of the run:
+   *   pending drain: B := retire_live
+   *   walker:        F := retire_walker */
   if (live_retire_pending) {
     FlashLog_MarkRecoverySent(hlog, retire_live);
   }
@@ -286,26 +301,50 @@ FlashLog_StatusTypeDef FlashLog_GetRecoveryRecords(FlashLog_HandleTypeDef *hlog,
  * Supersedes FlashLog_CommitThrough (R2-02/#106) and the count-based
  * FlashLog_MarkRecordsTransmitted.
  *
- * Two monotone watermarks (invariant: recovery_frontier <= tx_high_water):
- *   tx_high_water H    - first never-sent (pending-live) sequence; rises
- *   recovery_frontier F - walker has visited every seq >= F; falls
- * A send of seq s: s >= H raises H := s + 1 (and clamps F down to H);
- * s < F lowers F := s. Anything else is already covered -> no-op. */
+ * Three edges (invariant: recovery_frontier <= tx_high_water <=
+ * pending_frontier <= next_sequence):
+ *   pending_frontier B - BEH-05 (#286): the pending-live drain edge; a send
+ *                        or leading-run retire inside [H, B) lowers B := s.
+ *                        When s == H the edges have met: the whole pending
+ *                        range is sent/retired, so H lifts past it
+ *                        (H := old B) and nothing is ever re-offered.
+ *   tx_high_water H    - bottom edge of the pending drain; rises on the
+ *                        edge-meet fold (and clamps F down to H).
+ *   recovery_frontier F - walker has visited every seq >= F; s < F lowers
+ *                        F := s (contiguous send or leading-run retire).
+ * A mark that lands in an already-covered zone (above B, or in [F, H)) is
+ * already accounted for -> no-op. */
 FlashLog_StatusTypeDef FlashLog_MarkRecoverySent(FlashLog_HandleTypeDef *hlog, uint32_t sequence) {
   if (hlog == NULL || !hlog->initialized) {
     return FLASH_LOG_ERROR_PARAM;
   }
 
   bool moved = false;
-  if (sequence >= hlog->tx_high_water) {
-    hlog->tx_high_water = sequence + 1U;
-    if (hlog->recovery_frontier > hlog->tx_high_water) {
-      hlog->recovery_frontier = hlog->tx_high_water; /* F <= H invariant */
+  if (sequence >= hlog->tx_high_water && sequence < hlog->pending_frontier) {
+    hlog->pending_frontier = sequence;
+    moved = true;
+    if (sequence == hlog->tx_high_water) {
+      /* Episode complete: everything below the drain top is covered. Lift
+       * the bottom edge to it, then fold in whatever accumulated above the
+       * edge mid-episode (deferred writes drain; live-sent records re-offer
+       * once - the backend dedupes by sequence). */
+      hlog->tx_high_water = hlog->drain_top;
+      hlog->pending_frontier = hlog->next_sequence;
+      hlog->drain_top = hlog->next_sequence;
     }
+  } else if (sequence == hlog->tx_high_water &&
+             hlog->pending_frontier == hlog->tx_high_water) {
+    /* Drained pending range: the bottom-edge lift (defensive; the normal
+     * write -> live-send flow is the drain rule above). */
+    hlog->tx_high_water = sequence + 1U;
+    hlog->pending_frontier = hlog->tx_high_water;
     moved = true;
   } else if (sequence < hlog->recovery_frontier) {
     hlog->recovery_frontier = sequence;
     moved = true;
+  }
+  if (hlog->recovery_frontier > hlog->tx_high_water) {
+    hlog->recovery_frontier = hlog->tx_high_water; /* F <= H invariant */
   }
   if (!moved) {
     return FLASH_LOG_OK;
@@ -354,10 +393,10 @@ uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog) {
     return 0;
   }
 
-  /* v5 (R3-04/#218): pending-live + walker-eligible. */
+  /* v5 (R3-04/#218) + BEH-05 (#286): pending-drain + walker-eligible. */
   uint32_t count = 0;
-  if (hlog->next_sequence > hlog->tx_high_water) {
-    count += hlog->next_sequence - hlog->tx_high_water;
+  if (hlog->pending_frontier > hlog->tx_high_water) {
+    count += hlog->pending_frontier - hlog->tx_high_water;
   }
   uint32_t oldest = FlashLog_OldestSequence(hlog);
   if (hlog->recovery_frontier > oldest) {
@@ -448,6 +487,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
   header.flags = 0;
   header.last_transmitted_seq = hlog->tx_high_water; /* v5 semantics */
   header.reserved[0] = hlog->recovery_frontier;      /* v5: walker */
+  header.reserved[1] = hlog->pending_frontier;       /* BEH-05: drain edge */
 
   /* Calculate CRC32 (all fields except crc32 itself) */
   header.crc32 = FlashLog_CRC32((const uint8_t *)&header,
@@ -681,6 +721,31 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     hlog->recovery_frontier = hlog->next_sequence;
   }
 
+  /* BEH-05 (#286): the pending-live drain edge, persisted in reserved[1].
+   * Headers written before this change carry 0 there (memset); a zero
+   * edge means "no persisted edge" - restart the drain at the top: the
+   * pending range re-drains once, newest-first, deduped by the backend
+   * (same discipline as the v4 migration). Post-fix firmware never
+   * persists a zero edge with pending data (every write sets B := next). */
+  {
+    uint32_t persisted_pending = 0;
+    if (valid_a || valid_b) {
+      persisted_pending = (hlog->active_header == 0) ? header_a.reserved[1]
+                                                     : header_b.reserved[1];
+    }
+    hlog->pending_frontier = persisted_pending;
+    if (hlog->pending_frontier == 0 ||
+        hlog->pending_frontier > hlog->next_sequence) {
+      hlog->pending_frontier = hlog->next_sequence;
+    }
+    if (hlog->pending_frontier < hlog->tx_high_water) {
+      hlog->pending_frontier = hlog->tx_high_water;
+    }
+    /* The episode top is RAM-only: a reset resumes the drain from the
+     * persisted edge, so the resumed episode's top is that edge. */
+    hlog->drain_top = hlog->pending_frontier;
+  }
+
   hlog->initialized = true;
 
   return FLASH_LOG_OK;
@@ -858,6 +923,15 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
 
   /* Update write pointer (F-010: sequence consumed only now, after success) */
   hlog->next_sequence++;
+  /* BEH-05 (#286): the new record joins the top of the pending drain -
+   * but only when nothing sits above the drain edge. Mid-episode (a
+   * partial drain sent the top records already) the write DEFERS: the
+   * record is folded in when the episode completes, so an in-flight
+   * drain never re-offers what it already sent this episode. */
+  if (hlog->pending_frontier == hlog->next_sequence - 1U) {
+    hlog->pending_frontier = hlog->next_sequence;
+    hlog->drain_top = hlog->next_sequence;
+  }
   hlog->write_addr += FLASH_LOG_RECORD_SIZE;
   hlog->record_count++;
 
