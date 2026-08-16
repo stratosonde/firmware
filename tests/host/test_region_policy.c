@@ -47,7 +47,7 @@ int main(void)
     CHECK(RegionPolicy_GeoPermission(false, REGION_UNKNOWN) == GEO_PERMISSION_UNKNOWN);
     CHECK(RegionPolicy_GeoPermission(false, 7U) == GEO_PERMISSION_UNKNOWN);
     CHECK(RegionPolicy_GeoPermission(true, REGION_RESTRICTED) == GEO_PERMISSION_RESTRICTED);
-    CHECK(RegionPolicy_GeoPermission(true, REGION_UNKNOWN) == GEO_PERMISSION_PERMITTED);   /* open ocean transmits */
+    CHECK(RegionPolicy_GeoPermission(true, REGION_UNKNOWN) == GEO_PERMISSION_UNKNOWN);    /* BEH-04: truthful verdict; the caller's explicit policy transmits over open ocean */
     CHECK(RegionPolicy_GeoPermission(true, 3U) == GEO_PERMISSION_PERMITTED);               /* any mapped region */
 
     /* ---- BEH-04 (#302): UNKNOWN is a distinct, truthful verdict ----

@@ -12,7 +12,11 @@
 
 GeoPermission_t RegionPolicy_GeoPermission(bool coordinates_valid, RegionId h3_region_id)
 {
-  if (!coordinates_valid) {
+  /* BEH-04 (#302): UNKNOWN is a truthful verdict, not a silent permit.
+   * Unmapped/ocean cells and invalid coordinates both return UNKNOWN; the
+   * caller implements the confirmed action explicitly (open-ocean keep-
+   * latched-and-transmit is the documented F-006/GEO-03 disposition). */
+  if (!coordinates_valid || h3_region_id == REGION_UNKNOWN) {
     return GEO_PERMISSION_UNKNOWN;
   }
   return (h3_region_id == REGION_RESTRICTED)

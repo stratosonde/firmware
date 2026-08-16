@@ -215,3 +215,10 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   recovers the old session but does not authorize it at the new
   location). Red commit cbceb1f (4 intentionally failing checks), fix
   commit follows.
+- **BEH-04 / #302 (FIXED):** RegionPolicy_GeoPermission returns a
+  truthful GEO_PERMISSION_UNKNOWN for unmapped/ocean cells instead of a
+  silent PERMITTED. Callers already map UNKNOWN to the documented
+  keep-latched-and-transmit disposition explicitly, so flight behavior is
+  unchanged - the policy state is now honest. The h3lite.c global-
+  coverage claim correction is submodule-side and rides with the GEO-04
+  guard commit + bump.

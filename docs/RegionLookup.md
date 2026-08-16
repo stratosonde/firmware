@@ -35,9 +35,12 @@ evidence). A detected region outside the bank can be detected but not joined.
   region or two" never existed.
 - **Restricted** (`REGION_RESTRICTED`): `GeofenceRestricted()` →
   `GEO_PERMISSION_RESTRICTED` → `VETO_RESTRICTED_REGION` RF silence.
-- **Invalid coordinates**: `GEO_PERMISSION_UNKNOWN` — the documented policy is
-  "cannot be known restricted → transmit", chosen explicitly rather than
-  inherited from a failed validation.
+- **Unmapped / open-ocean cells** (`REGION_UNKNOWN`) and **invalid
+  coordinates**: `GEO_PERMISSION_UNKNOWN` — a distinct verdict, never silently
+  PERMITTED (BEH-04/#302). The documented policy on UNKNOWN is "cannot be
+  known restricted → hold the latched region and transmit", chosen explicitly
+  (F-006/GEO-03 disposition), not inherited from a failed validation or a
+  silent permit.
 - **Stale position** (F-3/#178, DDR-0015): may **inhibit** (the geofence runs
   on the backup-register last-known position when GNSS is off) but never
   **switch** region.
