@@ -196,6 +196,18 @@ test_txshadow$(EXE): $(TXSHADOW_SRCS) test_burst_fsm.c ../../Core/Inc/tx_fsm.h
 txshadow: test_txshadow$(EXE)
 	./test_txshadow$(EXE)
 
+# TX adapter wiring assertions (Phase A1/A2 of the 2026-08-15 next-step
+# handoff; finding TX-ADAPTER-01): designated-field/polarity scans on the
+# OnTxData confirm-input initializer. Added to `all` by the A2 fix commit
+# (the suite is RED until then, by design).
+TXADAPTER_SRCS := test_tx_adapter.c
+
+test_txadapter$(EXE): $(TXADAPTER_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/tx_fsm.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TXADAPTER_SRCS) -lm
+
+txadapter: test_txadapter$(EXE)
+	./test_txadapter$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -240,7 +252,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow contracts
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter contracts
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -302,4 +314,4 @@ all: test flight findings burst stability multiregion timerif review0812 deep co
 contracts: first-flight pq nvm region gnssacq txshadow
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_txshadow$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_txshadow$(EXE) test_txadapter$(EXE) test_sanitize$(EXE)
