@@ -2578,14 +2578,18 @@ static void OnTxData(LmHandlerTxParams_t *params)
                         s_cycle_batt_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
     }
+    /* TX-ADAPTER-01 (2026-08-15): designated fields with positive polarity.
+     * The stage-5.4b positional marshal mapped the NEGATED condition into
+     * mission_ascent, inverting R3-03 (#217): ASCENT permitted archive
+     * recovery and FLOAT blocked it. Pinned by tests/host/test_tx_adapter.c. */
     TxFsmConfirmInput_t fsm_in = {
-      HAL_GetTick(),
-      params->Status == LORAMAC_EVENT_INFO_STATUS_OK,
-      params->AckReceived != 0,
-      battery_good,
-      has_cache,
-      MissionState_Get() != MISSION_ASCENT,
-      CfgMaxBulkPkts()
+      .now_ms = HAL_GetTick(),
+      .status_ok = params->Status == LORAMAC_EVENT_INFO_STATUS_OK,
+      .ack_received = params->AckReceived != 0,
+      .battery_good = battery_good,
+      .has_unsent = has_cache,
+      .mission_ascent = (MissionState_Get() == MISSION_ASCENT),
+      .max_bulk_packets = CfgMaxBulkPkts()
     };
     TxFsmEventOutput_t fsm_out;
     TxFsm_OnTxConfirm(&g_tx_fsm, &fsm_in, &fsm_out);

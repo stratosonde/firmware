@@ -307,7 +307,7 @@ test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
 sanitize: test_sanitize$(EXE)
 	./test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region gnssacq txshadow ddrmanifest
+all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region gnssacq txshadow txadapter ddrmanifest
 
 # Refactor stage 7: module-contract suites only - the "what is proven about
 # module X" entry point (see R2_TEST_MAP.md). `all` keeps running everything.

@@ -18,6 +18,7 @@ red-first commits — never inside a refactor commit.
 | findings | 113 | 0 | |
 | burst | 113 | 0 | scan-configured FSM replay model, extended (stage 5 step 1) to a full TX-FSM characterisation: LT-07 stale-wait forcing, R3-01 yield/deadline arithmetic, R3-03 ascent gate, T1/F-5 silence park, abort, bulk failure paths |
 | txshadow | 734,060 | 0 | stage 5 steps 2-3: pure `tx_fsm.c` step module shadow-run against the burst model - scripted scenarios + 200k randomized events, per-event state/action agreement |
+| txadapter | 11 | 0 | TX-ADAPTER-01: confirm-input polarity + designated-field wiring (Phase A1/A2) |
 | stability | 49 | 0 | |
 | multiregion | 98 | 0 | |
 | timerif | 31 | 0 | |
@@ -97,9 +98,9 @@ fix commit, never folded into a refactor commit)
 
 ### 2026-08-15 — TX-ADAPTER-01: reversed `mission_ascent` polarity (stage 5.4b regression)
 
-**Status: OPEN — fix in progress (Phase A1/A2 of the 2026-08-15 next-step
-handoff). `b958a95` is the reviewed Stage-7 baseline, NOT a flight candidate
-until this lands.**
+**Status: FIXED 2026-08-15 (A1 red gate `7f5bde7` + A2 fix, this commit's
+predecessor). `b958a95` remains the reviewed Stage-7 baseline; the A8
+rebaseline commit records the new candidate SHA.**
 
 External review of `b958a95` found a functional regression introduced by
 stage 5.4b (`7a6ab7e`): `OnTxData` marshals the confirm input with
