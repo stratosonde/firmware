@@ -64,7 +64,7 @@ Everything below is code-complete and CI-verified; where hardware matters it is 
 | **#285** (code, high) | H-09: fresh fix must clear GPS-loss silence on the same wake |
 | **#286** (code, high) | H-10: fresh-outage recovery must be newest-first |
 | **#287** (code, high) | H-11: commissioned home_region + reset-stable Band-0 age anchor |
-| **#288** (code, high) | H-12: FULL/SLEEP admission + durable energy trend |
+| **#288** (code, high, **partial**) | H-12: FULL/SLEEP admission + complete-package science **implemented** (commit A `61647a2`, stage 6 gates); durable energy trend remains **open** (bench evidence, Phase B1) |
 | **#279, #280, #281, #289** (code, normal) | LT-09 solar flag (batches with #266) · M-02 config threshold consumption · H-01 durable pre-flight state (design) · M-01 deferred ring reconstruction |
 | **#298, #299** (code, post-flight) | MAC-01 clamp network-commanded ChannelsNbTrans + DR floor · GEO-05 BR-RF-007/008 mission-configurable ring-search bound |
 | **#261, #262** (infra) | HIL lane + release evidence (M-03) — gates the readiness checklist |

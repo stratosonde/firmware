@@ -92,5 +92,36 @@ commit demonstrating the same invariant against the linked module.
 
 ## Open findings log
 
-(empty — populated as refactor stages discover bugs; each gets a separate
-red-first fix commit, never folded into a refactor commit)
+(populated as refactor stages discover bugs; each gets a separate red-first
+fix commit, never folded into a refactor commit)
+
+### 2026-08-15 — TX-ADAPTER-01: reversed `mission_ascent` polarity (stage 5.4b regression)
+
+**Status: OPEN — fix in progress (Phase A1/A2 of the 2026-08-15 next-step
+handoff). `b958a95` is the reviewed Stage-7 baseline, NOT a flight candidate
+until this lands.**
+
+External review of `b958a95` found a functional regression introduced by
+stage 5.4b (`7a6ab7e`): `OnTxData` marshals the confirm input with
+`MissionState_Get() != MISSION_ASCENT` into the field named `mission_ascent`,
+and `TxFsm_OnTxConfirm()` opens archive recovery on `!in->mission_ascent`.
+The old inline condition (`battery_good && has_cache &&
+MissionState_Get() != MISSION_ASCENT`) opened recovery when NOT ascending;
+the adapter double-negates it, so **ASCENT permits archive recovery and
+FLOAT blocks it** — the primary data-recovery path never opens at float,
+and ascent burns power/duty-cycle on recovery at 10 s cadence.
+
+The 734,060-check shadow suite cannot see this: the pure module and the
+characterisation model agree with each other; the defect is in the
+adapter's field mapping, which is outside the shadow's coverage. Lesson
+recorded in the handoff §7.1: adapter mappings need their own wiring tests.
+
+### 2026-08-15 — Stage 8–11 proposal dispositions
+
+The `stratosonde-refactor-handoff-stage8-11.md` proposal is **not** an
+execution plan before first flight (see
+`docs/temp/stratosonde-next-step-coding-llm-handoff.md` §4): its line-count
+and complexity targets are advisory only (and its reference metric output
+does not reproduce), `GnssAcquire_Step()` and the single `AppContext_t`
+are rejected as designed, and the multiregion split is deferred to
+post-flight. Tracked post-flight directions live in §7 of that handoff.
