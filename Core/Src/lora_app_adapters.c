@@ -1,10 +1,5 @@
-/**
-  ******************************************************************************
-  * @file    lora_app_adapters.c
-  * @brief   Production-compiled adapter builders (MAINT-01). Pure: no HAL,
-  *          no LoRaMac, no flash, no timers, no globals - see the header.
-  ******************************************************************************
-  */
+/* Production-compiled adapter builders (MAINT-01). Pure: no HAL, no
+ * LoRaMac, no flash, no timers, no globals - see lora_app_adapters.h. */
 
 #include "lora_app_adapters.h"
 

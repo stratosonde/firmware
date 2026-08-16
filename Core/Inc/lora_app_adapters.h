@@ -1,26 +1,21 @@
-/**
-  ******************************************************************************
-  * @file    lora_app_adapters.h
-  * @brief   Production-compiled adapter builders (MAINT-01, pretest-hardening
-  *          handoff 2026-08-15, Phase 5)
-  ******************************************************************************
-  * The five high-consequence mappings between lora_app.c's HAL/Mac-facing
-  * world and the pure policy/FSM modules, extracted into ONE pure module so
-  * each mapping is linked-testable:
-  *   1. TxFsmConfirmInput_t  (OnTxData; TX-ADAPTER-01's inverted polarity)
-  *   2. TxFsmCycleInput_t    (SendTxData dispatch phase)
-  *   3. TxFsmRxInput_t       (OnRxData LinkCheck verdict)
-  *   4. region-policy comparisons / post-switch final authorization
-  *   5. FirstFlightAdmissionInput_t (FirstFlightWakeAdmitted)
-  *
-  * No HAL, LoRaMac, flash, timer, or global dependencies: every input arrives
-  * as a raw domain value in a snapshot (raw enums, raw staleness counters,
-  * raw status integers), so the polarity-bearing derivations - stale==0 means
-  * fresh, state==MISSION_ASCENT, status==OK, detected!=active - live HERE,
-  * under direct linked test, instead of inline in the callback where an
-  * inversion once shipped (TX-ADAPTER-01).
-  ******************************************************************************
-  */
+/* Production-compiled adapter builders (MAINT-01, pretest-hardening handoff
+ * 2026-08-15, Phase 5).
+ *
+ * The five high-consequence mappings between lora_app.c's HAL/Mac-facing
+ * world and the pure policy/FSM modules, extracted into ONE pure module so
+ * each mapping is linked-testable:
+ *   1. TxFsmConfirmInput_t  (OnTxData; TX-ADAPTER-01's inverted polarity)
+ *   2. TxFsmCycleInput_t    (SendTxData dispatch phase)
+ *   3. TxFsmRxInput_t       (OnRxData LinkCheck verdict)
+ *   4. region-policy comparisons / post-switch final authorization
+ *   5. FirstFlightAdmissionInput_t (FirstFlightWakeAdmitted)
+ *
+ * No HAL, LoRaMac, flash, timer, or global dependencies: every input arrives
+ * as a raw domain value in a snapshot (raw enums, raw staleness counters,
+ * raw status integers), so the polarity-bearing derivations - stale==0 means
+ * fresh, state==MISSION_ASCENT, status==OK, detected!=active - live HERE,
+ * under direct linked test, instead of inline in the callback where an
+ * inversion once shipped (TX-ADAPTER-01). */
 
 #ifndef LORA_APP_ADAPTERS_H
 #define LORA_APP_ADAPTERS_H
@@ -32,9 +27,9 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "first_flight_policy.h" /* FirstFlightAdmissionInput_t */
 #include "mission_state.h"       /* MissionState_t */
 #include "tx_fsm.h"              /* TxFsm*Input_t */
-#include "first_flight_policy.h" /* FirstFlightAdmissionInput_t */
 
 /* LoRaMac-free mirror of LORAMAC_EVENT_INFO_STATUS_OK (0 in LoRaMac.h). The
  * host suite source-pins the LoRaMac enum value so a renumbering breaks the
@@ -44,14 +39,14 @@ extern "C" {
 /* ---- OnTxData -> TxFsm_OnTxConfirm ---- */
 
 typedef struct {
-  uint32_t now_ms;               /* HAL_GetTick() at confirm time */
-  int tx_status;                 /* raw params->Status */
-  uint8_t ack_received_raw;      /* raw params->AckReceived */
-  uint16_t battery_mv;           /* s_cycle_batt_mv (admitted post-GNSS) */
-  uint16_t bulk_batt_min_mv;     /* CfgBulkBattMin() */
-  MissionState_t mission_state;  /* raw enum - NOT a derived bool (R3-03) */
-  bool has_cache;                /* FlashLog_HasUnsentData */
-  uint8_t max_bulk_packets;      /* CfgMaxBulkPkts() */
+  uint32_t now_ms;              /* HAL_GetTick() at confirm time */
+  int tx_status;                /* raw params->Status */
+  uint8_t ack_received_raw;     /* raw params->AckReceived */
+  uint16_t battery_mv;          /* s_cycle_batt_mv (admitted post-GNSS) */
+  uint16_t bulk_batt_min_mv;    /* CfgBulkBattMin() */
+  MissionState_t mission_state; /* raw enum - NOT a derived bool (R3-03) */
+  bool has_cache;               /* FlashLog_HasUnsentData */
+  uint8_t max_bulk_packets;     /* CfgMaxBulkPkts() */
 } AppTxConfirmSnapshot_t;
 
 TxFsmConfirmInput_t
@@ -79,8 +74,8 @@ TxFsmCycleInput_t AppAdapters_BuildTxCycle(const AppTxCycleSnapshot_t *snap);
 /* ---- OnRxData LinkCheck verdict -> TxFsm_OnRx ---- */
 
 typedef struct {
-  bool linkcheck_received;  /* a fresh LinkCheckAns arrived this RX */
-  uint8_t margin;           /* dB, valid only when linkcheck_received */
+  bool linkcheck_received; /* a fresh LinkCheckAns arrived this RX */
+  uint8_t margin;          /* dB, valid only when linkcheck_received */
   uint8_t gateways;
   uint8_t margin_min;       /* CfgLinkMargin() */
   uint8_t gateways_min;     /* CfgGatewayCount() */
