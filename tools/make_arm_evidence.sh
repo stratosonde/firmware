@@ -33,8 +33,9 @@ arm-none-eabi-nm --print-size --size-sort --radix=d "$ELF" \
 find Debug -name '*.su' -print0 | xargs -0 cat 2>/dev/null \
   | sort -k2 -n | tail -n 25 > "$OUT/stack-usage.txt" || true
 
-# hashes over every artifact in the bundle
-(cd "$OUT" && sha256sum * | sort -k2) > "$OUT/sha256sums.txt"
+# hashes over every artifact in the bundle (excluding the sums file itself -
+# the redirection order would otherwise capture it empty)
+(cd "$OUT" && sha256sum $(ls -1 | grep -v sha256sums.txt) | sort -k2) > "$OUT/sha256sums.txt"
 
 # manifest
 {
