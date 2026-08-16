@@ -5,6 +5,15 @@
 
 -include ../makefile.init
 
+# PIPE-04 (#265, Phase 6): centralized compile-time definitions, appended to
+# every active C compile recipe (see the subdir.mk pattern rules). The bench
+# default is EMPTY (debug build); the flight configuration is built WITHOUT
+# source mutation:
+#   make -C Debug clean
+#   make -C Debug all PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD
+# tools/check_project_cppflags.py proves every active C recipe honours it.
+PROJECT_CPPFLAGS ?=
+
 RM := rm -rf
 
 # All of the sources participating in the build are defined here

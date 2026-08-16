@@ -27,8 +27,11 @@ arm-debug:
 	$(MAKE) -C Debug clean
 	$(MAKE) -C Debug -j16 all
 
-# arm-flight: the deterministic PROJECT_CPPFLAGS path replaces the sed
-# mutation in Phase 6 (PIPE-04). Until then the flight configuration is built
-# exactly as the CI firmware-flight job does it.
+# arm-flight (PIPE-04/#265, Phase 6): the flight configuration via the
+# centralized PROJECT_CPPFLAGS variable - no source mutation, nothing to
+# restore. The marker proof and git-diff cleanliness check run in CI (and in
+# build.ps1 -Flight locally).
 arm-flight:
-	@echo "arm-flight: deterministic flag path lands in Phase 6; see ci.yml firmware-flight job" & exit 1
+	python tools/check_project_cppflags.py
+	$(MAKE) -C Debug clean
+	$(MAKE) -C Debug -j16 all PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD

@@ -31,8 +31,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi
+      - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
+        run: python3 tools/check_project_cppflags.py
       - name: Build firmware
         run: make -C Debug -j"$(nproc)" all
+      - name: Prove the debug marker (and only it) is in the binary
+        run: |
+          arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/debug.bin
+          grep -q "SONDE_BUILD:debug" /tmp/debug.bin || { echo "FATAL: debug build marker missing"; exit 1; }
+          if grep -q "SONDE_BUILD:flight" /tmp/debug.bin; then echo "FATAL: flight marker present in a debug build"; exit 1; fi
+      - name: Source tree unchanged by the build (PIPE-04)
+        run: git diff --exit-code --stat
 
   # FR-20 (#101): the binary that flies must be the binary CI builds.
   firmware-flight:
@@ -45,29 +54,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi
-      - name: Build flight configuration (SONDE_FLIGHT_BUILD)
+      - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
+        run: python3 tools/check_project_cppflags.py
+      - name: Build flight configuration (flags, not source mutation; PIPE-04/#265)
         run: |
-          # F12 (#173): the sed injection must fail LOUDLY if CubeMX regen
-          # changes the fragment syntax and the substitution stops matching —
-          # otherwise CI ships a "flight" binary that is not a flight build.
-          find Debug -name subdir.mk -exec sed -i 's/-DDEBUG -DCORE_CM4/-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4/' {} +
-          # Only C-compile fragments carry -DCORE_CM4 (Startup assembler rules
-          # use -DDEBUG alone and are legitimately untouched by the sed), so
-          # scope the check to fragments that have CORE_CM4. Judge by OUTPUT,
-          # not exit status: grep -L exits 0 whenever ANY input file matched
-          # (line-selection semantics), so the original `grep -rL ... && FATAL`
-          # and any exit-status variant fire unconditionally. An all-assembler
-          # match set passes vacuously here, but the SONDE_BUILD:flight marker
-          # check below still gates that case.
-          missed=$(grep -rl "DCORE_CM4" Debug --include=subdir.mk | xargs -r grep -L "DSONDE_FLIGHT_BUILD" || true)
-          if [ -n "$missed" ]; then echo "FATAL: flight macro injection missed fragment(s): $missed"; exit 1; fi
-          make -C Debug all -j"$(nproc)"
+          # The sed injection ritual is RETIRED: the flight define travels via
+          # the centralized PROJECT_CPPFLAGS make variable, which the gate
+          # above proves every active C recipe honours. The embedded-marker
+          # check below still proves the binary is a flight build (F12/#173).
+          make -C Debug clean
+          make -C Debug all -j"$(nproc)" PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD
           arm-none-eabi-size Debug/Radio_Sonde_E5_HF_EU.elf
       - name: Prove the flight marker is in the binary (F12/#173)
         run: |
           arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/flight.bin
           grep -q "SONDE_BUILD:flight" /tmp/flight.bin || { echo "FATAL: flight build marker missing"; exit 1; }
           if grep -q "SONDE_BUILD:debug" /tmp/flight.bin; then echo "FATAL: debug build marker present"; exit 1; fi
+      - name: Source tree unchanged by the build (PIPE-04)
+        run: git diff --exit-code --stat
 
   # Phase 3 (pretest-hardening handoff): hygiene gate - cppcheck over
   # first-party sources (gated), actionlint (gated), clang-format
@@ -83,6 +87,8 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y cppcheck
           python3 -m pip install clang-format==22.1.8
+      - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
+        run: python3 tools/check_project_cppflags.py
       - name: cppcheck gate (first-party)
         run: bash tools/run_cppcheck.sh
       - name: actionlint

@@ -59,35 +59,15 @@ if (-not (Test-Path (Join-Path $debugDir "makefile"))) {
 }
 
 # ---------- F-009 (#209): first-class flight build ----------
-# Injects -DSONDE_FLIGHT_BUILD into the CubeMX-generated compile fragments
-# with the F12 (#173) loud-failure gate, forces a from-scratch build, verifies
-# the embedded SONDE_BUILD:flight marker in the binary, and emits an artifact
-# manifest. The fragments are restored afterwards so the tree stays
-# bench-default. Deliberately NOT a CubeMX make-target (regen would eat it).
-$subdirFiles = Get-ChildItem $debugDir -Filter "subdir.mk" -Recurse -ErrorAction SilentlyContinue |
-               Where-Object { $_.FullName -notlike "*\archive\*" }
-$fragmentBackup = @{}
+# PIPE-04 (#265, Phase 6): the flight define now travels via the centralized
+# PROJECT_CPPFLAGS make variable - NO source mutation, nothing to restore.
+# tools/check_project_cppflags.py proves every active C recipe honours the
+# variable; the embedded-marker gate below proves the binary is a flight
+# build. Deliberately NOT a CubeMX make-target (regen would eat it).
 if ($Flight) {
-    Write-Host "`n>>> FLIGHT build: injecting -DSONDE_FLIGHT_BUILD into compile fragments" -ForegroundColor Magenta
-    foreach ($f in $subdirFiles) {
-        $fragmentBackup[$f.FullName] = Get-Content $f.FullName -Raw
-        $injected = $fragmentBackup[$f.FullName] -replace '-DDEBUG -DCORE_CM4', '-DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4'
-        Set-Content -Path $f.FullName -Value $injected -NoNewline
-    }
-    # Loud-failure gate: every C-compile fragment (they carry -DCORE_CM4) must
-    # now carry the flight macro - otherwise we'd ship a "flight" binary that
-    # is not a flight build.
-    $missed = @()
-    foreach ($f in $subdirFiles) {
-        $c = Get-Content $f.FullName -Raw
-        if ($c -match 'DCORE_CM4' -and $c -notmatch 'DSONDE_FLIGHT_BUILD') { $missed += $f.FullName }
-    }
-    if ($missed.Count -gt 0) {
-        foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline }
-        Write-Error "FATAL: flight macro injection missed fragment(s): $($missed -join ', ')"
-        exit 1
-    }
-    Write-Host "Injected into $($subdirFiles.Count) fragments (gate passed)" -ForegroundColor Green
+    Write-Host "`n>>> FLIGHT build: PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD (no source mutation)" -ForegroundColor Magenta
+    & python tools\check_project_cppflags.py
+    if ($LASTEXITCODE -ne 0) { Write-Error "PROJECT_CPPFLAGS gate failed"; exit $LASTEXITCODE }
     $Clean = $true   # flight builds are always from-scratch
 }
 
@@ -125,10 +105,11 @@ if (-not (Test-Path $objectsList)) {
 
 # ---------- build ----------
 $jFlag = "-j$Jobs"
-Write-Host "`n>>> make -C Debug $jFlag all" -ForegroundColor Yellow
-& make -C $debugDir $jFlag all 2>&1 | Write-Host
+$makeArgs = @("-C", $debugDir, $jFlag, "all")
+if ($Flight) { $makeArgs += "PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD" }
+Write-Host "`n>>> make $($makeArgs -join ' ')" -ForegroundColor Yellow
+& make @makeArgs 2>&1 | Write-Host
 if ($LASTEXITCODE -ne 0) {
-    if ($Flight) { foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline } }
     Write-Error "Build FAILED"
     exit $LASTEXITCODE
 }
@@ -150,17 +131,13 @@ if (Test-Path $elfFile) {
     Write-Host "`nBinary size: $([math]::Round($fileSize / 1024, 1)) KB  ($binFile)" -ForegroundColor Green
     Write-Host "Build SUCCEEDED" -ForegroundColor Green
 } else {
-    if ($Flight) { foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline } }
     Write-Error "ELF file not found: $elfFile"
     exit 1
 }
 
 # ---------- F-009 (#209): flight verification + artifact manifest ----------
 if ($Flight) {
-    # Restore the bench-default fragments FIRST so a failure below cannot
-    # leave the tree in the flight configuration.
-    foreach ($k in $fragmentBackup.Keys) { Set-Content -Path $k -Value $fragmentBackup[$k] -NoNewline }
-    Write-Host "`n>>> Compile fragments restored to bench default" -ForegroundColor Yellow
+    # Nothing to restore: PROJECT_CPPFLAGS never touched the source tree.
 
     # Release gate: the binary must carry the embedded flight marker (F12/#173).
     $binText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($binFile))
@@ -197,7 +174,7 @@ git_tree:          $gitDirty
 build_timestamp:   $(Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")
 compiler:          arm-none-eabi-gcc $gccVersion
 toolchain_dir:     $toolchainBin
-compile_defines:   -DDEBUG -DSONDE_FLIGHT_BUILD -DCORE_CM4 -DUSE_HAL_DRIVER -DSTM32WLE5xx
+compile_defines:   -DDEBUG -DCORE_CM4 -DUSE_HAL_DRIVER -DSTM32WLE5xx + PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD
 embedded_marker:   SONDE_BUILD:flight (verified in binary)
 bin_sha256:        $binHash
 elf_sha256:        $elfHash

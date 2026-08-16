@@ -276,3 +276,15 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   (84 checks) killed all 11 reversal mutants on the box; the superseded
   literal scans in test_tx_adapter.c retired to a delegation + consumption
   anchor, and the burst/deepreview shape anchors follow the new code shape.
+- **PIPE-04 / #265 (RESOLVED, Phase 6a):** the flight build no longer mutates
+  the Cube-generated fragments. Every active C compile recipe (17 across 18
+  fragments, Startup assembler excluded) honours a centralized
+  PROJECT_CPPFLAGS make variable; flight = make PROJECT_CPPFLAGS=
+  -DSONDE_FLIGHT_BUILD. tools/check_project_cppflags.py derives the active
+  set from Debug/Makefile and fails on any recipe omitting the variable or
+  any fragment carrying an injected macro; CI runs it in both ARM jobs plus
+  hygiene, and both ARM jobs now prove the embedded marker (debug-only /
+  flight-only) and git diff --exit-code after building. Box proof: the
+  flag-built flight image is byte-size-identical to the last sed-built one
+  (181,312 B, SONDE_BUILD:flight), zero fragments mutated. build.ps1
+  -Flight and the root arm-flight target use the same path.
