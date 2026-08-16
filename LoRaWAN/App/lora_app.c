@@ -899,6 +899,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     bool link_good = (linkcheck_received &&
                       margin >= CfgLinkMargin() &&
                       gw_count >= CfgGatewayCount());
+    (void)link_good;  /* flight build: only the compiled-out SONDE_LOG reads it */
     SONDE_LOG("First archive response: LinkCheckAns %s, margin=%ddB (>=%d), gateways=%d (>=%d) -> %s\r\n",
                       linkcheck_received ? "received" : "MISSING",
                       margin, CfgLinkMargin(), gw_count, CfgGatewayCount(),
