@@ -254,3 +254,12 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   the autonomous path. Operator readiness indication (fix/ACK/sensor
   health) stays on the commissioning UART/RTT output - the pre-launch
   checklist item.
+- **GEO-04 (RESOLVED, h3lite 0c31029):** the F-013 init probes never proved
+  the RESTRICTED enforcement set non-empty (Paris/mid-Atlantic are
+  unaffected by a silent Yemen+North Korea revert). h3liteInit() now scans
+  the table for a REGION_RESTRICTED entry and resolves Pyongyang through
+  the production path (boot-fatal on a reverted set); the generator asserts
+  the set non-empty and fails loudly on an empty region load. The geo
+  suite's two structural pins flipped to hard checks; geo-gate no longer
+  uses EXPECT_UNFIXED. Characterization suite now awaits 5 documented
+  failures (LT-06 x2 #248, PWR-02 x3 #297).

@@ -3,41 +3,41 @@
  * contract suite for the owning module instead. (Refactor stage 7.) */
 
 /**
-  ******************************************************************************
-  * @file    test_geo_20260814.c
-  * @brief   Red-first regressions for the 2026-08-14 review GEO series
-  *          (docs/temp/stratosonde-review-20260814.md).
-  *          Compiles against the REAL h3lite submodule sources; no firmware
-  *          objects needed.
-  ******************************************************************************
-  *   GEO-01 (P0, firmware#257 / SP-02): LANDED 2026-08-15 (h3lite 5480859,
-  *     firmware 9fdcccc). The regenerated table contains 53 REGION_RESTRICTED
-  *     cells (Yemen + North Korea; RESTRICTED.geojson sha256:293c1efa8378a718
-  *     recorded in h3lite_regions_table.h). The nonempty count is now a HARD
-  *     gate, and Pyongyang/Sanaa resolve probes pin the enforcement set
-  *     end-to-end through the same res 3->2->1 lookup the device runs.
-  *
-  *   GEO-04 (P1, h3lite repo tracker): h3liteInit()'s F-013 self-check
-  *     probes Paris->EU868 and mid-Atlantic->REGION_UNKNOWN but never proves
-  *     the RESTRICTED enforcement set non-empty. Fix (submodule): init scans
-  *     the table for REGION_RESTRICTED and probes a known restricted
-  *     coordinate; generate_lookup_table.py asserts the set non-empty so a
-  *     silent revert is impossible. The GEO-01 dataset has landed (9fdcccc),
-  *     so the guards are now unblocked and land with the next h3lite bump.
-  *     Structural scans here pin both guards (still red by design).
-  *
-  *   GEO-03 (P1, firmware#258 / SP-04): ring-search laundering + zero-
-  *     candidate keep-current. OWNER DISPOSITION 2026-08-15: no behaviour
-  *     rework - keep-current-on-UNKNOWN is sanctioned (ocean crossings);
-  *     the dataset edit converts unmapped-land-laundering into enforced
-  *     RESTRICTED. That dataset edit landed 2026-08-15 (9fdcccc), realising
-  *     the disposition; #258 closed accordingly. No checks here by design.
-  *
-  *   Run:
-  *   make -C tests/host geo          (red until the GEO-04 guards land)
-  *   EXPECT_UNFIXED=1 ./test_geo     (green pre-fix gate; CI shape via geo-gate)
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    test_geo_20260814.c
+ * @brief   Red-first regressions for the 2026-08-14 review GEO series
+ *          (docs/temp/stratosonde-review-20260814.md).
+ *          Compiles against the REAL h3lite submodule sources; no firmware
+ *          objects needed.
+ ******************************************************************************
+ *   GEO-01 (P0, firmware#257 / SP-02): LANDED 2026-08-15 (h3lite 5480859,
+ *     firmware 9fdcccc). The regenerated table contains 53 REGION_RESTRICTED
+ *     cells (Yemen + North Korea; RESTRICTED.geojson sha256:293c1efa8378a718
+ *     recorded in h3lite_regions_table.h). The nonempty count is now a HARD
+ *     gate, and Pyongyang/Sanaa resolve probes pin the enforcement set
+ *     end-to-end through the same res 3->2->1 lookup the device runs.
+ *
+ *   GEO-04 (P1, h3lite repo tracker): LANDED 2026-08-16 (h3lite 0c31029).
+ *     h3liteInit() now scans the table for a REGION_RESTRICTED entry and
+ *     resolves Pyongyang->REGION_RESTRICTED through the production lookup
+ *     path (boot-fatal on a silently reverted enforcement set), and
+ *     generate_lookup_table.py asserts the RESTRICTED set non-empty plus
+ *     fails loudly on an empty region load. Both pins below are hard
+ *     checks; the suite runs green without EXPECT_UNFIXED.
+ *
+ *   GEO-03 (P1, firmware#258 / SP-04): ring-search laundering + zero-
+ *     candidate keep-current. OWNER DISPOSITION 2026-08-15: no behaviour
+ *     rework - keep-current-on-UNKNOWN is sanctioned (ocean crossings);
+ *     the dataset edit converts unmapped-land-laundering into enforced
+ *     RESTRICTED. That dataset edit landed 2026-08-15 (9fdcccc), realising
+ *     the disposition; #258 closed accordingly. No checks here by design.
+ *
+ *   Run:
+ *   make -C tests/host geo          (green since the GEO-04 guards landed)
+ *   make -C tests/host geo-gate     (same; the EXPECT_UNFIXED gate retired
+ *                                    with the GEO-04 landing)
+ ******************************************************************************
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -196,20 +196,18 @@ static void test_geo01_restricted_nonempty(void)
 }
 
 /* ========================================================================== */
-/* GEO-04 - STRUCTURAL (gated): h3liteInit() must prove the enforcement set    */
-/* non-empty, and the generator must assert it so a future regeneration cannot */
-/* silently revert. Both land in the h3lite submodule WITH the dataset (init   */
-/* would be boot-fatal otherwise).                                             */
+/* GEO-04 - STRUCTURAL (landed, h3lite 0c31029): h3liteInit() proves the       */
+/* enforcement set non-empty, and the generator asserts it so a future         */
+/* regeneration cannot silently revert. Hard checks since 2026-08-16.          */
 /* ========================================================================== */
 
 static void test_geo04_guards(const char *h3c, const char *gen)
 {
     printf("GEO-04: init self-check + generator guard for the restricted set\n");
 
-    CHECK_REGRESSION(
-        in_function(h3c, "bool h3liteInit(void) {", "H3Index latLngToH3",
-                    "REGION_RESTRICTED"),
-        "GEO-04-init-checks-restricted");
+    /* GEO-04-init-checks-restricted (landed, h3lite 0c31029) */
+    CHECK(in_function(h3c, "bool h3liteInit(void) {", "H3Index latLngToH3",
+                      "REGION_RESTRICTED"));
 
     /* Generator-side: an assertion naming RESTRICTED (e.g. a non-empty count
      * assert in generate_lookup_table.py). */
@@ -228,7 +226,8 @@ static void test_geo04_guards(const char *h3c, const char *gen)
             line = eol + 1;
         }
     }
-    CHECK_REGRESSION(has_assert, "GEO-04-generator-asserts-restricted");
+    /* GEO-04-generator-asserts-restricted (landed, h3lite 0c31029) */
+    CHECK(has_assert);
 }
 
 int main(void)

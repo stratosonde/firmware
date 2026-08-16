@@ -146,7 +146,7 @@ $(BUILD_DIR)/test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../
 
 # -fshort-enums matches the arm-none-eabi ABI default - the target builds
 # LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
-# struct layout with _Static_assert(offsetof(crc16)==76, sizeof==80).
+#struct layout with _Static_assert(offsetof(crc16) == 76, sizeof == 80).
 $(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -fshort-enums $(INCLUDES) -o $@ $(MREG_SRCS) -lm
 
@@ -267,9 +267,9 @@ gpsloss: $(BUILD_DIR)/test_gpsloss$(EXE)
 review0812: $(BUILD_DIR)/test_review0812$(EXE)
 	./$(BUILD_DIR)/test_review0812$(EXE)
 
-# 2026-08-14 review (PWR-02 bench-gated; GEO-01 dataset, GEO-04 guards):
-# pwr/geo run red until the Nichicon characterization and the RESTRICTED
-# dataset land; in `all` (the CI gate) they run as green pre-fix gates.
+# 2026-08-14 review (PWR-02 bench-gated; GEO-01 dataset + GEO-04 guards both
+# landed): pwr runs red until the Nichicon characterization lands and uses
+# the EXPECT_UNFIXED pre-fix gate; geo is fully green since h3lite 0c31029.
 pwr: $(BUILD_DIR)/test_pwr$(EXE)
 	./$(BUILD_DIR)/test_pwr$(EXE)
 
@@ -279,8 +279,10 @@ geo: $(BUILD_DIR)/test_geo$(EXE)
 pwr-gate: $(BUILD_DIR)/test_pwr$(EXE)
 	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_pwr$(EXE)
 
+# geo-gate: EXPECT_UNFIXED retired 2026-08-16 with the GEO-04 landing
+# (h3lite 0c31029) - the suite is a plain hard gate now.
 geo-gate: $(BUILD_DIR)/test_geo$(EXE)
-	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_geo$(EXE)
+	./$(BUILD_DIR)/test_geo$(EXE)
 
 deep: $(BUILD_DIR)/test_deepreview$(EXE)
 	./$(BUILD_DIR)/test_deepreview$(EXE)
@@ -352,8 +354,8 @@ baseline: all
 # production code (19 instrumented exes). Suites that only slurp+scan source
 # text (burst, deepreview, findings, txadapter, gpsloss) are excluded - they
 # run no firmware, so there is nothing to instrument. Suites with documented
-# expected failures (lt0813 x2, geo x2) exit 0 via the baseline mechanism,
-# same as the normal build.
+# expected failures (lt0813 x2) exit 0 via the baseline mechanism, same as
+# the normal build.
 SAN_FLAGS := -fsanitize=undefined,address -fno-omit-frame-pointer
 SAN_BUILD_DIR := build/asan-ubsan
 H3LITE_SRCS := $(wildcard ../../Middlewares/Third_Party/h3lite/src/*.c)
@@ -388,8 +390,8 @@ $(eval $(call SAN_SUITE_RULE,test_gnssfix,GNSSFIX_SRCS,INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_arming,ARMING_SRCS,ARMING_INCLUDES,,,))
 
 # EXPECT_UNFIXED=1 mirrors the gate semantics (`all` runs the red-by-design
-# suites lt0813/geo the same way): documented expected failures are reported
-# but do not fail the run; a NEW failure (or a sanitizer abort) still does.
+# suite lt0813 the same way): documented expected failures are reported but
+# do not fail the run; a NEW failure (or a sanitizer abort) still does.
 .PHONY: sanitize
 sanitize: $(SAN_EXES)
 	@for t in $(SAN_EXES); do \
@@ -417,7 +419,7 @@ sanitize: $(SAN_EXES)
 check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming ddrmanifest arminventory
 
 characterization: lt0813-gate geo-gate pwr-gate
-	@echo "characterization: 7 documented open failures awaited - LT-06 x2 (#248), GEO-04 x2 (h3lite guards), PWR-02 x3 (#297)"
+	@echo "characterization: 5 documented open failures awaited - LT-06 x2 (#248), PWR-02 x3 (#297)"
 
 integration: test flight multiregion timerif config txadapter gnssfix gpsloss
 
