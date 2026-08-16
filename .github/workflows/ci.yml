@@ -170,7 +170,15 @@ jobs:
       - name: Install clang-format (pinned)
         run: python3 -m pip install clang-format==22.1.8
       - name: clang-format changed-lines gate
-        run: bash tools/check_format.sh "${{ github.event.before }}"
+        run: |
+          # On tag pushes github.event.before is a zero SHA (known #RC-01):
+          # fall back to the merge-base against origin/master (empty diff
+          # for a tag at the master tip).
+          base="${{ github.event.before }}"
+          if ! git cat-file -e "$base" 2>/dev/null; then
+            base=$(git merge-base HEAD origin/master)
+          fi
+          bash tools/check_format.sh "$base"
 
   # Job 7 - release gate (RC tags / manual): requires jobs 1-6; packages the
   # EXACT artifact from arm-matrix without rebuilding; verifies release
