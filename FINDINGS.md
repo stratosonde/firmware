@@ -208,3 +208,10 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   clearing follow the configured accepted-fix predicate only; RTC
   discipline follows the date/time validity alone. Red commit 3469a96
   (10 intentionally failing checks), fix commit follows.
+- **BEH-03 / #301 (FIXED):** region switches fail closed.
+  RegionPolicy_PostSwitchRfAllowed() enforces active == detected after a
+  required switch attempt; busy, failed, rolled-back and silently-stayed
+  outcomes archive locally and silence RF for the wake (a rollback
+  recovers the old session but does not authorize it at the new
+  location). Red commit cbceb1f (4 intentionally failing checks), fix
+  commit follows.

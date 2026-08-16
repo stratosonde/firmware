@@ -72,7 +72,11 @@ that (DDR-0003).
    trusted last-known position, its freshness epoch, or clear GNSS staleness
    (BEH-02/#284); weaker positions remain in the wake's sample as stale/weak
    provenance, and valid GNSS date/time may discipline the RTC on its own
-   validity, never as proof of position quality.
+   validity, never as proof of position quality. A required region switch
+   that does not settle with active == detected (busy, failed, rolled back,
+   silently stayed) fails closed: the wake archives locally and silences RF
+   (BEH-03/#301); a successful rollback recovers the old session but never
+   authorizes it at the new location.
 
 An admitted science wake attempts GNSS and the remaining sensors, marks each
 field fresh/stale honestly, and appends the current record when flash is
