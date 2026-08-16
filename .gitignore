@@ -11,8 +11,9 @@ Debug/
 # Debug/Makefile, objects.list, objects.mk, sources.mk and all live subdir.mk
 # are force-added and tracked. New source dirs need `git add -f` on their subdir.mk.
 
-# Host test binaries
-tests/host/test_runner*
+# Host test binaries (out-of-tree since Phase 1 / PIPE-01; ignore the
+# configuration build dirs, not broad source-name patterns)
+tests/host/build/
 
 # IDE files
 .settings/

@@ -5,11 +5,13 @@ bug and fails; the root-cause fix must turn that exact test green.** Items that
 cannot be host-tested are marked with their verification path instead —
 undocumented "trust me" fixes are not allowed either.
 
-Run: `make -C tests/host all` (CI gate — stays green via `EXPECT_UNFIXED=1`
-masking of the owner-gated suites below, so it is NOT a true post-fix gate).
-A no-masking post-fix gate arrives with the hardening-pass `check` target
-(pretest-hardening handoff 2026-08-15, Phase 1). Module contracts only:
-`make -C tests/host contracts`.
+Run: `make -C tests/host check` — every mandatory suite, NO expected-failure
+masking (hardening-pass Phase 1, landed). `make -C tests/host characterization`
+holds the owner-gated known failures below (`EXPECT_UNFIXED=1`, prints the exact
+open-failure IDs). `make -C tests/host all` = check + characterization and
+remains the CI gate (STAB-09/#156). Module contracts only:
+`make -C tests/host contracts`. All four also exist at the repo root
+(`make check` etc.) via the Phase-1 wrapper Makefile.
 
 ---
 

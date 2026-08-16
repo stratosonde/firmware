@@ -9,6 +9,22 @@ CC      ?= gcc
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
+# Out-of-tree outputs (pretest-hardening handoff 2026-08-15, Phase 1 / PIPE-01):
+# every executable lands under build/<configuration>/ so a changed CFLAGS
+# string can never silently reuse a stale binary, and `git status` stays clean
+# (only tests/host/build/ is ignored). Override per configuration, e.g.
+#   make BUILD_DIR=build/coverage CFLAGS="... --coverage"
+BUILD_DIR ?= build/gcc
+ifeq ($(OS),Windows_NT)
+# cmd builtins (forced through the shell by the `if` syntax; CreateProcess
+# fast-path cannot run builtins and plain `mkdir a/b` is not portable)
+MKDIR = if not exist "$(subst /,\,$@)" mkdir "$(subst /,\,$@)"
+RMBUILD = if exist build rmdir /s /q build
+else
+MKDIR = mkdir -p $@
+RMBUILD = $(RM) -r build
+endif
+
 SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/mission_logic.c
 
 # Flight-readiness regression suite (2026-08-08 review). Separate binary: it
@@ -111,90 +127,90 @@ LT_SRCS := test_lt_20260813.c ../../Core/Src/power_model.c
 # prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
 
-test_runner$(EXE): $(SRCS) $(INCLUDED_SRCS)
+$(BUILD_DIR)/test_runner$(EXE): $(SRCS) $(INCLUDED_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
 
-test_flight$(EXE): $(FLIGHT_SRCS) $(INCLUDED_SRCS)
+$(BUILD_DIR)/test_flight$(EXE): $(FLIGHT_SRCS) $(INCLUDED_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(FLIGHT_INCLUDES) -o $@ $(FLIGHT_SRCS) -lm
 
-test_findings$(EXE): $(FINDINGS_SRCS)
+$(BUILD_DIR)/test_findings$(EXE): $(FINDINGS_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(FINDINGS_SRCS)
 
-test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../LoRaWAN/App/lora_app.h
+$(BUILD_DIR)/test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../LoRaWAN/App/lora_app.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(BURST_SRCS)
 
-test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c ../../Core/Src/sys_caps.c
+$(BUILD_DIR)/test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c ../../Core/Src/sys_caps.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(STAB_SRCS) -lm
 
 # -fshort-enums matches the arm-none-eabi ABI default - the target builds
 # LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
 # struct layout with _Static_assert(offsetof(crc16)==76, sizeof==80).
-test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h
+$(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -fshort-enums $(INCLUDES) -o $@ $(MREG_SRCS) -lm
 
-test_timerif$(EXE): $(TIMERIF_SRCS) ../../Core/Src/timer_if.c ../../Core/Inc/timer_if.h
+$(BUILD_DIR)/test_timerif$(EXE): $(TIMERIF_SRCS) ../../Core/Src/timer_if.c ../../Core/Inc/timer_if.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TIMERIF_INCLUDES) -o $@ $(TIMERIF_SRCS) -lm
 
-test_review0812$(EXE): $(REVIEW0812_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/main.c ../../Core/Src/usart_if.c ../../Core/Src/atgm336h.c
+$(BUILD_DIR)/test_review0812$(EXE): $(REVIEW0812_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/main.c ../../Core/Src/usart_if.c ../../Core/Src/atgm336h.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(REVIEW0812_SRCS) -lm
 
-test_deepreview$(EXE): $(DEEP_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/flash_log.c ../../Core/Inc/flash_log.h ../../Core/Src/atgm336h.c ../../Core/Src/sys_app.c ../../Core/Src/adc_if.c ../../Core/Src/sys_sensors.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/multiregion_context.c
+$(BUILD_DIR)/test_deepreview$(EXE): $(DEEP_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/flash_log.c ../../Core/Inc/flash_log.h ../../Core/Src/atgm336h.c ../../Core/Src/sys_app.c ../../Core/Src/adc_if.c ../../Core/Src/sys_sensors.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/multiregion_context.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(DEEP_SRCS)
 
-test_config$(EXE): $(CONFIG_SRCS) ../../Core/Src/config.c ../../Core/Inc/config.h
+$(BUILD_DIR)/test_config$(EXE): $(CONFIG_SRCS) ../../Core/Src/config.c ../../Core/Inc/config.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(CONFIG_SRCS)
 
-test_dr$(EXE): $(DR_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
+$(BUILD_DIR)/test_dr$(EXE): $(DR_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(DR_SRCS) -lm
 
-test_sp0813$(EXE): $(SP_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h
+$(BUILD_DIR)/test_sp0813$(EXE): $(SP_SRCS) ../../Core/Src/atgm336h.c ../../Core/Inc/atgm336h.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(SP_SRCS) -lm
 
-test_lt0813$(EXE): $(LT_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/atgm336h.c ../../Core/Src/multiregion_context.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/main.c ../../Core/Src/mission_state.c ../../Core/Inc/multiregion_context.h
+$(BUILD_DIR)/test_lt0813$(EXE): $(LT_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/atgm336h.c ../../Core/Src/multiregion_context.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/main.c ../../Core/Src/mission_state.c ../../Core/Inc/multiregion_context.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(LT_SRCS) -lm
 
-test_geo$(EXE): $(GEO_SRCS) $(wildcard ../../Middlewares/Third_Party/h3lite/src/*.c)
+$(BUILD_DIR)/test_geo$(EXE): $(GEO_SRCS) $(wildcard ../../Middlewares/Third_Party/h3lite/src/*.c) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(GEO_INCLUDES) -o $@ $(GEO_SRCS) ../../Middlewares/Third_Party/h3lite/src/*.c -lm
 
-test_pwr$(EXE): $(PWR_SRCS)
+$(BUILD_DIR)/test_pwr$(EXE): $(PWR_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(PWR_SRCS) -lm
 
-test_first_flight$(EXE): $(FIRST_FLIGHT_SRCS)
+$(BUILD_DIR)/test_first_flight$(EXE): $(FIRST_FLIGHT_SRCS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(FIRST_FLIGHT_SRCS) -lm
 
-first-flight: test_first_flight$(EXE)
-	./test_first_flight$(EXE)
+first-flight: $(BUILD_DIR)/test_first_flight$(EXE)
+	./$(BUILD_DIR)/test_first_flight$(EXE)
 
-test_pq$(EXE): $(PQ_SRCS) ../../Core/Inc/packet_queue.h
+$(BUILD_DIR)/test_pq$(EXE): $(PQ_SRCS) ../../Core/Inc/packet_queue.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DENABLE_GNSS_DETAIL_PACKET=1 $(INCLUDES) -o $@ $(PQ_SRCS) -lm
 
-pq: test_pq$(EXE)
-	./test_pq$(EXE)
+pq: $(BUILD_DIR)/test_pq$(EXE)
+	./$(BUILD_DIR)/test_pq$(EXE)
 
-test_nvm$(EXE): $(NVM_SRCS) ../../Core/Inc/nvm_slot.h
+$(BUILD_DIR)/test_nvm$(EXE): $(NVM_SRCS) ../../Core/Inc/nvm_slot.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(NVM_SRCS) -lm
 
-nvm: test_nvm$(EXE)
-	./test_nvm$(EXE)
+nvm: $(BUILD_DIR)/test_nvm$(EXE)
+	./$(BUILD_DIR)/test_nvm$(EXE)
 
-test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h
+$(BUILD_DIR)/test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(REGION_INCLUDES) -o $@ $(REGION_SRCS) -lm
 
-region: test_region$(EXE)
-	./test_region$(EXE)
+region: $(BUILD_DIR)/test_region$(EXE)
+	./$(BUILD_DIR)/test_region$(EXE)
 
-test_gnss_acq$(EXE): $(GNSS_ACQ_SRCS) ../../Core/Inc/gnss_acquire.h
+$(BUILD_DIR)/test_gnss_acq$(EXE): $(GNSS_ACQ_SRCS) ../../Core/Inc/gnss_acquire.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(GNSS_ACQ_SRCS) -lm
 
-gnssacq: test_gnss_acq$(EXE)
-	./test_gnss_acq$(EXE)
+gnssacq: $(BUILD_DIR)/test_gnss_acq$(EXE)
+	./$(BUILD_DIR)/test_gnss_acq$(EXE)
 
 # -Wno-unused-function: the included burst suite's own tests/main are parked
-test_txshadow$(EXE): $(TXSHADOW_SRCS) test_burst_fsm.c ../../Core/Inc/tx_fsm.h
+$(BUILD_DIR)/test_txshadow$(EXE): $(TXSHADOW_SRCS) test_burst_fsm.c ../../Core/Inc/tx_fsm.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Wno-unused-function $(INCLUDES) -o $@ $(TXSHADOW_SRCS) -lm
 
-txshadow: test_txshadow$(EXE)
-	./test_txshadow$(EXE)
+txshadow: $(BUILD_DIR)/test_txshadow$(EXE)
+	./$(BUILD_DIR)/test_txshadow$(EXE)
 
 # TX adapter wiring assertions (Phase A1/A2 of the 2026-08-15 next-step
 # handoff; finding TX-ADAPTER-01): designated-field/polarity scans on the
@@ -202,11 +218,11 @@ txshadow: test_txshadow$(EXE)
 # (the suite is RED until then, by design).
 TXADAPTER_SRCS := test_tx_adapter.c
 
-test_txadapter$(EXE): $(TXADAPTER_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/tx_fsm.c
+$(BUILD_DIR)/test_txadapter$(EXE): $(TXADAPTER_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/tx_fsm.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TXADAPTER_SRCS) -lm
 
-txadapter: test_txadapter$(EXE)
-	./test_txadapter$(EXE)
+txadapter: $(BUILD_DIR)/test_txadapter$(EXE)
+	./$(BUILD_DIR)/test_txadapter$(EXE)
 
 # GNSS fix-acceptance wiring gate (Phase A4/A5 of the 2026-08-15 next-step
 # handoff; tracker #284/H-08): characterization of the hardcoded thresholds
@@ -214,127 +230,144 @@ txadapter: test_txadapter$(EXE)
 # Added to `all` by the A5 implementation commit (RED until then, by design).
 GNSSFIX_SRCS := test_gnss_fix_acceptance.c
 
-test_gnssfix$(EXE): $(GNSSFIX_SRCS) ../../Core/Src/atgm336h.c ../../LoRaWAN/App/lora_app.c ../../Core/Src/gnss_acquire.c ../../Core/Inc/gnss_acquire.h
+$(BUILD_DIR)/test_gnssfix$(EXE): $(GNSSFIX_SRCS) ../../Core/Src/atgm336h.c ../../LoRaWAN/App/lora_app.c ../../Core/Src/gnss_acquire.c ../../Core/Inc/gnss_acquire.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(GNSSFIX_SRCS) -lm
 
-gnssfix: test_gnssfix$(EXE)
-	./test_gnssfix$(EXE)
+gnssfix: $(BUILD_DIR)/test_gnssfix$(EXE)
+	./$(BUILD_DIR)/test_gnssfix$(EXE)
 
 # GPS-loss same-wake recovery wiring gate (Phase A6/A7 of the 2026-08-15
 # next-step handoff; tracker #285/H-09). Added to `all` by the A7
 # implementation commit (RED until then, by design).
 GPSLOSS_SRCS := test_gps_loss_recovery.c
 
-test_gpsloss$(EXE): $(GPSLOSS_SRCS) ../../LoRaWAN/App/lora_app.c
+$(BUILD_DIR)/test_gpsloss$(EXE): $(GPSLOSS_SRCS) ../../LoRaWAN/App/lora_app.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(GPSLOSS_SRCS) -lm
 
-gpsloss: test_gpsloss$(EXE)
-	./test_gpsloss$(EXE)
+gpsloss: $(BUILD_DIR)/test_gpsloss$(EXE)
+	./$(BUILD_DIR)/test_gpsloss$(EXE)
 
-review0812: test_review0812$(EXE)
-	./test_review0812$(EXE)
+review0812: $(BUILD_DIR)/test_review0812$(EXE)
+	./$(BUILD_DIR)/test_review0812$(EXE)
 
 # 2026-08-14 review (PWR-02 bench-gated; GEO-01 dataset, GEO-04 guards):
 # pwr/geo run red until the Nichicon characterization and the RESTRICTED
 # dataset land; in `all` (the CI gate) they run as green pre-fix gates.
-pwr: test_pwr$(EXE)
-	./test_pwr$(EXE)
+pwr: $(BUILD_DIR)/test_pwr$(EXE)
+	./$(BUILD_DIR)/test_pwr$(EXE)
 
-geo: test_geo$(EXE)
-	./test_geo$(EXE)
+geo: $(BUILD_DIR)/test_geo$(EXE)
+	./$(BUILD_DIR)/test_geo$(EXE)
 
-pwr-gate: test_pwr$(EXE)
-	EXPECT_UNFIXED=1 ./test_pwr$(EXE)
+pwr-gate: $(BUILD_DIR)/test_pwr$(EXE)
+	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_pwr$(EXE)
 
-geo-gate: test_geo$(EXE)
-	EXPECT_UNFIXED=1 ./test_geo$(EXE)
+geo-gate: $(BUILD_DIR)/test_geo$(EXE)
+	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_geo$(EXE)
 
-deep: test_deepreview$(EXE)
-	./test_deepreview$(EXE)
+deep: $(BUILD_DIR)/test_deepreview$(EXE)
+	./$(BUILD_DIR)/test_deepreview$(EXE)
 
-config: test_config$(EXE)
-	./test_config$(EXE)
+config: $(BUILD_DIR)/test_config$(EXE)
+	./$(BUILD_DIR)/test_config$(EXE)
 
-dr: test_dr$(EXE)
-	./test_dr$(EXE)
+dr: $(BUILD_DIR)/test_dr$(EXE)
+	./$(BUILD_DIR)/test_dr$(EXE)
 
-sp0813: test_sp0813$(EXE)
-	./test_sp0813$(EXE)
+sp0813: $(BUILD_DIR)/test_sp0813$(EXE)
+	./$(BUILD_DIR)/test_sp0813$(EXE)
 
-lt0813: test_lt0813$(EXE)
-	./test_lt0813$(EXE)
+lt0813: $(BUILD_DIR)/test_lt0813$(EXE)
+	./$(BUILD_DIR)/test_lt0813$(EXE)
 
 # The lt0813 suite is red-by-design locally while the LT campaign lands; in
 # `all` (the CI gate) it must run as the green pre-fix gate (same semantics
 # as baseline) or every push fails on the documented known-unfixed checks.
 # Any UNEXPECTED failure (a CHECK anchor, a compile error) still fails CI.
-lt0813-gate: test_lt0813$(EXE)
-	EXPECT_UNFIXED=1 ./test_lt0813$(EXE)
+lt0813-gate: $(BUILD_DIR)/test_lt0813$(EXE)
+	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_lt0813$(EXE)
 
 # R3-11 (#223): DDR identity integrity against the canonical manifest.
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss contracts
-test: test_runner$(EXE)
-	./test_runner$(EXE)
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss contracts check characterization integration structural release-gate
+test: $(BUILD_DIR)/test_runner$(EXE)
+	./$(BUILD_DIR)/test_runner$(EXE)
 
 # Post-fix gate: every FR-xx regression must pass. Wire this into CI once the
 # P0/P1 fixes land.
-flight: test_flight$(EXE)
-	./test_flight$(EXE)
+flight: $(BUILD_DIR)/test_flight$(EXE)
+	./$(BUILD_DIR)/test_flight$(EXE)
 
-findings: test_findings$(EXE)
-	./test_findings$(EXE)
+findings: $(BUILD_DIR)/test_findings$(EXE)
+	./$(BUILD_DIR)/test_findings$(EXE)
 
-burst: test_burst$(EXE)
-	./test_burst$(EXE)
+burst: $(BUILD_DIR)/test_burst$(EXE)
+	./$(BUILD_DIR)/test_burst$(EXE)
 
-stability: test_stability$(EXE)
-	./test_stability$(EXE)
+stability: $(BUILD_DIR)/test_stability$(EXE)
+	./$(BUILD_DIR)/test_stability$(EXE)
 
-multiregion: test_multiregion$(EXE)
-	./test_multiregion$(EXE)
+multiregion: $(BUILD_DIR)/test_multiregion$(EXE)
+	./$(BUILD_DIR)/test_multiregion$(EXE)
 
-timerif: test_timerif$(EXE)
-	./test_timerif$(EXE)
+timerif: $(BUILD_DIR)/test_timerif$(EXE)
+	./$(BUILD_DIR)/test_timerif$(EXE)
 
-# Pre-fix gate: passes while the documented FR-xx regressions are still open,
-# but fails on any NEW breakage. Use this until the fixes land so CI stays
-# meaningful instead of red-by-default.
-baseline: test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE)
-	EXPECT_UNFIXED=1 ./test_runner$(EXE)
-	EXPECT_UNFIXED=1 ./test_flight$(EXE)
-	EXPECT_UNFIXED=1 ./test_findings$(EXE)
-	EXPECT_UNFIXED=1 ./test_burst$(EXE)
-	EXPECT_UNFIXED=1 ./test_stability$(EXE)
-	EXPECT_UNFIXED=1 ./test_multiregion$(EXE)
-	EXPECT_UNFIXED=1 ./test_timerif$(EXE)
-	EXPECT_UNFIXED=1 ./test_review0812$(EXE)
-	EXPECT_UNFIXED=1 ./test_deepreview$(EXE)
-	EXPECT_UNFIXED=1 ./test_config$(EXE)
-	EXPECT_UNFIXED=1 ./test_dr$(EXE)
-	EXPECT_UNFIXED=1 ./test_sp0813$(EXE)
-	EXPECT_UNFIXED=1 ./test_lt0813$(EXE)
-	EXPECT_UNFIXED=1 ./test_geo$(EXE)
-	EXPECT_UNFIXED=1 ./test_pwr$(EXE)
+# Deprecated alias for `all` (was the pre-fix EXPECT_UNFIXED gate over
+# every suite). Kept so old docs/muscle memory land on the honest targets:
+# `check` is the no-masking mandatory gate, `characterization` holds the
+# EXPECT_UNFIXED suites.
+baseline: all
 
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
 # protocol fuzz loop drives.
 SAN_FLAGS := -fsanitize=undefined,address -fno-omit-frame-pointer
-test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS)
+SAN_BUILD_DIR := build/asan-ubsan
+$(SAN_BUILD_DIR)/test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS) | $(SAN_BUILD_DIR)
 	$(CC) $(CFLAGS) $(SAN_FLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
 
 .PHONY: sanitize
-sanitize: test_sanitize$(EXE)
-	./test_sanitize$(EXE)
+sanitize: $(SAN_BUILD_DIR)/test_sanitize$(EXE)
+	./$(SAN_BUILD_DIR)/test_sanitize$(EXE)
 
-all: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 lt0813-gate geo-gate pwr-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss ddrmanifest
+# ---------------------------------------------------------------------------
+# Honest entry points (pretest-hardening handoff 2026-08-15, Phase 1 / PIPE-02)
+#
+# check            every mandatory host suite, NO expected-failure masking
+# characterization the owner-gated known failures (EXPECT_UNFIXED=1); green
+#                  only while the failures are exactly the documented set
+# contracts        pure-module contract suites
+# integration      linked production-object/fake suites (coarse; MAINT-04
+#                  refines the classification in Phase 5)
+# structural       source/build/document scan suites (regression guards only)
+# sanitize         ASan+UBSan build+run (own build/asan-ubsan configuration)
+# release-gate     Phase-1 shape: check + sanitize, masking refused; the ARM
+#                  build/artifact legs arrive with the Phase-6 CI restructure
+# all              check + characterization (the CI gate, STAB-09/#156)
+# ---------------------------------------------------------------------------
+check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss ddrmanifest
+
+characterization: lt0813-gate geo-gate pwr-gate
+	@echo "characterization: 7 documented open failures awaited - LT-06 x2 (#248), GEO-04 x2 (h3lite guards), PWR-02 x3 (#297)"
+
+integration: test flight multiregion timerif config txadapter gnssfix gpsloss
+
+structural: findings burst stability review0812 deep dr sp0813 ddrmanifest
+
+release-gate: check sanitize
+	@if [ -n "$$EXPECT_UNFIXED" ]; then echo "FATAL: release-gate refuses EXPECT_UNFIXED masking"; exit 1; fi
+
+all: check characterization
 
 # Refactor stage 7: module-contract suites only - the "what is proven about
 # module X" entry point (see R2_TEST_MAP.md). `all` keeps running everything.
 contracts: first-flight pq nvm region gnssacq txshadow
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_txshadow$(EXE) test_txadapter$(EXE) test_gnssfix$(EXE) test_gpsloss$(EXE) test_sanitize$(EXE)
+	-$(RMBUILD)
+
+$(BUILD_DIR) $(SAN_BUILD_DIR):
+	$(MKDIR)
