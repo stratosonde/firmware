@@ -73,15 +73,13 @@ GnssFixDisposition_t GnssAcquire_Disposition(bool fix_accepted,
                                              bool position_present,
                                              bool gnss_datetime_valid) {
   GnssFixDisposition_t d;
-  (void)fix_accepted;
-  (void)gnss_datetime_valid;
-  /* BEH-02 (#284) red-commit staging: CURRENT lora_app behavior - any
-   * present position becomes trusted, only a position-less timeout is
-   * marked stale, and a present position always attempts RTC discipline.
-   * The fix commit makes trusted/stale follow fix_accepted and discipline
-   * follow gnss_datetime_valid. */
-  d.update_trusted_position = position_present;
-  d.mark_gnss_stale = !position_present;
-  d.discipline_time = position_present;
+  /* BEH-02 (#284): only an ACCEPTED position becomes trusted (last-known-
+   * good RAM copy, LastPos persistence, fresh-fix epoch, stale-flag
+   * clearing). Anything else is stale/weak provenance in the current
+   * sample. RTC discipline follows the date/time's OWN validity and never
+   * proves position quality. */
+  d.update_trusted_position = fix_accepted && position_present;
+  d.mark_gnss_stale = !d.update_trusted_position;
+  d.discipline_time = position_present && gnss_datetime_valid;
   return d;
 }

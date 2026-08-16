@@ -201,3 +201,10 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   sensor_quality byte). Red commit e094d0f (wake-outcome staging + 7
   intentionally failing checks), fix commit follows. See
   TransmissionModule.md "The Transmit Cycle".
+- **BEH-02 / #284 (FIXED):** a weak/basic GNSS fix is no longer promoted
+  to trusted position. GnssAcquire_Disposition() (gnss_acquire) is the
+  single decision for what a non-package-complete acquisition may touch:
+  trusted position / LastPos persistence / fresh-fix epoch / stale-flag
+  clearing follow the configured accepted-fix predicate only; RTC
+  discipline follows the date/time validity alone. Red commit 3469a96
+  (10 intentionally failing checks), fix commit follows.

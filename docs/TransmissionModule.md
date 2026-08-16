@@ -67,7 +67,12 @@ that (DDR-0003).
    (`GNSS_HasPosition`); a region switch is transactional — radio params are
    verified and the switch rolls back on failure (LT-02/H-04/H-06, #272).
    Restricted regions inhibit RF; the geofence never auto-switches on a stale
-   position.
+   position. Only a fix passing the configured acceptance predicate
+   (satellites, HDOP, fix quality — `GnssAcquire_FixAccepted`) may update the
+   trusted last-known position, its freshness epoch, or clear GNSS staleness
+   (BEH-02/#284); weaker positions remain in the wake's sample as stale/weak
+   provenance, and valid GNSS date/time may discipline the RTC on its own
+   validity, never as proof of position quality.
 
 An admitted science wake attempts GNSS and the remaining sensors, marks each
 field fresh/stale honestly, and appends the current record when flash is

@@ -1282,21 +1282,27 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
       if (GNSS_HasPosition(&hgnss))
       {
         SONDE_LOG_STR("GPS: Basic fix (not high quality)\r\n");
-        /* BEH-02 (#284) staging: the weak-fix disposition (trusted-position
-         * update, staleness, RTC discipline) is decided in gnss_acquire.
-         * Red commit = behavior-preserving; the fix commit stops promoting
-         * a weak/basic position to trusted. */
+        /* BEH-02 (#284): a weak/basic fix is NEVER promoted to trusted
+         * position. The disposition gates every authority: only an
+         * ACCEPTED fix updates last-known-good / LastPos / the fresh-fix
+         * epoch or clears staleness; a rejected candidate stays in this
+         * wake's sample as stale/weak provenance; valid RMC time may
+         * discipline the RTC on its OWN validity, never as proof of
+         * accepted position quality. */
         const GnssFixDisposition_t disposition = GnssAcquire_Disposition(
             GnssMissionFixAccepted(&fix_limits),
             true /* this branch == GNSS_HasPosition */,
             FirstFlightPolicy_GnssDateTimeValid(hgnss.data.date,
                                                 hgnss.data.timestamp));
         if (disposition.update_trusted_position) {
-          /* Update last known position even for basic fix */
+          /* Accepted quality, package incomplete (no valid RMC time this
+           * wake): the position earns trusted last-known-good. */
           last_valid_lat = hgnss.data.latitude;
           last_valid_lon = hgnss.data.longitude;
           last_valid_alt = hgnss.data.altitude;
           have_previous_fix = true;
+        } else {
+          SONDE_LOG_STR("GPS: fix not accepted - position stays stale/weak provenance (not trusted)\r\n");
         }
         if (disposition.discipline_time) {
           /* F-1 (#176): discipline the clock FIRST, then stamp in UTC. */
