@@ -429,12 +429,17 @@ static void test_silence_force_respects_floor(void)
 /* ========================================================================== */
 static void test_ci_runs_all_suites(void)
 {
-    printf("-- STAB-09/#156: ci.yml runs make -C tests/host all\n");
+  printf("-- STAB-09/#156: ci.yml runs make -C tests/host check (+characterization)\n");
 
-    char *src = slurp("../../.github/workflows/ci.yml");
-    CHECK(strstr(src, "tests/host") != NULL);   /* anchor */
-    CHECK_REGRESSION(strstr(src, "make -C tests/host all") != NULL, "STAB-09");
-    free(src);
+  char *src = slurp("../../.github/workflows/ci.yml");
+  CHECK(strstr(src, "tests/host") != NULL); /* anchor */
+  /* Phase 6c: the workflow's host-gcc job runs the honest merge gate
+   * (check) and publishes the characterized open failures separately.
+   * `all` = check + characterization, so the gate semantics are the same
+   * and the bar is explicit. */
+  CHECK_REGRESSION(strstr(src, "make -C tests/host check") != NULL, "STAB-09");
+  CHECK(strstr(src, "make -C tests/host characterization") != NULL);
+  free(src);
 }
 
 /* ========================================================================== */
