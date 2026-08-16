@@ -208,6 +208,18 @@ test_txadapter$(EXE): $(TXADAPTER_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/
 txadapter: test_txadapter$(EXE)
 	./test_txadapter$(EXE)
 
+# GNSS fix-acceptance wiring gate (Phase A4/A5 of the 2026-08-15 next-step
+# handoff; tracker #284/H-08): characterization of the hardcoded thresholds
+# plus red wiring scans for the one configured authoritative predicate.
+# Added to `all` by the A5 implementation commit (RED until then, by design).
+GNSSFIX_SRCS := test_gnss_fix_acceptance.c
+
+test_gnssfix$(EXE): $(GNSSFIX_SRCS) ../../Core/Src/atgm336h.c ../../LoRaWAN/App/lora_app.c ../../Core/Src/gnss_acquire.c ../../Core/Inc/gnss_acquire.h
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(GNSSFIX_SRCS) -lm
+
+gnssfix: test_gnssfix$(EXE)
+	./test_gnssfix$(EXE)
+
 review0812: test_review0812$(EXE)
 	./test_review0812$(EXE)
 
@@ -252,7 +264,7 @@ lt0813-gate: test_lt0813$(EXE)
 ddrmanifest:
 	python3 ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter contracts
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix contracts
 test: test_runner$(EXE)
 	./test_runner$(EXE)
 
@@ -314,4 +326,4 @@ all: test flight findings burst stability multiregion timerif review0812 deep co
 contracts: first-flight pq nvm region gnssacq txshadow
 
 clean:
-	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_txshadow$(EXE) test_txadapter$(EXE) test_sanitize$(EXE)
+	$(RM) test_runner$(EXE) test_flight$(EXE) test_findings$(EXE) test_burst$(EXE) test_stability$(EXE) test_multiregion$(EXE) test_timerif$(EXE) test_review0812$(EXE) test_deepreview$(EXE) test_config$(EXE) test_dr$(EXE) test_sp0813$(EXE) test_lt0813$(EXE) test_geo$(EXE) test_pwr$(EXE) test_first_flight$(EXE) test_pq$(EXE) test_nvm$(EXE) test_region$(EXE) test_gnss_acq$(EXE) test_txshadow$(EXE) test_txadapter$(EXE) test_gnssfix$(EXE) test_sanitize$(EXE)
