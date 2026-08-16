@@ -288,3 +288,19 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   flag-built flight image is byte-size-identical to the last sed-built one
   (181,312 B, SONDE_BUILD:flight), zero fragments mutated. build.ps1
   -Flight and the root arm-flight target use the same path.
+- **PIPE-07/CI-7 (RESOLVED, Phase 6c):** the workflow is now the handoff
+  7-job shape: hygiene (diff-check, PROJECT_CPPFLAGS inventory, actionlint,
+  format), host-gcc (check + characterization), host-clang (contracts +
+  integration under CC=clang), sanitizers (logs uploaded), static-analysis
+  (cppcheck debug AND flight configs via the parameterized script), and
+  arm-matrix (PROJECT_CPPFLAGS debug+flight, mutually-exclusive marker
+  proofs, git-diff cleanliness, arminventory, evidence bundles: bin/elf/map
+  + sha256sums + size + largest-symbols + stack-usage + manifest with
+  firmware/h3lite SHAs, compiler, linker-script hash). Job 7 release-gate
+  pins characterization to the documented {lt0813-gate, pwr-gate} set,
+  records power-profile identity (BEH-06 UNQUALIFIED_LEGACY) + region-data
+  identity (h3lite submodule SHA + generator table provenance), downloads
+  the EXACT arm-matrix artifact without rebuilding, verifies its hashes,
+  and uploads the RC archive. GEO'’'s EXPECT_UNFIXED reader removed (the
+  mechanism retired with GEO-04); actions/upload+download-artifact pinned
+  by SHA.

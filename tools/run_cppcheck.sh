@@ -1,7 +1,9 @@
 #!/bin/bash
 # Phase 3 (pretest-hardening): cppcheck gate over first-party sources.
-# Single source of truth: root `make lint` and the CI hygiene job both run
-# this. Vendor trees are include paths only (never analyzed); first-party
+# Phase 6 (PIPE-07): extra defines may be passed as arguments so the CI
+# static-analysis job runs BOTH the debug and flight configurations
+# (e.g. bash tools/run_cppcheck.sh -DSONDE_FLIGHT_BUILD).
+# Vendor trees are include paths only (never analyzed); first-party
 # diagnostics fail the build. Audited suppressions live in
 # tools/cppcheck-suppressions.txt.
 set -u
@@ -10,6 +12,7 @@ cppcheck --enable=warning,performance,portability --std=c99 -j 4 \
   --error-exitcode=1 --quiet --inline-suppr \
   --suppressions-list=tools/cppcheck-suppressions.txt \
   --suppress=missingIncludeSystem \
+  "$@" \
   -D__GNUC__ -DDEBUG -DCORE_CM4 -DUSE_HAL_DRIVER -DSTM32WLE5xx \
   -ICore/Inc -ILoRaWAN/App -ILoRaWAN/Target \
   -IDrivers/STM32WLxx_HAL_Driver/Inc -IDrivers/STM32WLxx_HAL_Driver/Inc/Legacy \

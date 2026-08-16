@@ -3,33 +3,103 @@ name: CI
 on:
   push:
   pull_request:
-  # flight1-hil-rc1-phase6-pipe08: deterministic log environment (LC_ALL/TZ).
-  # (Phase 6 PIPE-08; tag handling for the release gate lands in P6c.)
+  # Job 7 (release gate) also runs on RC tags and manual dispatch.
 
+# PIPE-08: deterministic log environment.
 env:
   LC_ALL: C
   TZ: UTC
 
+# PIPE-06: third-party actions pinned by full commit SHA:
+#   checkout v4.2.2  = 11bd71901bbe5b1630ceea73d27597364c9af683
+#   upload-artifact v4.6.2 = ea165f8d65b6e75b540449e92b4886f43607fa02
+#   download-artifact v4.3.0 = d3f86a1065b71730e2b17b3c747857c80f9a61d1
+
 jobs:
-  host-tests:
+  # Job 2 - host GCC: full merge gate + separate characterization report.
+  host-gcc:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      # PIPE-06: actions pinned by full commit SHA (v4.2.2).
+      # F-013 (#210): the stability suite scans h3lite.c (a submodule) -
+      # without this the host gate exits 2 on the missing file.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          # F-013 (#210): the stability suite scans h3lite.c (a submodule) -
-          # without this the host gate exits 2 on the missing file.
           submodules: recursive
-      # STAB-09 (#156): the FULL host gate — test + flight + findings + burst.
-      # The findings/burst suites hold the autonomous-control regressions
-      # (BURST-01/02/03, R2-13, STAB-*) and must be merge gates, not opt-in.
-      - name: All host regression suites
-        run: make -C tests/host all
-      - name: Host tests with UBSan/ASan (F16, 2026-08-11 review)
-        run: make -C tests/host sanitize
+      - name: Full merge gate (check)
+        run: make -C tests/host check
+      - name: Characterization report (documented open failures)
+        run: make -C tests/host characterization
 
-  firmware:
+  # Job 3 - host Clang: contracts + linked integration under a second compiler.
+  host-clang:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Contracts + integration (CC=clang)
+        run: |
+          make -C tests/host clean
+          make -C tests/host CC=clang contracts integration
+
+  # Job 4 - sanitizers: every instrumented suite, log uploaded on failure.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+      - name: ASan/UBSan gate
+        # STAB-09/F16: every instrumented suite is a merge gate, not opt-in.
+        run: make -C tests/host sanitize 2>&1 | tee /tmp/sanitize.log
+      - name: Upload sanitizer log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sanitizer-log
+          path: /tmp/sanitize.log
+          retention-days: 30
+
+  # Job 5 - static analysis: cppcheck in BOTH the debug and flight configs.
+  static-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+          cppcheck --version
+      - name: cppcheck (debug configuration)
+        run: bash tools/run_cppcheck.sh 2>&1 | tee /tmp/cppcheck-debug.log
+      - name: cppcheck (flight configuration)
+        run: bash tools/run_cppcheck.sh -DSONDE_FLIGHT_BUILD 2>&1 | tee /tmp/cppcheck-flight.log
+      - name: Upload cppcheck reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cppcheck-reports
+          path: |
+            /tmp/cppcheck-debug.log
+            /tmp/cppcheck-flight.log
+          retention-days: 30
+
+  # Job 6 - ARM matrix: debug + flight builds via PROJECT_CPPFLAGS, marker
+  # proofs, inventory, evidence bundles. FR-20 (#101): the binary that flies
+  # is exactly the binary CI builds.
+  arm-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -42,46 +112,39 @@ jobs:
           arm-none-eabi-gcc --version
       - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
         run: python3 tools/check_project_cppflags.py
-      - name: Build firmware
-        run: make -C Debug -j"$(nproc)" all
-      - name: Prove the debug marker (and only it) is in the binary
+      - name: Debug build
+        run: |
+          make -C Debug clean
+          make -C Debug all -j"$(nproc)"
+      - name: Debug marker proof (debug only)
         run: |
           arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/debug.bin
-          grep -q "SONDE_BUILD:debug" /tmp/debug.bin || { echo "FATAL: debug build marker missing"; exit 1; }
-          if grep -q "SONDE_BUILD:flight" /tmp/debug.bin; then echo "FATAL: flight marker present in a debug build"; exit 1; fi
-      - name: Source tree unchanged by the build (PIPE-04)
-        run: git diff --exit-code --stat
-
-  # FR-20 (#101): the binary that flies must be the binary CI builds.
-  firmware-flight:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          submodules: recursive
-      - name: Install ARM toolchain (pinned, PIPE-06)
+          grep -q "SONDE_BUILD:debug" /tmp/debug.bin || { echo "FATAL: debug marker missing"; exit 1; }
+          if grep -q "SONDE_BUILD:flight" /tmp/debug.bin; then echo "FATAL: flight marker in debug build"; exit 1; fi
+      - name: Package debug evidence (PIPE-07)
+        run: bash tools/make_arm_evidence.sh debug
+      - name: Flight build (flags, not mutation)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi=15:13.2.rel1-2
-          arm-none-eabi-gcc --version
-      - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
-        run: python3 tools/check_project_cppflags.py
-      - name: Build flight configuration (flags, not source mutation; PIPE-04/#265)
-        run: |
-          # The sed injection ritual is RETIRED: the flight define travels via
-          # the centralized PROJECT_CPPFLAGS make variable, which the gate
-          # above proves every active C recipe honours. The embedded-marker
-          # check below still proves the binary is a flight build (F12/#173).
           make -C Debug clean
           make -C Debug all -j"$(nproc)" PROJECT_CPPFLAGS=-DSONDE_FLIGHT_BUILD
-          arm-none-eabi-size Debug/Radio_Sonde_E5_HF_EU.elf
-      - name: Prove the flight marker is in the binary (F12/#173)
+      - name: Flight marker proof (flight only)
         run: |
           arm-none-eabi-objcopy -O binary Debug/Radio_Sonde_E5_HF_EU.elf /tmp/flight.bin
-          grep -q "SONDE_BUILD:flight" /tmp/flight.bin || { echo "FATAL: flight build marker missing"; exit 1; }
-          if grep -q "SONDE_BUILD:debug" /tmp/flight.bin; then echo "FATAL: debug build marker present"; exit 1; fi
-      - name: Source tree unchanged by the build (PIPE-04)
+          grep -q "SONDE_BUILD:flight" /tmp/flight.bin || { echo "FATAL: flight marker missing"; exit 1; }
+          if grep -q "SONDE_BUILD:debug" /tmp/flight.bin; then echo "FATAL: debug marker in flight build"; exit 1; fi
+      - name: Package flight evidence (PIPE-07)
+        run: bash tools/make_arm_evidence.sh flight
+      - name: Source tree unchanged by both builds (PIPE-04)
         run: git diff --exit-code --stat
+      - name: Production source inventory (arminventory)
+        run: make -C tests/host arminventory
+      - name: Upload ARM evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: arm-evidence
+          path: dist/
+          retention-days: 90
 
   # Phase 3 (pretest-hardening handoff): hygiene gate - cppcheck over
   # first-party sources (gated), actionlint (gated), clang-format
@@ -93,14 +156,10 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0  # the format gate diffs against github.event.before
-      - name: Install hygiene tools
-        run: |
-          sudo apt-get update && sudo apt-get install -y cppcheck
-          python3 -m pip install clang-format==22.1.8
-      - name: PROJECT_CPPFLAGS gate (PIPE-04/#265)
+      - name: git diff --check
+        run: git diff --check
+      - name: PROJECT_CPPFLAGS gate (generated-build inventory, PIPE-04)
         run: python3 tools/check_project_cppflags.py
-      - name: cppcheck gate (first-party)
-        run: bash tools/run_cppcheck.sh
       # PIPE-06: checksum-verified actionlint (v1.7.7).
       - name: actionlint (pinned + sha256-verified)
         run: |
@@ -108,5 +167,58 @@ jobs:
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tar.gz" | sha256sum -c -
           tar xzf /tmp/actionlint.tar.gz actionlint
           ./actionlint
+      - name: Install clang-format (pinned)
+        run: python3 -m pip install clang-format==22.1.8
       - name: clang-format changed-lines gate
         run: bash tools/check_format.sh "${{ github.event.before }}"
+
+  # Job 7 - release gate (RC tags / manual): requires jobs 1-6; packages the
+  # EXACT artifact from arm-matrix without rebuilding; verifies release
+  # identity. The downloadable CI .bin is the only flight-flash candidate.
+  release-gate:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    needs: [hygiene, host-gcc, host-clang, sanitizers, static-analysis, arm-matrix]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          submodules: recursive
+      - name: EXPECT_UNFIXED gates limited to the documented set
+        run: |
+          # The characterization target may only contain the documented
+          # LT-06 (#248) and PWR-02 (#297) gates; any new EXPECT_UNFIXED
+          # gate redirects the release to red. (Template readers are
+          # vacuous; only these gates set the env and mask failures.)
+          chars=$(sed -n 's/^characterization: //p' tests/host/Makefile)
+          if [ "$chars" != "lt0813-gate pwr-gate" ]; then
+            echo "FATAL: characterization gates drifted: [$chars] (allowed: lt0813-gate pwr-gate)"; exit 1
+          fi
+          echo "release identity OK: characterization = [$chars] only"
+      - name: Power-profile identity (BEH-06)
+        run: |
+          grep "POWER_PROFILE_UNQUALIFIED_LEGACY_ID\|POWER_PROFILE_SCHEMA_VERSION" Core/Inc/power_model.h \
+            || { echo "FATAL: power-profile identity missing"; exit 1; }
+      - name: Region-data identity (GEO-01)
+        run: |
+          echo "h3lite submodule: $(git submodule status Middlewares/Third_Party/h3lite)"
+          grep sha256 Middlewares/Third_Party/h3lite/include/h3lite_regions_table.h | head -4
+      - name: Download the exact ARM evidence (no rebuild)
+        uses: actions/download-artifact@d3f86a1065b71730e2b17b3c747857c80f9a61d1
+        with:
+          name: arm-evidence
+          path: dist/
+      - name: Verify bundle hashes
+        run: |
+          for cfg in debug flight; do
+            (cd dist/arm-evidence-$cfg && sha256sum -c sha256sums.txt)
+          done
+      - name: Package release candidate
+        run: |
+          echo "RC: $(git describe --tags --always) - exact artifact from the arm-matrix job (not rebuilt)"
+          tar czf "release-candidate-$(git describe --tags --always).tar.gz" -C dist .
+      - name: Upload release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-candidate-archive
+          path: release-candidate-*.tar.gz
+          retention-days: 90

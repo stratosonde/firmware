@@ -50,22 +50,12 @@
 
 static int g_failures = 0;
 static int g_checks = 0;
-static int g_expected_failures = 0;
 
 #define CHECK(cond) do { \
     g_checks++; \
     if (!(cond)) { \
         g_failures++; \
         printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-    } \
-} while (0)
-
-#define CHECK_REGRESSION(cond, id) do { \
-    g_checks++; \
-    if (!(cond)) { \
-        g_failures++; \
-        g_expected_failures++; \
-        printf("FAIL [%s] %s:%d: %s\n", id, __FILE__, __LINE__, #cond); \
     } \
 } while (0)
 
@@ -247,13 +237,8 @@ int main(void)
 
     /* pooled scan buffers: freed at exit (scan_pool_track) */
 
-    printf("\n%d checks, %d failures (%d expected pre-fix)\n",
-           g_checks, g_failures, g_expected_failures);
+    printf("\n%d checks, %d failures\n", g_checks, g_failures);
 
-    if (getenv("EXPECT_UNFIXED") && g_failures == g_expected_failures) {
-        printf("BASELINE OK (all failures are known-unfixed findings)\n");
-        return 0;
-    }
     return g_failures ? 1 : 0;
 }
 
