@@ -7,7 +7,8 @@
 CC      ?= gcc
 PYTHON  ?= python3
 # F-01 (#62): -Wsign-conversion catches the mixed-sign division class of bug
-CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Wno-unused-parameter -g
+# Phase 2: -Werror locks the zero-warning baseline (box gcc 10.3.1 + CI)
+CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Werror -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
 # Out-of-tree outputs (pretest-hardening handoff 2026-08-15, Phase 1 / PIPE-01):
