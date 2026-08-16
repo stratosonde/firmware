@@ -37,7 +37,17 @@ red-first commits — never inside a refactor commit.
 | lt0813-gate | 43 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): LT-06 battery normalization non-monotonic −40…−55 °C |
 | geo-gate | 9 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): GEO-04 init/generator guards pending the next h3lite bump; GEO-01 dataset landed `9fdcccc` (53 RESTRICTED cells) — promoted to hard gate + Pyongyang/Sanaa resolve probes |
 | pwr-gate | 6 | 3 | **red-by-design**: PWR-02 legacy power model fixed 4300 mV raw floor |
-| ddrmanifest | — | 0 | `tools/check_ddr_manifest.py` |
+| ddrmanifest | — | 0 | `tools/check_ddr_manifest.py` — 0 failures **and 0 warnings enforced** since Phase 2 / DOC-01 (ambiguous 0014–0021 aliases retired after full 247-occurrence audit; 7 unambiguous aliases remain declared) |
+
+**Warning baseline (Phase 2):** host suite compiles with **zero warnings**
+under `-Wall -Wextra -Wsign-conversion` and is locked with **`-Werror`**
+(40 warning lines → 0 on box gcc 10.3.1; local gcc 9.2 also clean). ARM
+first-party fragments (`Core/Src`, `LoRaWAN/App`) compile `-Wall -Werror`
+with zero diagnostics in BOTH debug and flight configurations (the flight
+config exposed exactly one latent unused-variable, `link_good`, fixed in
+a6308e4). Vendor fragments intentionally unchanged. Raising ARM first-party
+to `-Wextra`/`-Wsign-conversion` remains open (#268): `lora_app.c` is never
+host-compiled, so its first strict-flag pass is a separate effort.
 | arminventory | 4 proofs | 0 | PIPE-05 (Phase 1): ARM source inventory — 18 active fragments, 115 unique C sources, every production `.c` exactly once, no stale `Debug/` fragments |
 
 **Target structure (Phase 1 / PIPE-02):** `check` = every mandatory suite with
