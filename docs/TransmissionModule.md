@@ -1,5 +1,9 @@
 # Transmission Module
 
+> **Authoritative** for transmit-cycle behavior (owner decision 2026-08-16):
+> code changes that alter the transmit cycle must update this document in the
+> same commit. Wire-format bytes remain authoritative in PayloadFormats.md.
+
 ## Overview
 
 Transmission is not a standalone module — it is the **executor half** of the
@@ -35,14 +39,15 @@ that (DDR-0003).
    deliberate GNSS-less science cycle. Mission cadence override (DDR-0002):
    ASCENT 10 s / FLOAT 5 min when the power model is healthy.
 3. **Silences** (executor, first veto wins — `TransmitVeto_t`, archived in the
-   flash record's flags b5-b7):
+   v6 flash record's dedicated `veto_reason` byte; the record's flags byte
+   carries fix-valid b0, satellite count b1-b4, power mode b5-b7):
    | # | Veto | Cause |
    |---|------|-------|
    | 0 | `VETO_NONE` | full go |
    | 1-2 | `VETO_TEMP_STALE` / `VETO_TEMP_LOCKOUT` | **DEPRECATED** (RV-08/#164, DDR-0021) — never produced |
    | 3 | `VETO_RF_SILENCE` | FLIGHT with no valid session (DDR-0018) |
    | 4 | `VETO_RESTRICTED_REGION` | regulatory RF prohibition (geofence) |
-   | 5 | `VETO_GPS_LOSS` | position stale beyond the 24 h budget (`> GPS_LOSS_SILENCE_S`, strict, DDR-0015 BR-STALE-017) — science/logging/GNSS retries continue (STAB-03/#150); same-wake restore on a fresh fix is **not yet implemented** (#285) |
+   | 5 | `VETO_GPS_LOSS` | position stale beyond the 24 h budget (`> GPS_LOSS_SILENCE_S`, strict, DDR-0015 BR-STALE-017) — science/logging/GNSS retries continue (STAB-03/#150); a same-wake accepted fix clears only this veto, before region selection and TX (H-09/#285, A6/A7) |
    | 6 | `VETO_PRELAUNCH_QUIET` | commissioned-but-not-launched quiet watch (DR-06/#241) |
 4. **Probe**: one compact confirmed heartbeat (Port 10). **The ACK gates all
    further RF work this wake** (SI-016, DDR-0019): no ACK → end of RF work.
@@ -52,9 +57,11 @@ that (DDR-0003).
    `recovery_frontier` monotonic down — never rewalks). Budget knobs (config,
    §6b): `max_bulk_packets` (20), `bulk_battery_min_mv` (5000),
    `bulk_timeout_ms` (60 s). The burst runs under a hard deadline with no
-   timer re-arm (LT-07/#277). Watermarks persist via deferred header sync —
-   one flush at burst end (Finding #8), gated by `pending_tx_committed` so a
-   post-send reset can't double-commit (C-01/#270). Backend dedups on
+   timer re-arm (LT-07/#277). Watermarks advance at send time (no commit-on-ACK,
+   no autonomous retry) and persist via deferred header sync —
+   `FlashLog_DeferHeaderSync()`/`FlashLog_FlushHeaderSync()` batch the header
+   write to one flush at burst end (Finding #8); the header commits only after
+   a successful program (#135). Backend dedups on
    (DevEUI, sequence); gaps and duplicates are acceptable (SI-018).
 6. **Region**: H3 lookup runs only on a fresh, token-present fix
    (`GNSS_HasPosition`); a region switch is transactional — radio params are
