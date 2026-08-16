@@ -332,14 +332,56 @@ baseline: all
 # F16 (2026-08-11 stability review): UBSan/ASan build of the pure-logic
 # suite — catches signed overflow / UB at the numerical boundaries the
 # protocol fuzz loop drives.
+#
+# Phase 3 (#263): expanded from test_main only to every suite that EXECUTES
+# production code (19 instrumented exes). Suites that only slurp+scan source
+# text (burst, deepreview, findings, txadapter, gpsloss) are excluded - they
+# run no firmware, so there is nothing to instrument. Suites with documented
+# expected failures (lt0813 x2, geo x2) exit 0 via the baseline mechanism,
+# same as the normal build.
 SAN_FLAGS := -fsanitize=undefined,address -fno-omit-frame-pointer
 SAN_BUILD_DIR := build/asan-ubsan
-$(SAN_BUILD_DIR)/test_sanitize$(EXE): $(SRCS) $(INCLUDED_SRCS) | $(SAN_BUILD_DIR)
-	$(CC) $(CFLAGS) $(SAN_FLAGS) $(INCLUDES) -o $@ $(SRCS) -lm
+H3LITE_SRCS := $(wildcard ../../Middlewares/Third_Party/h3lite/src/*.c)
 
+# $(1) exe name, $(2) SRCS var, $(3) INCLUDES var, $(4) extra compile flags,
+# $(5) extra link sources, $(6) extra prereqs (sources #included by the TU)
+define SAN_SUITE_RULE
+$(SAN_BUILD_DIR)/$(1)$(EXE): $$($(2)) $(INCLUDED_SRCS) $(6) | $(SAN_BUILD_DIR)
+	$$(CC) $$(CFLAGS) $$(SAN_FLAGS) $$($(3)) $(4) -o $$@ $$($(2)) $(5) -lm
+SAN_EXES += $(SAN_BUILD_DIR)/$(1)$(EXE)
+endef
+
+$(eval $(call SAN_SUITE_RULE,test_sanitize,SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_flight,FLIGHT_SRCS,FLIGHT_INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_stability,STAB_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_multiregion,MREG_SRCS,INCLUDES,-fshort-enums,,../../Core/Src/multiregion_context.c))
+$(eval $(call SAN_SUITE_RULE,test_timerif,TIMERIF_SRCS,TIMERIF_INCLUDES,,,../../Core/Src/timer_if.c))
+$(eval $(call SAN_SUITE_RULE,test_review0812,REVIEW0812_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_config,CONFIG_SRCS,INCLUDES,,,../../Core/Src/config.c))
+$(eval $(call SAN_SUITE_RULE,test_dr,DR_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_sp0813,SP_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_lt0813,LT_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_geo,GEO_SRCS,GEO_INCLUDES,,$(H3LITE_SRCS),$(H3LITE_SRCS)))
+$(eval $(call SAN_SUITE_RULE,test_pwr,PWR_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_first_flight,FIRST_FLIGHT_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_pq,PQ_SRCS,INCLUDES,-DENABLE_GNSS_DETAIL_PACKET=1,,))
+$(eval $(call SAN_SUITE_RULE,test_nvm,NVM_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_region,REGION_SRCS,REGION_INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_gnss_acq,GNSS_ACQ_SRCS,INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_txshadow,TXSHADOW_SRCS,INCLUDES,-Wno-unused-function,,test_burst_fsm.c))
+$(eval $(call SAN_SUITE_RULE,test_gnssfix,GNSSFIX_SRCS,INCLUDES,,,))
+
+# EXPECT_UNFIXED=1 mirrors the gate semantics (`all` runs the red-by-design
+# suites lt0813/geo the same way): documented expected failures are reported
+# but do not fail the run; a NEW failure (or a sanitizer abort) still does.
 .PHONY: sanitize
-sanitize: $(SAN_BUILD_DIR)/test_sanitize$(EXE)
-	./$(SAN_BUILD_DIR)/test_sanitize$(EXE)
+sanitize: $(SAN_EXES)
+	@for t in $(SAN_EXES); do \
+	    echo "--- sanitize: $$t"; \
+	    EXPECT_UNFIXED=1 ./$$t > $$t.log 2>&1 || { cat $$t.log; exit 1; }; \
+	    tail -1 $$t.log; \
+	done
+	@echo "sanitize: $(words $(SAN_EXES)) instrumented suites clean"
 
 # ---------------------------------------------------------------------------
 # Honest entry points (pretest-hardening handoff 2026-08-15, Phase 1 / PIPE-02)

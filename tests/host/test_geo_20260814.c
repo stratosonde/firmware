@@ -70,6 +70,25 @@ static int g_expected_failures = 0;
 } while (0)
 
 /* Source-scan helpers (same shape as test_lt_20260813.c) */
+/* Phase 3 (#263): the ASan gate runs the scan suites too. Scan buffers live
+ * until process exit, so pool them and free once via atexit instead of
+ * hand-freeing (or leaking) on individual return paths. */
+#define SCAN_POOL_MAX 48
+static void *g_scan_pool[SCAN_POOL_MAX];
+static int g_scan_pool_n;
+static void scan_pool_free(void)
+{
+    while (g_scan_pool_n > 0) free(g_scan_pool[--g_scan_pool_n]);
+}
+static void *scan_pool_track(void *p)
+{
+    if (p && g_scan_pool_n < SCAN_POOL_MAX) {
+        if (g_scan_pool_n == 0) atexit(scan_pool_free);
+        g_scan_pool[g_scan_pool_n++] = p;
+    }
+    return p;
+}
+
 static char *slurp(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -77,7 +96,7 @@ static char *slurp(const char *path)
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    char *buf = (char *)malloc((size_t)n + 1);
+    char *buf = (char *)scan_pool_track(malloc((size_t)n + 1));
     if (!buf) exit(2);
     if (fread(buf, 1, (size_t)n, f) != (size_t)n) exit(2);
     buf[n] = '\0';
@@ -96,7 +115,7 @@ static char *slurp(const char *path)
 static char *strip_comments(const char *src)
 {
     size_t n = strlen(src);
-    char *out = (char *)malloc(n + 1);
+    char *out = (char *)scan_pool_track(malloc(n + 1));
     size_t o = 0;
     for (size_t i = 0; i < n; i++) {
         if (src[i] == '/' && src[i + 1] == '*') {
@@ -227,7 +246,7 @@ int main(void)
     test_geo04_guards(h3c, gen);
     printf("\n");
 
-    free(h3c); free(gen);
+    /* pooled scan buffers: freed at exit (scan_pool_track) */
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
