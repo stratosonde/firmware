@@ -10,31 +10,31 @@
   *          Compiles against the REAL h3lite submodule sources; no firmware
   *          objects needed.
   ******************************************************************************
-  *   GEO-01 (P0, firmware#257 / SP-02): the shipped region table contains
-  *     ZERO REGION_RESTRICTED cells, so every enforcement consumer is dead
-  *     code. Owner disposition: land cells to be marked RESTRICTED in the
-  *     dataset (h3lite repo). The nonempty count below goes green when the
-  *     regenerated table lands; the resolve-probe for a specific restricted
-  *     coordinate is added with that dataset (probe coordinate is the
-  *     owner's choice).
+  *   GEO-01 (P0, firmware#257 / SP-02): LANDED 2026-08-15 (h3lite 5480859,
+  *     firmware 9fdcccc). The regenerated table contains 53 REGION_RESTRICTED
+  *     cells (Yemen + North Korea; RESTRICTED.geojson sha256:293c1efa8378a718
+  *     recorded in h3lite_regions_table.h). The nonempty count is now a HARD
+  *     gate, and Pyongyang/Sanaa resolve probes pin the enforcement set
+  *     end-to-end through the same res 3->2->1 lookup the device runs.
   *
   *   GEO-04 (P1, h3lite repo tracker): h3liteInit()'s F-013 self-check
   *     probes Paris->EU868 and mid-Atlantic->REGION_UNKNOWN but never proves
-  *     the RESTRICTED enforcement set non-empty - it passes on today's empty
-  *     table. Fix (submodule): init scans the table for REGION_RESTRICTED
-  *     and probes a known restricted coordinate; generate_lookup_table.py
-  *     asserts the set non-empty so a silent revert is impossible. MUST ride
-  *     with the GEO-01 dataset (boot-fatal without it). Structural scans
-  *     here pin both guards.
+  *     the RESTRICTED enforcement set non-empty. Fix (submodule): init scans
+  *     the table for REGION_RESTRICTED and probes a known restricted
+  *     coordinate; generate_lookup_table.py asserts the set non-empty so a
+  *     silent revert is impossible. The GEO-01 dataset has landed (9fdcccc),
+  *     so the guards are now unblocked and land with the next h3lite bump.
+  *     Structural scans here pin both guards (still red by design).
   *
   *   GEO-03 (P1, firmware#258 / SP-04): ring-search laundering + zero-
   *     candidate keep-current. OWNER DISPOSITION 2026-08-15: no behaviour
   *     rework - keep-current-on-UNKNOWN is sanctioned (ocean crossings);
   *     the dataset edit converts unmapped-land-laundering into enforced
-  *     RESTRICTED. No checks here by design.
+  *     RESTRICTED. That dataset edit landed 2026-08-15 (9fdcccc), realising
+  *     the disposition; #258 closed accordingly. No checks here by design.
   *
   *   Run:
-  *   make -C tests/host geo          (red until the dataset + guards land)
+  *   make -C tests/host geo          (red until the GEO-04 guards land)
   *   EXPECT_UNFIXED=1 ./test_geo     (green pre-fix gate; CI shape via geo-gate)
   ******************************************************************************
   */
@@ -149,9 +149,9 @@ static void test_geo_pipeline_sanity(void)
 }
 
 /* ========================================================================== */
-/* GEO-01 - DATA (gated): the RESTRICTED enforcement set must be non-empty.    */
-/* Green when the owner's dataset edit lands and the table is regenerated      */
-/* (firmware#257 / SP-02).                                                     */
+/* GEO-01 - DATA (HARD gate since 2026-08-15): the RESTRICTED enforcement set  */
+/* must be non-empty. Dataset landed in h3lite 5480859 / firmware 9fdcccc      */
+/* (firmware#257 / SP-02, closed).                                             */
 /* ========================================================================== */
 
 static void test_geo01_restricted_nonempty(void)
@@ -167,11 +167,13 @@ static void test_geo01_restricted_nonempty(void)
     printf("  %u of %u table entries are REGION_RESTRICTED\n", restricted, total);
 
     CHECK(total == REGION_ENTRY_COUNT);
-    CHECK_REGRESSION(restricted > 0, "GEO-01-restricted-nonempty");
+    CHECK(restricted > 0);
 
-    /* The resolve-probe for a known restricted coordinate (review's
-     * GEO-01-restricted-resolves anchor) is added with the dataset: the
-     * probe coordinate is the owner's chosen restricted territory. */
+    /* Resolve probes, added with the landed dataset per the review's
+     * GEO-01-restricted-resolves anchor: Pyongyang and Sanaa must resolve
+     * to REGION_RESTRICTED through the production lookup path. */
+    CHECK(latLngToRegion(39.0392, 125.7625) == REGION_RESTRICTED); /* Pyongyang */
+    CHECK(latLngToRegion(15.3547, 44.2066) == REGION_RESTRICTED);  /* Sanaa */
 }
 
 /* ========================================================================== */
