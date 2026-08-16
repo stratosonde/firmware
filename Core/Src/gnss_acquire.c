@@ -68,4 +68,3 @@ bool GnssAcquire_FixAccepted(const GnssFixCandidate_t *candidate,
   }
   return (candidate->hdop * 10.0f) <= (float)limits->maximum_hdop_x10;
 }
-

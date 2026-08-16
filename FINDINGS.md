@@ -14,6 +14,9 @@ red-first commits — never inside a refactor commit.
 | suite | checks | failures | notes |
 |---|---:|---:|---|
 | test (core runner) | 292 | 0 | golden heartbeat-v2 + bulk-v6 vectors intact |
+| pq | 45 | 0 | stage 1: packet_queue contract |
+| nvm | 34 | 0 | stage 2: nvm_slot contract |
+| region | 2,071 | 0 | stage 3: region_policy contract (incl. exhaustive EU polygon rasterisation) |
 | flight (flight-readiness) | 66,428 | 0 | |
 | findings | 113 | 0 | |
 | burst | 113 | 0 | scan-configured FSM replay model, extended (stage 5 step 1) to a full TX-FSM characterisation: LT-07 stale-wait forcing, R3-01 yield/deadline arithmetic, R3-03 ascent gate, T1/F-5 silence park, abort, bulk failure paths |
@@ -101,9 +104,10 @@ fix commit, never folded into a refactor commit)
 
 ### 2026-08-15 — TX-ADAPTER-01: reversed `mission_ascent` polarity (stage 5.4b regression)
 
-**Status: FIXED 2026-08-15 (A1 red gate `7f5bde7` + A2 fix, this commit's
-predecessor). `b958a95` remains the reviewed Stage-7 baseline; the A8
-rebaseline commit records the new candidate SHA.**
+**Status: FIXED 2026-08-15 (A1 red gate `7f5bde7`, A2 fix `ec1428a`). The
+A-series rebaseline (A8 commit, `docs(test): rebaseline and record ARM/HIL
+evidence`) supersedes `b958a95` as the candidate baseline; its head SHA is
+the release-candidate reference recorded in the A8 commit message.**
 
 External review of `b958a95` found a functional regression introduced by
 stage 5.4b (`7a6ab7e`): `OnTxData` marshals the confirm input with

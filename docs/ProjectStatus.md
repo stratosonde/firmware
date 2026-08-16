@@ -60,12 +60,12 @@ Everything below is code-complete and CI-verified; where hardware matters it is 
 | **#248** (bench data) | LT-06 compensation-table values; cold chamber feeds it |
 | **#257** (owner data, P0) | SP-02/GEO-01: populate the h3lite RESTRICTED dataset (unknown land → restricted), regenerate, bump submodule; land h3lite#1 (GEO-04) guards with it |
 | **#297** (bench, P0) | PWR-02: Nichicon cold characterization → floor(T) + monotonic comp table (critical path; feeds #248, ungates `test_pwr`) |
-| **#284** (code, high) | H-08: one authoritative GNSS fix-acceptance predicate (weak fix must not reset staleness/authorize switch) |
-| **#285** (code, high) | H-09: fresh fix must clear GPS-loss silence on the same wake |
+| ~~**#284**~~ (code landed 2026-08-15) | H-08: one authoritative GNSS fix-acceptance predicate — A4 red gate `8e1dee3` + A5 `af86c2c` (`GnssAcquire_FixAccepted`, configured `gps_min_satellites`/`gps_max_hdop_x10`); HIL evidence per Phase B3 |
+| ~~**#285**~~ (code landed 2026-08-15) | H-09: fresh fix clears GPS-loss silence on the same wake — A6 red gate `f99cbd9` + A7 `e96f0e1` (veto-guarded clear before region selection); HIL evidence per Phase B3 |
 | **#286** (code, high) | H-10: fresh-outage recovery must be newest-first |
 | **#287** (code, high) | H-11: commissioned home_region + reset-stable Band-0 age anchor |
 | **#288** (code, high, **partial**) | H-12: FULL/SLEEP admission + complete-package science **implemented** (commit A `61647a2`, stage 6 gates); durable energy trend remains **open** (bench evidence, Phase B1) |
-| **#279, #280, #281, #289** (code, normal) | LT-09 solar flag (batches with #266) · M-02 config threshold consumption · H-01 durable pre-flight state (design) · M-01 deferred ring reconstruction |
+| **#279, #281, #289** (code, normal) + **#280** (normal, **partial**) | LT-09 solar flag (batches with #266) · M-02 config threshold consumption — GPS acceptance thresholds consumed by A5 (`af86c2c`); other thresholds open · H-01 durable pre-flight state (design) · M-01 deferred ring reconstruction |
 | **#298, #299** (code, post-flight) | MAC-01 clamp network-commanded ChannelsNbTrans + DR floor · GEO-05 BR-RF-007/008 mission-configurable ring-search bound |
 | **#261, #262** (infra) | HIL lane + release evidence (M-03) — gates the readiness checklist |
 | **#268** (infra) | First-party `-Wall -Wextra` cleanliness + CI warning gate |
