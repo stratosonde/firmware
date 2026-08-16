@@ -198,10 +198,17 @@ jobs:
           # gate redirects the release to red. (Template readers are
           # vacuous; only these gates set the env and mask failures.)
           chars=$(sed -n 's/^characterization: //p' tests/host/Makefile)
-          if [ "$chars" != "lt0813-gate pwr-gate" ]; then
-            echo "FATAL: characterization gates drifted: [$chars] (allowed: lt0813-gate pwr-gate)"; exit 1
+          # geo-gate is a member of the documented set but must be EXPECT_UNFIXED-free
+          # (its reader retired with GEO-04/0c31029); lt0813/pwr are the only
+          # sanctioned env gates.
+          if [ "$chars" != "lt0813-gate geo-gate pwr-gate" ]; then
+            echo "FATAL: characterization gates drifted: [$chars]"; exit 1
           fi
-          echo "release identity OK: characterization = [$chars] only"
+          bad=$(awk '/^geo-gate:/{f=1} /^[a-z][^ :]*:/ && !/^geo-gate:/{f=0} f && /EXPECT_UNFIXED/{print}' tests/host/Makefile)
+          if [ -n "$bad" ]; then
+            echo "FATAL: geo-gate still uses EXPECT_UNFIXED: $bad"; exit 1
+          fi
+          echo "release identity OK: characterization = [$chars]; geo-gate env-free"
       - name: Power-profile identity (BEH-06)
         run: |
           grep "POWER_PROFILE_UNQUALIFIED_LEGACY_ID\|POWER_PROFILE_SCHEMA_VERSION" Core/Inc/power_model.h \
