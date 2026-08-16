@@ -33,6 +33,7 @@ what each pure module promises.
 | `Core/Src/tx_fsm.c` | `test_tx_fsm_shadow.c` | 734,060 | stage 5: step module shadow-run against the scan-locked characterisation model in `test_burst_fsm.c` (scripted + 200k randomized events) |
 | `Core/Src/first_flight_policy.c` | `test_first_flight_policy.c` | 50 | commit A + stage 6 (admission, package, rail conversion, GNSS-package gate) + BEH-01/#300 admitted-wake outcome (red-first) |
 | `Core/Src/arming_input.c` | `test_arming_input.c` | 23 | PRETEST-DEC-01/#142: PB13 arming debounce + poll path (same-TU GPIO/mission doubles) + shared-net scan pins |
+| `Core/Src/lora_app_adapters.c` | `test_lora_app_adapters.c` | 84 | MAINT-01/02/03 (Phase 5): the five mappings (confirm/cycle/RX/region/first-flight) both polarities + MAINT-03 queries + MAINT-02 stale reuse + delegation scans; mutation-gated on the box |
 | `Core/Src/gnss_acquire.c` acceptance | `test_gnss_acquire.c` (39) + `test_gnss_fix_acceptance.c` (10) | 49 | A4/A5 (#284): configured boundary contract + hardcoded-threshold characterization + adapter wiring |
 | `lora_app.c` TX adapter wiring | `test_tx_adapter.c` | 11 | A1/A2 (TX-ADAPTER-01): confirm-input polarity + designated fields |
 | `lora_app.c` GPS-loss recovery wiring | `test_gps_loss_recovery.c` | 9 | A6/A7 (#285): same-wake veto-guarded clear before region selection |

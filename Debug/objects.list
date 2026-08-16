@@ -1,6 +1,7 @@
 ./Core/Src/adc_if.o
 ./Core/Src/arming_input.o
 ./Core/Src/atgm336h.o
+./Core/Src/lora_app_adapters.o
 ./Core/Src/config.o
 ./Core/Src/flash_if.o
 ./Core/Src/flash_log.o

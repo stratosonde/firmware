@@ -1,19 +1,15 @@
 /* TX adapter wiring assertions (Phase A1/A2 of the 2026-08-15 next-step
  * handoff; finding TX-ADAPTER-01 in FINDINGS.md's open findings log).
  *
- * lora_app.c cannot be linked into the host harness, so these are narrow
- * source-wiring assertions on the DESIGNATED FIELD INITIALIZER that maps
- * MissionState_Get() into TxFsmConfirmInput_t.mission_ascent - the exact
- * mapping whose inversion produced the TX-ADAPTER-01 regression (ASCENT
- * permitted archive recovery, FLOAT blocked it). A source-wiring assertion
- * is the accepted mechanism here per the handoff ("Because lora_app.c
- * cannot presently be linked into the host harness, a narrow source-wiring
- * assertion is acceptable ... It must check the designated field
- * initializer, not merely the presence of MISSION_ASCENT somewhere in the
- * function").
+ * RETIRED 2026-08-16 (MAINT-01, Phase 5): the designated-field-initializer
+ * scans pinned the inline marshal that mapped MissionState_Get() into
+ * TxFsmConfirmInput_t.mission_ascent. That mapping now lives in the
+ * production adapter module (Core/Src/lora_app_adapters.c) and is proven
+ * BEHAVIORALLY by the linked suite tests/host/test_lora_app_adapters.c
+ * (both polarities, mutation-gated). What remains here is the
+ * consumption-side contract plus the delegation anchor:
  *
- * Semantics pinned end to end:
- *   MISSION_ASCENT -> mission_ascent == true
+ *   MISSION_ASCENT -> mission_ascent == true (adapter, linked-tested)
  *     -> TxFsm_OnTxConfirm evaluates !mission_ascent == false
  *     -> archive recovery BLOCKED during ascent
  *   MISSION_FLOAT  -> mission_ascent == false
@@ -21,9 +17,7 @@
  *
  * The pure-FSM halves are proven behaviourally elsewhere: test_burst_fsm.c
  * T-C6 (ascent inhibits the archive opportunity) and the open-burst
- * scenarios (float permits it), plus the 734,060-check shadow suite. This
- * file pins the adapter mapping those tests cannot see - the defect class
- * that produced TX-ADAPTER-01.
+ * scenarios (float permits it), plus the 734,060-check shadow suite.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,52 +74,26 @@ static char *strip_comments(const char *src)
     return out;
 }
 
-/* s occurs inside the initializer window [init, call). */
-static int in_window(const char *init, const char *call, const char *s)
-{
-    const char *p = strstr(init, s);
-    return p != NULL && p < call;
-}
-
 int main(void)
 {
     char *app   = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
     char *txfsm = strip_comments(slurp("../../Core/Src/tx_fsm.c"));
 
-    printf("-- TX-ADAPTER-01: confirm-input mission_ascent polarity\n");
+    printf("-- TX-ADAPTER-01: delegation + consumption-side polarity\n");
 
-    /* The window under test: the confirm-input initializer, bounded by the
-     * struct declaration and the TxFsm_OnTxConfirm call it feeds. */
-    const char *init = strstr(app, "TxFsmConfirmInput_t fsm_in");
-    CHECK(init != NULL);
-    const char *call = init ? strstr(init, "TxFsm_OnTxConfirm(&g_tx_fsm") : NULL;
+    /* Delegation anchor (MAINT-01): lora_app.c builds the confirm input via
+     * the linked-tested adapter builder and feeds it to the FSM. */
+    const char *build = strstr(app, "AppAdapters_BuildTxConfirm(&snap)");
+    CHECK(build != NULL);
+    const char *call = build ? strstr(build, "TxFsm_OnTxConfirm(&g_tx_fsm") : NULL;
     CHECK(call != NULL);
-    if (!init || !call) {
-        printf("%d checks, %d failures\n", checks, failures);
-        return 1;
-    }
 
-    /* IN_WINDOW: s occurs inside the initializer (before the consuming call) */
-#define IN_WINDOW(s) in_window(init, call, (s))
+    /* The raw enum - not a pre-derived bool - crosses the boundary. */
+    CHECK(strstr(app, ".mission_state = MissionState_Get()") != NULL);
 
-    /* The positive mapping: MISSION_ASCENT -> mission_ascent == true.
-     * RED on the reviewed baseline b958a95 (positional, negated form). */
-    CHECK(IN_WINDOW(".mission_ascent = (MissionState_Get() == MISSION_ASCENT)"));
-
-    /* The inverted form must be gone from the initializer. RED on b958a95. */
-    {
-        const char *inv = strstr(init, "MissionState_Get() != MISSION_ASCENT");
-        CHECK(inv == NULL || inv >= call);
-    }
-
-    /* Every field of the touched initializer is designated, so no future
-     * edit can silently reintroduce positional/polarity ambiguity. */
-    CHECK(IN_WINDOW(".now_ms ="));
-    CHECK(IN_WINDOW(".status_ok ="));
-    CHECK(IN_WINDOW(".ack_received ="));
-    CHECK(IN_WINDOW(".battery_good ="));
-    CHECK(IN_WINDOW(".has_unsent ="));
-    CHECK(IN_WINDOW(".max_bulk_packets ="));
+    /* The inverted form must never return (RED on b958a95; would re-invert
+     * R3-03). */
+    CHECK(strstr(app, "MissionState_Get() != MISSION_ASCENT") == NULL);
 
     /* Consumption-side contract (GREEN pin): the module opens recovery on
      * !mission_ascent, i.e. a positively-named field consumed with positive

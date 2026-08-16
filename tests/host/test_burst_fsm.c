@@ -226,10 +226,13 @@ static void scan_firmware(void)
 
     cfg_yield_science_due =
         (strstr(fnorm, "if (fsm->state == TX_FSM_BULK_TRANSFER && TxFsm_ScienceIsDue(fsm, now_ms)) {") != NULL);
+    /* MAINT-02 (Phase 5): Dispatch now enforces the LT-07 bounds THROUGH the
+     * exported predicates (one definition of "stale"); the math itself is
+     * anchored by the predicate definitions, still in this same file. */
     cfg_lt07_probe =
-        (strstr(fnorm, "fsm->state == TX_FSM_WAIT_PROBE_ACK && fsm->probe_sent_ms != 0 && (uint32_t)(in->now_ms - fsm->probe_sent_ms) > in->burst_max_open_ms") != NULL);
+        (strstr(fnorm, "if (TxFsm_ProbeStale(fsm, in->now_ms, in->burst_max_open_ms)) {") != NULL);
     cfg_lt07_burst =
-        (strstr(fnorm, "fsm->state == TX_FSM_BULK_TRANSFER && fsm->burst_opened_ms != 0 && (uint32_t)(in->now_ms - fsm->burst_opened_ms) > in->burst_max_open_ms") != NULL);
+        (strstr(fnorm, "if (TxFsm_BurstStale(fsm, in->now_ms, in->burst_max_open_ms)) {") != NULL);
     cfg_ascent_gate =
         (strstr(fnorm, "!in->mission_ascent") != NULL);
     cfg_defer_at_open =

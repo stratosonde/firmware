@@ -263,3 +263,16 @@ post-flight. Tracked post-flight directions live in §7 of that handoff.
   suite's two structural pins flipped to hard checks; geo-gate no longer
   uses EXPECT_UNFIXED. Characterization suite now awaits 5 documented
   failures (LT-06 x2 #248, PWR-02 x3 #297).
+- **MAINT-01/02/03 (RESOLVED, Phase 5):** the five high-consequence mappings
+  (TxFsm confirm/cycle/RX inputs, region-policy comparisons + post-switch
+  final authorization, first-flight admission) moved out of lora_app.c into
+  the production-compiled, LoRaMac/HAL-free Core/Src/lora_app_adapters.c.
+  Snapshots carry RAW domain values (mission enum, staleness counters, raw
+  status) so every polarity derivation lives in one linked-tested place -
+  the TX-ADAPTER-01 defect class. TxFsm_Dispatch reuses the exported
+  ProbeStale/BurstStale predicates (shadow suite bit-identical: 734,060
+  checks green), and TxFsm_InBulk/WaitingForProbeAck/BulkPacketsSent replace
+  the raw field reads at the burst-decision call sites. The new linked suite
+  (84 checks) killed all 11 reversal mutants on the box; the superseded
+  literal scans in test_tx_adapter.c retired to a delegation + consumption
+  anchor, and the burst/deepreview shape anchors follow the new code shape.

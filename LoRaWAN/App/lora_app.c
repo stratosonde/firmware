@@ -50,7 +50,8 @@
 #include "config.h"
 #include "first_flight_policy.h"
 #include "flash_log.h"
-#include "gnss_acquire.h" /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
+#include "gnss_acquire.h"      /* refactor stage 4: GNSS acquisition policy extracted to Core/Src/gnss_acquire.c */
+#include "lora_app_adapters.h" /* MAINT-01: the five high-consequence mappings, linked-tested */
 #include "math.h"
 #include "mission_state.h"
 #include "multiregion_context.h"
@@ -896,7 +897,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
    * the LinkCheck evaluation — OnTxData no longer re-arms for packet 1 (it
    * runs before this callback; the race produced a spurious full extra work
    * cycle). The verdict itself is the pure TxFsm_OnRx step (stage 5). */
-  if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER && g_tx_fsm.bulk_packets_sent == 1) {
+  if (TxFsm_InBulk(&g_tx_fsm) && TxFsm_BulkPacketsSent(&g_tx_fsm) == 1) {
     bool link_good = (linkcheck_received &&
                       margin >= CfgLinkMargin() &&
                       gw_count >= CfgGatewayCount());
@@ -905,13 +906,10 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
                       linkcheck_received ? "received" : "MISSING",
                       margin, CfgLinkMargin(), gw_count, CfgGatewayCount(),
                       link_good ? "BURST CONTINUES" : "FALLBACK");
-    TxFsmRxInput_t fsm_in = {
-      .linkcheck_received = linkcheck_received, .margin = margin,
-      .gateways = gw_count,
-      .margin_min = CfgLinkMargin(), .gateways_min = CfgGatewayCount(),
-      .has_unsent = FlashLog_HasUnsentData(&hflashlog),
-      .max_bulk_packets = CfgMaxBulkPkts()
-    };
+    /* MAINT-01: the RX mapping lives in the linked-tested adapter module. */
+    AppRxSnapshot_t snap = {
+        .linkcheck_received = linkcheck_received, .margin = margin, .gateways = gw_count, .margin_min = CfgLinkMargin(), .gateways_min = CfgGatewayCount(), .has_unsent = FlashLog_HasUnsentData(&hflashlog), .max_bulk_packets = CfgMaxBulkPkts()};
+    TxFsmRxInput_t fsm_in = AppAdapters_BuildRx(&snap);
     TxFsmEventOutput_t fsm_out;
     TxFsm_OnRx(&g_tx_fsm, &fsm_in, &fsm_out);
     /* Protocol §5.4 fallback / continuation both possible here. R3-04 (#218):
@@ -925,7 +923,7 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
     // Link check result for non-archive transmissions (informational)
     SONDE_LOG("Link quality: margin=%ddB, gateways=%d\r\n", margin, gw_count);
   }
-  
+
   // Process any received application data
   if (appData && appData->BufferSize > 0) {
     SONDE_LOG("Received %d bytes on port %d\r\n", appData->BufferSize, appData->Port);
@@ -1436,10 +1434,11 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
        * evaluating them here instead of inside the branches below changes no
        * observable behaviour. */
       const RegionDecision_t region_decision = RegionPolicy_Decide(h3_region_id,
-          detected_region != MultiRegion_GetActiveRegion(),
-          MultiRegion_IsRegionJoined(detected_region),
-          EnvSensors_GnssIsStale());
-      
+                                                                   AppAdapters_RegionDiffers((uint8_t)detected_region,
+                                                                                             (uint8_t)MultiRegion_GetActiveRegion()),
+                                                                   MultiRegion_IsRegionJoined(detected_region),
+                                                                   EnvSensors_GnssIsStale());
+
       /* BUG 1.3 FIX: Only skip transmission for REGION_RESTRICTED (regulatory prohibition).
        * NOTE: REGION_RESTRICTED is now 15 (h3lite), not 255 — the 4-bit regionId
        * field in the packed table could never emit 255; ID 15 was repurposed from
@@ -1554,8 +1553,14 @@ static void SelectRegionAndSession(bool *rf_silence, TransmitPlan_t *plan)
        * wake; a successful rollback recovers the old session but is NOT
        * authorization to use it at the new location. Retry at the next
        * fresh fix. */
-      if (!RegionPolicy_PostSwitchRfAllowed(before_region != detected_region,
-                                            MultiRegion_GetActiveRegion() == detected_region)) {
+      /* MAINT-01: the final-authorization comparisons live in the linked-
+       * tested adapter module (BEH-03's polarity surface). */
+      if (!RegionPolicy_PostSwitchRfAllowed(
+              AppAdapters_SwitchWasRequired((uint8_t)before_region,
+                                            (uint8_t)detected_region),
+              AppAdapters_ActiveMatchesDetected(
+                  (uint8_t)MultiRegion_GetActiveRegion(),
+                  (uint8_t)detected_region))) {
         SONDE_LOG_STR("MultiRegion: switch not settled - RF silence for this wake, archiving locally (BEH-03)\r\n");
         RegionPolicy_Silence(plan, rf_silence, VETO_RF_SILENCE);
       }
@@ -1805,12 +1810,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
     }
   }
 
-  TxFsmCycleInput_t fsm_in = {
-    .now_ms = now_ms, .interval_ms = 0, .rf_silence = rf_silence,
-    .has_unsent = has_unsent, .recovery_empty = recovery_empty,
-    .unconvertible = unconvertible, .no_budget = no_budget,
-    .max_bulk_packets = CfgMaxBulkPkts(), .burst_max_open_ms = BURST_MAX_OPEN_MS
-  };
+  /* MAINT-01: the dispatch-phase mapping lives in the linked-tested adapter
+   * module (interval_ms stays 0 there - the reschedule phase owns it). */
+  AppTxCycleSnapshot_t snap = {
+      .now_ms = now_ms, .rf_silence = rf_silence, .has_unsent = has_unsent, .recovery_empty = recovery_empty, .unconvertible = unconvertible, .no_budget = no_budget, .max_bulk_packets = CfgMaxBulkPkts(), .burst_max_open_ms = BURST_MAX_OPEN_MS};
+  TxFsmCycleInput_t fsm_in = AppAdapters_BuildTxCycle(&snap);
   TxFsmCycleOutput_t fsm_out;
   TxFsm_Dispatch(&g_tx_fsm, &fsm_in, &fsm_out);
 
@@ -2027,12 +2031,14 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
     (int16_t)(cfg != NULL ? cfg->gps_temperature_lockout : -55),
     ConfigGetFirstFlightBatteryMinMv()
   };
-  FirstFlightAdmissionInput_t input = {
-    .temperature_c = sample->temperature,
-    .temperature_fresh = sample->temp_stale == 0U,
-    .battery_mv_raw = battery_mv_raw,
-    .battery_fresh = sample->batt_stale == 0U
-  };
+  /* MAINT-01: the stale->fresh polarity mapping lives in the linked-tested
+   * adapter module; this snapshot carries the RAW staleness counters. */
+  AppFirstFlightSnapshot_t snap = {
+      .temperature_c = sample->temperature,
+      .temperature_stale = sample->temp_stale,
+      .battery_mv_raw = battery_mv_raw,
+      .battery_stale = sample->batt_stale};
+  FirstFlightAdmissionInput_t input = AppAdapters_BuildFirstFlightAdmission(&snap);
 
   if (FirstFlightPolicy_Decide(&policy, &input) == FIRST_FLIGHT_RUN_FULL) {
     return true;
@@ -2680,28 +2686,32 @@ static void OnTxData(LmHandlerTxParams_t *params)
      * from opening a cached-data burst on an obsolete pre-load voltage. */
     bool battery_good = (s_cycle_batt_mv >= CfgBulkBattMin());
     bool has_cache = FlashLog_HasUnsentData(&hflashlog);
-    bool was_waiting = (g_tx_fsm.state == TX_FSM_WAIT_PROBE_ACK);
-    bool was_bulk_tail = (g_tx_fsm.state == TX_FSM_BULK_TRANSFER &&
-                          g_tx_fsm.bulk_packets_sent > 1);
+    /* MAINT-03: semantic queries, not raw field reads. */
+    bool was_waiting = TxFsm_WaitingForProbeAck(&g_tx_fsm);
+    bool was_bulk_tail = (TxFsm_InBulk(&g_tx_fsm) &&
+                          TxFsm_BulkPacketsSent(&g_tx_fsm) > 1);
     if (was_waiting &&
         params->Status == LORAMAC_EVENT_INFO_STATUS_OK && params->AckReceived) {
       SONDE_LOG("Probe ACK received — battery %dmV (%s), cache %s\r\n",
                         s_cycle_batt_mv, battery_good ? "GOOD" : "LOW",
                         has_cache ? "HAS_DATA" : "NO_DATA");
     }
-    /* TX-ADAPTER-01 (2026-08-15): designated fields with positive polarity.
-     * The stage-5.4b positional marshal mapped the NEGATED condition into
-     * mission_ascent, inverting R3-03 (#217): ASCENT permitted archive
-     * recovery and FLOAT blocked it. Pinned by tests/host/test_tx_adapter.c. */
-    TxFsmConfirmInput_t fsm_in = {
-      .now_ms = HAL_GetTick(),
-      .status_ok = params->Status == LORAMAC_EVENT_INFO_STATUS_OK,
-      .ack_received = params->AckReceived != 0,
-      .battery_good = battery_good,
-      .has_unsent = has_cache,
-      .mission_ascent = (MissionState_Get() == MISSION_ASCENT),
-      .max_bulk_packets = CfgMaxBulkPkts()
-    };
+    /* TX-ADAPTER-01 (2026-08-15): the stage-5.4b positional marshal mapped
+     * the NEGATED condition into mission_ascent, inverting R3-03 (#217):
+     * ASCENT permitted archive recovery and FLOAT blocked it. MAINT-01: the
+     * mapping now lives in the linked-tested adapter module - this snapshot
+     * carries the RAW mission enum, so the polarity derivation is exactly
+     * one place (AppAdapters_BuildTxConfirm), under direct behavioral test. */
+    AppTxConfirmSnapshot_t snap = {
+        .now_ms = HAL_GetTick(),
+        .tx_status = params->Status,
+        .ack_received_raw = params->AckReceived,
+        .battery_mv = s_cycle_batt_mv,
+        .bulk_batt_min_mv = CfgBulkBattMin(),
+        .mission_state = MissionState_Get(),
+        .has_cache = has_cache,
+        .max_bulk_packets = CfgMaxBulkPkts()};
+    TxFsmConfirmInput_t fsm_in = AppAdapters_BuildTxConfirm(&snap);
     TxFsmEventOutput_t fsm_out;
     TxFsm_OnTxConfirm(&g_tx_fsm, &fsm_in, &fsm_out);
     if (fsm_out.defer_header_sync) {

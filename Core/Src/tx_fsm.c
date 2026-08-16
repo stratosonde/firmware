@@ -38,6 +38,21 @@ bool TxFsm_ProbeStale(const TxFsm_t *fsm, uint32_t now_ms,
          (uint32_t)(now_ms - fsm->probe_sent_ms) > burst_max_open_ms;
 }
 
+/* MAINT-03: narrow semantic queries for the questions callers actually ask.
+ * Raw enum capture stays legitimate only where the complete state is needed
+ * (transition logging). */
+bool TxFsm_InBulk(const TxFsm_t *fsm) {
+  return fsm->state == TX_FSM_BULK_TRANSFER;
+}
+
+bool TxFsm_WaitingForProbeAck(const TxFsm_t *fsm) {
+  return fsm->state == TX_FSM_WAIT_PROBE_ACK;
+}
+
+uint8_t TxFsm_BulkPacketsSent(const TxFsm_t *fsm) {
+  return fsm->bulk_packets_sent;
+}
+
 void TxFsm_SetScienceDue(TxFsm_t *fsm, uint32_t due_ms) {
   fsm->science_due_ms = due_ms;
 }
@@ -80,14 +95,13 @@ void TxFsm_Dispatch(TxFsm_t *fsm, const TxFsmCycleInput_t *in,
 
   /* LT-07 (#277): burst-scoped deadlines force a stuck network-wait state
    * out; the stale-state reset below then runs as for any completed
-   * cycle. */
-  if (fsm->state == TX_FSM_WAIT_PROBE_ACK && fsm->probe_sent_ms != 0 &&
-      (uint32_t)(in->now_ms - fsm->probe_sent_ms) > in->burst_max_open_ms) {
+   * cycle. MAINT-02: the exported predicates, not a duplicate of their
+   * math - one definition of "stale" for the whole module. */
+  if (TxFsm_ProbeStale(fsm, in->now_ms, in->burst_max_open_ms)) {
     fsm->state = TX_FSM_COMPLETE;
     fsm->probe_sent_ms = 0;
   }
-  if (fsm->state == TX_FSM_BULK_TRANSFER && fsm->burst_opened_ms != 0 &&
-      (uint32_t)(in->now_ms - fsm->burst_opened_ms) > in->burst_max_open_ms) {
+  if (TxFsm_BurstStale(fsm, in->now_ms, in->burst_max_open_ms)) {
     fsm->state = TX_FSM_COMPLETE;
     fsm->burst_opened_ms = 0;
     fsm->bulk_packets_sent = 0;

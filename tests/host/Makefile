@@ -198,6 +198,18 @@ $(BUILD_DIR)/test_arming$(EXE): $(ARMING_SRCS) ../../Core/Src/arming_input.c ../
 arming: $(BUILD_DIR)/test_arming$(EXE)
 	./$(BUILD_DIR)/test_arming$(EXE)
 
+# MAINT-01/02/03 (Phase 5): the production adapter builders and the semantic
+# FSM queries, linked against the REAL lora_app_adapters.c + tx_fsm.c. Every
+# polarity-bearing mapping is exercised in both directions; the Phase-5 gate
+# reverses each mapping on the box and proves this suite goes red.
+ADAPTERS_SRCS := test_lora_app_adapters.c ../../Core/Src/lora_app_adapters.c ../../Core/Src/tx_fsm.c
+
+$(BUILD_DIR)/test_adapters$(EXE): $(ADAPTERS_SRCS) ../../Core/Inc/lora_app_adapters.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(ADAPTERS_SRCS) -lm
+
+appadapters: $(BUILD_DIR)/test_adapters$(EXE)
+	./$(BUILD_DIR)/test_adapters$(EXE)
+
 $(BUILD_DIR)/test_pq$(EXE): $(PQ_SRCS) ../../Core/Inc/packet_queue.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DENABLE_GNSS_DETAIL_PACKET=1 $(INCLUDES) -o $@ $(PQ_SRCS) -lm
 
@@ -316,7 +328,7 @@ ddrmanifest:
 arminventory:
 	$(PYTHON) ../../tools/check_arm_source_inventory.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming contracts check characterization integration structural release-gate
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters contracts check characterization integration structural release-gate
 test: $(BUILD_DIR)/test_runner$(EXE)
 	./$(BUILD_DIR)/test_runner$(EXE)
 
@@ -388,6 +400,7 @@ $(eval $(call SAN_SUITE_RULE,test_gnss_acq,GNSS_ACQ_SRCS,INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_txshadow,TXSHADOW_SRCS,INCLUDES,-Wno-unused-function,,test_burst_fsm.c))
 $(eval $(call SAN_SUITE_RULE,test_gnssfix,GNSSFIX_SRCS,INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_arming,ARMING_SRCS,ARMING_INCLUDES,,,))
+$(eval $(call SAN_SUITE_RULE,test_adapters,ADAPTERS_SRCS,INCLUDES,,,))
 
 # EXPECT_UNFIXED=1 mirrors the gate semantics (`all` runs the red-by-design
 # suite lt0813 the same way): documented expected failures are reported but
@@ -416,7 +429,7 @@ sanitize: $(SAN_EXES)
 #                  build/artifact legs arrive with the Phase-6 CI restructure
 # all              check + characterization (the CI gate, STAB-09/#156)
 # ---------------------------------------------------------------------------
-check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming ddrmanifest arminventory
+check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory
 
 characterization: lt0813-gate geo-gate pwr-gate
 	@echo "characterization: 5 documented open failures awaited - LT-06 x2 (#248), PWR-02 x3 (#297)"
@@ -432,7 +445,7 @@ all: check characterization
 
 # Refactor stage 7: module-contract suites only - the "what is proven about
 # module X" entry point (see R2_TEST_MAP.md). `all` keeps running everything.
-contracts: first-flight pq nvm region gnssacq txshadow arming
+contracts: first-flight pq nvm region gnssacq txshadow arming appadapters
 
 clean:
 	-$(RMBUILD)

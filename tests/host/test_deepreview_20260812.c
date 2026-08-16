@@ -293,7 +293,10 @@ static void test_r303_ascent_no_bulk(const char *app)
     CHECK(end != NULL);
     if (!end) return;
 
-    bool gated = occurs_before(sig, end, "MISSION_ASCENT");
+    /* MAINT-01 (Phase 5): the ASCENT comparison moved into the linked-tested
+     * adapter module; the gate now consults mission state by feeding the RAW
+     * enum across the AppAdapters_BuildTxConfirm boundary. */
+    bool gated = occurs_before(sig, end, ".mission_state = MissionState_Get()");
     printf("   archive-opportunity gate consults mission state: %s\n",
            gated ? "yes" : "NO (defect)");
     CHECK_REGRESSION(gated, "R3-03");

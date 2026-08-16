@@ -107,6 +107,14 @@ bool TxFsm_BurstStale(const TxFsm_t *fsm, uint32_t now_ms,
 bool TxFsm_ProbeStale(const TxFsm_t *fsm, uint32_t now_ms,
                       uint32_t burst_max_open_ms);
 
+/* MAINT-03: semantic state queries. Callers asking one of THESE questions
+ * use the query, not a raw field read; raw state capture is kept only where
+ * the complete enum is genuinely needed (transition logging). Not full
+ * opacity - TxFsm_t stays public. */
+bool TxFsm_InBulk(const TxFsm_t *fsm);
+bool TxFsm_WaitingForProbeAck(const TxFsm_t *fsm);
+uint8_t TxFsm_BulkPacketsSent(const TxFsm_t *fsm);
+
 /* Direct deadline re-base (first-flight survival retry path re-arms at
  * now + retry_ms, bypassing the phase-preserving advance). */
 void TxFsm_SetScienceDue(TxFsm_t *fsm, uint32_t due_ms);
