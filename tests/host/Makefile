@@ -5,6 +5,7 @@
 # CI:     .github/workflows/ci.yml runs this on ubuntu-latest (gcc).
 
 CC      ?= gcc
+PYTHON  ?= python3
 # F-01 (#62): -Wsign-conversion catches the mixed-sign division class of bug
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
@@ -289,9 +290,15 @@ lt0813-gate: $(BUILD_DIR)/test_lt0813$(EXE)
 
 # R3-11 (#223): DDR identity integrity against the canonical manifest.
 ddrmanifest:
-	python3 ../../tools/check_ddr_manifest.py
+	$(PYTHON) ../../tools/check_ddr_manifest.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss contracts check characterization integration structural release-gate
+# PIPE-05 (pretest-hardening handoff, Phase 1): ARM build source inventory -
+# every production .c compiled exactly once, no archive/reference/test/example
+# sources, no stale force-added Debug fragments.
+arminventory:
+	$(PYTHON) ../../tools/check_arm_source_inventory.py
+
+.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss contracts check characterization integration structural release-gate
 test: $(BUILD_DIR)/test_runner$(EXE)
 	./$(BUILD_DIR)/test_runner$(EXE)
 
@@ -348,14 +355,14 @@ sanitize: $(SAN_BUILD_DIR)/test_sanitize$(EXE)
 #                  build/artifact legs arrive with the Phase-6 CI restructure
 # all              check + characterization (the CI gate, STAB-09/#156)
 # ---------------------------------------------------------------------------
-check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss ddrmanifest
+check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss ddrmanifest arminventory
 
 characterization: lt0813-gate geo-gate pwr-gate
 	@echo "characterization: 7 documented open failures awaited - LT-06 x2 (#248), GEO-04 x2 (h3lite guards), PWR-02 x3 (#297)"
 
 integration: test flight multiregion timerif config txadapter gnssfix gpsloss
 
-structural: findings burst stability review0812 deep dr sp0813 ddrmanifest
+structural: findings burst stability review0812 deep dr sp0813 ddrmanifest arminventory
 
 release-gate: check sanitize
 	@if [ -n "$$EXPECT_UNFIXED" ]; then echo "FATAL: release-gate refuses EXPECT_UNFIXED masking"; exit 1; fi
