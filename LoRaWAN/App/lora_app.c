@@ -2353,6 +2353,23 @@ static void SendTxData(void)
   /* F-R1 (#74): acquisition and region selection are extracted phases. */
   gnss_result = AcquireGnssFix(gps_timeout_ms, &ttf_ms,
                                &time_disciplined_this_wake);
+  /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
+   * GPS-loss RF silence before region selection and TX - only when GPS loss
+   * is the recorded veto. RegionPolicy_Silence records first-wins
+   * (DR-06/#241), so plan.veto == VETO_GPS_LOSS proves no independent
+   * no-session, restricted-region, or prelaunch-quiet veto is active: any
+   * of those would have been recorded FIRST and this guard would read
+   * false. Nothing silences between the GPS-loss check and here on this
+   * path, and rf_silence is a per-call local, so the guard also proves the
+   * silence being cleared is the GPS-loss one. A below-quality fix fails
+   * the first conjunct and never clears. Region selection below may
+   * independently reapply VETO_RESTRICTED_REGION / VETO_RF_SILENCE. */
+  if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX &&
+      plan.veto == VETO_GPS_LOSS) {
+    plan.veto = VETO_NONE;
+    rf_silence = false;
+    SONDE_LOG_STR("GPS-LOSS SILENCE CLEARED: fresh fix this wake - radio eligibility restored\r\n");
+  }
   if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX) {
     SelectRegionAndSession(&rf_silence, &plan);
   } else {
