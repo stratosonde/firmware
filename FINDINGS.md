@@ -48,6 +48,24 @@ config exposed exactly one latent unused-variable, `link_good`, fixed in
 a6308e4). Vendor fragments intentionally unchanged. Raising ARM first-party
 to `-Wextra`/`-Wsign-conversion` remains open (#268): `lora_app.c` is never
 host-compiled, so its first strict-flag pass is a separate effort.
+
+**Sanitizers (Phase 3 / #263):** `make sanitize` runs **19 instrumented
+exes** — every suite that executes production code — under ASan+UBSan+LSan
+(was: 1, `test_main` only). First full run: zero UB/overflows; LSan caught
+the shared `strip_comments(slurp())` harness leak in 7 scan suites (fixed
+by pooling the scan buffers, freed at exit). Text-scan-only suites (burst,
+deepreview, findings, txadapter, gpsloss) are excluded by design.
+
+**Static analysis (Phase 3):** `tools/run_cppcheck.sh` gates first-party
+sources (Core/Src, LoRaWAN/App; vendor include-only) with
+`--error-exitcode=1` — baseline was 3 diagnostics: `sht31.c` uninitvar
+(fixed) and 2 vendor CMSIS linker-table comparePointers (audited
+suppressions in `tools/cppcheck-suppressions.txt`). `actionlint` v1.7.7
+gates the workflows (first catch: an SC2015 in ci.yml itself).
+`tools/check_format.sh` runs git-clang-format on changed lines in **report
+mode**: the CubeIDE 2-space files vs 4-space new-module split needs an
+owner style decision before a hard gate is honest. All wired in the CI
+`hygiene` job + root `make lint`.
 | arminventory | 4 proofs | 0 | PIPE-05 (Phase 1): ARM source inventory — 18 active fragments, 115 unique C sources, every production `.c` exactly once, no stale `Debug/` fragments |
 
 **Target structure (Phase 1 / PIPE-02):** `check` = every mandatory suite with
