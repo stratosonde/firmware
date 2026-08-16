@@ -2391,28 +2391,10 @@ static void SendTxData(void)
 
   #endif  /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
-  {
-    /* BEH-01 (#300) staging: the all-fresh GNSS-package abort, routed through
-     * the host-testable wake-outcome decision. This red commit is
-     * behavior-preserving; the fix commit removes freshness as an abort
-     * gate. */
-    const bool is_bulk_continuation = (g_tx_fsm.state == TX_FSM_BULK_TRANSFER);
-    const FirstFlightWakeState_t wake_state = {
-        .admitted = true, /* the pre-GNSS admission gate above already passed */
-        .is_bulk_continuation = is_bulk_continuation,
-        .gnss_package_present = FirstFlightPolicy_GnssPackagePresent(
-            is_bulk_continuation, gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
-            time_disciplined_this_wake),
-        .package_complete = true, /* the post-GNSS re-sample has not run yet */
-    };
-    if (!FirstFlightPolicy_DecideWakeOutcome(&wake_state).archive_record) {
-      /* An admitted science wake without this wake's accepted GNSS package is
-       * not a science cycle.  Do not archive or transmit a live record. */
-      SONDE_LOG_STR("First-flight observation rejected: no fresh good-quality GNSS fix/time; retry next wake\r\n");
-      ResetCause_ClearBootAttempts();
-      return;
-    }
-  }
+  /* BEH-01 (#300): the GNSS-package abort gate is REMOVED. An admitted wake
+   * continues through the post-GNSS re-sample and archives its record even
+   * after a GNSS timeout: the failure itself is science, and the record
+   * carries the honest stale bits (DDR-0007/F10). */
   /* Add separator before continuing to telemetry */
   SONDE_LOG_STR("\r\n");
   
@@ -2438,14 +2420,13 @@ static void SendTxData(void)
 
     /* The post-GNSS sample is the one archived and transmitted. If the rail
      * sagged or the temperature crossed the floor under GNSS load, do not add
-     * radio load or create a record that violated admission. */
+     * radio load or create a record that violated admission: energy
+     * admission is the ONLY gate on whether a live record comes to exist
+     * (BEH-01/#300). Package freshness is record-quality metadata - the
+     * stale bits ride the flash record and the v6 sensor_quality byte -
+     * never an abort gate. */
     uint16_t post_gnss_battery_mv =
         FirstFlightPolicy_VoltsToMvOrZero(sensor_data.battery_voltage);
-    const bool post_gnss_admitted =
-        FirstFlightWakeAdmitted(&sensor_data, post_gnss_battery_mv);
-    if (post_gnss_admitted) {
-      s_cycle_batt_mv = post_gnss_battery_mv;
-    }
 
     FirstFlightSciencePackage_t package = {
       .disciplined_time = time_disciplined_this_wake,
@@ -2458,20 +2439,29 @@ static void SendTxData(void)
           isfinite(sensor_data.battery_voltage) &&
           sensor_data.battery_voltage > 0.0f
     };
-    /* BEH-01 (#300) staging: the all-fresh package abort via the outcome
-     * decision (behavior-preserving in this red commit). */
+    /* BEH-01 (#300): GNSS presence and package completeness are DIAGNOSTICS
+     * (retained per the handoff: record-quality predicates only). A degraded
+     * package no longer rejects the observation. */
     const FirstFlightWakeState_t wake_state = {
-        .admitted = post_gnss_admitted,
+        .admitted = FirstFlightWakeAdmitted(&sensor_data, post_gnss_battery_mv),
         .is_bulk_continuation = false,
-        .gnss_package_present = true, /* the GNSS-package gate above passed */
+        .gnss_package_present = FirstFlightPolicy_GnssPackagePresent(
+            false, gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX,
+            time_disciplined_this_wake),
         .package_complete = FirstFlightPolicy_PackageComplete(&package),
     };
-    if (!FirstFlightPolicy_DecideWakeOutcome(&wake_state).archive_record) {
-      if (post_gnss_admitted) {
-        SONDE_LOG_STR("First-flight observation rejected: incomplete time/position/environment/battery package\r\n");
-        ResetCause_ClearBootAttempts();
-      }
+    const FirstFlightWakeOutcome_t wake_outcome =
+        FirstFlightPolicy_DecideWakeOutcome(&wake_state);
+    if (!wake_outcome.archive_record) {
+      /* Rail sag / temperature floor under GNSS load: FirstFlightWakeAdmitted
+       * parked the TX FSM and rebased to the survival cadence. */
       return;
+    }
+    s_cycle_batt_mv = post_gnss_battery_mv;
+    if (!wake_state.gnss_package_present || !wake_state.package_complete) {
+      SONDE_LOG("First-flight package degraded (gnss_package=%d, complete=%d): archiving with honest stale bits\r\n",
+                (int)wake_state.gnss_package_present,
+                (int)wake_state.package_complete);
     }
   }
 

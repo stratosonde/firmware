@@ -69,10 +69,15 @@ that (DDR-0003).
    Restricted regions inhibit RF; the geofence never auto-switches on a stale
    position.
 
-An admitted science record is written/transmitted only when this wake provides
-disciplined GNSS time, a fresh good-quality position, and fresh temperature,
-humidity, pressure, and battery readings. A failed package ends the wake without
-creating a new record. Cached archive recovery may continue in an already-open
+An admitted science wake attempts GNSS and the remaining sensors, marks each
+field fresh/stale honestly, and appends the current record when flash is
+available (BEH-01/#300: package freshness is record-quality metadata carried
+in the v6 `sensor_quality` byte — never an abort gate; one failed channel no
+longer discards the other observations or the fact of the failure).
+Transmission then proceeds only if the plan veto / RF silence authorize it.
+A wake that fails energy admission (temperature or raw battery below floor,
+or stale/invalid input) creates no record: the TX FSM parks and retries at
+the survival cadence. Cached archive recovery may continue in an already-open
 bulk callback path when admission passed.
 
 ## Wire Formats (authoritative: PayloadFormats.md)

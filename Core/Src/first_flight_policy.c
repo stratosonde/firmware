@@ -86,12 +86,10 @@ FirstFlightWakeOutcome_t FirstFlightPolicy_DecideWakeOutcome(
   if (state->is_bulk_continuation) {
     return proceed;
   }
-  /* BEH-01 (#300) red-commit staging: this composition encodes the CURRENT
-   * abort gates verbatim so the lora_app.c rewiring in the same commit is
-   * behavior-preserving. The fix commit drops the two freshness conjuncts:
-   * they are record-quality diagnostics, never abort gates. */
-  if (!state->admitted || !state->gnss_package_present ||
-      !state->package_complete) {
+  /* BEH-01 (#300): freshness is record-quality metadata, never an abort
+   * gate. A gap is archived with its stale bits (DDR-0007/F10: a gap is
+   * honest; fabricated completeness is what we refuse). */
+  if (!state->admitted) {
     return park;
   }
   return proceed;

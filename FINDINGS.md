@@ -190,3 +190,14 @@ and complexity targets are advisory only (and its reference metric output
 does not reproduce), `GnssAcquire_Step()` and the single `AppContext_t`
 are rejected as designed, and the multiregion split is deferred to
 post-flight. Tracked post-flight directions live in §7 of that handoff.
+
+## Phase 4 - pre-HIL behavior fixes (handoff section 5)
+
+- **BEH-01 / #300 (FIXED):** the all-fresh science-package abort is removed.
+  Energy admission (fresh temperature + raw battery vs the configured
+  floors) is the only gate on whether a live record exists; GNSS presence
+  and the 7-field package completeness are record-quality diagnostics
+  retired from gating (stale bits ride the record and the v6
+  sensor_quality byte). Red commit e094d0f (wake-outcome staging + 7
+  intentionally failing checks), fix commit follows. See
+  TransmissionModule.md "The Transmit Cycle".
