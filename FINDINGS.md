@@ -38,6 +38,15 @@ red-first commits — never inside a refactor commit.
 | geo-gate | 9 | 2 | **red-by-design** (`EXPECT_UNFIXED=1`): GEO-04 init/generator guards pending the next h3lite bump; GEO-01 dataset landed `9fdcccc` (53 RESTRICTED cells) — promoted to hard gate + Pyongyang/Sanaa resolve probes |
 | pwr-gate | 6 | 3 | **red-by-design**: PWR-02 legacy power model fixed 4300 mV raw floor |
 | ddrmanifest | — | 0 | `tools/check_ddr_manifest.py` |
+| arminventory | 4 proofs | 0 | PIPE-05 (Phase 1): ARM source inventory — 18 active fragments, 115 unique C sources, every production `.c` exactly once, no stale `Debug/` fragments |
+
+**Target structure (Phase 1 / PIPE-02):** `check` = every mandatory suite with
+NO `EXPECT_UNFIXED` masking; `characterization` = the owner-gated suites below
+(prints the exact open-failure IDs); `all` = check + characterization and
+remains the CI gate (STAB-09/#156). Root wrapper Makefile provides `make check`,
+`make characterization`, `make contracts`, `make integration`, `make structural`,
+`make sanitize`, `make release-gate`. Host executables build out-of-tree under
+`tests/host/build/<config>/` (PIPE-01); every target leaves `git status` clean.
 
 `EXPECT_UNFIXED=1` gates exist so CI stays meaningful while owner-gated
 findings are open. The 7 expected failures (LT-06 ×2, GEO-04 ×2, PWR-02 ×3)
@@ -50,7 +59,7 @@ targets.
 
 | configuration | text | data | bss | result |
 |---|---:|---:|---:|---|
-| debug (CI `firmware` job) | 210,736 | 936 | 26,160 | link OK (fresh clone @ `9fdcccc`, build box) |
+| debug (CI `firmware` job) | 210,152 | 936 | 26,160 | link OK (fresh clone @ `df0dcad` post-PIPE-05 prune, build box; was 210,736 @ `9fdcccc` — no source change, link-order wobble) |
 | flight (`-DSONDE_FLIGHT_BUILD`, CI `firmware-flight` job) | 180,128 | 940 | 26,160 | link OK; `SONDE_BUILD:flight` present, `SONDE_BUILD:debug` absent (fresh clone @ `9fdcccc`, build box) |
 
 Measured 2026-08-15 on a fresh `9fdcccc` clone (h3lite `5480859`, +54 table
