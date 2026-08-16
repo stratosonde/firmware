@@ -984,7 +984,7 @@ uint8_t GNSS_CalculateChecksum(const char *sentence)
   /* Calculate XOR of all characters until * or end */
   while (*p != '\0' && *p != '*')
   {
-    checksum ^= *p;
+    checksum ^= (uint8_t)*p;
     p++;
   }
 
@@ -1142,7 +1142,7 @@ static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max
   if (len < 0) len = 0;
   if (len >= max_len) len = max_len - 1;
 
-  memcpy(buffer, start, len);
+  memcpy(buffer, start, (size_t)len);
   buffer[len] = '\0';
 
   return true;

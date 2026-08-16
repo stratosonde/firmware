@@ -1230,7 +1230,7 @@ static void test_r8_tier1_generation_order(void)
 
     /* Snapshot the current (old-generation) bank bytes. */
     Tier1Bank_t old_bank;
-    if (FLASH_IF_Read(&old_bank, (void*)TIER1_ADDRS[1], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+    if (FLASH_IF_Read(&old_bank, (void *)(uintptr_t)TIER1_ADDRS[1], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
         printf("   SETUP FAILED: read\n"); exit(2);
     }
     uint32_t old_addr = old_bank.contexts[slot].dev_addr;
@@ -1242,8 +1242,8 @@ static void test_r8_tier1_generation_order(void)
     if (!FlashWriteTier1()) { printf("   SETUP FAILED: rewrite\n"); exit(2); }
 
     /* Torn re-commission: copy A still holds the OLD bank, B/C the NEW. */
-    FLASH_IF_Erase((void*)TIER1_ADDRS[0], MULTIREGION_FLASH_PAGE_SIZE);
-    FLASH_IF_Write((void*)TIER1_ADDRS[0], &old_bank, sizeof(Tier1Bank_t));
+    FLASH_IF_Erase((void *)(uintptr_t)TIER1_ADDRS[0], MULTIREGION_FLASH_PAGE_SIZE);
+    FLASH_IF_Write((void *)(uintptr_t)TIER1_ADDRS[0], &old_bank, sizeof(Tier1Bank_t));
 
     /* Reboot. */
     g_initialized = false;
@@ -1258,7 +1258,7 @@ static void test_r8_tier1_generation_order(void)
     /* The repair path must have propagated the NEW bank to copy A (not the
      * old one over B/C). */
     Tier1Bank_t repaired;
-    FLASH_IF_Read(&repaired, (void*)TIER1_ADDRS[0], sizeof(Tier1Bank_t));
+    FLASH_IF_Read(&repaired, (void *)(uintptr_t)TIER1_ADDRS[0], sizeof(Tier1Bank_t));
     printf("   copy A after repair: DevAddr=0x%08lX (want new)\n",
            (unsigned long)repaired.contexts[slot].dev_addr);
     CHECK_REGRESSION(repaired.contexts[slot].dev_addr == 0x26019999UL, "R8-repair");

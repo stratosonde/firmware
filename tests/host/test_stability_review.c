@@ -86,7 +86,7 @@ static char *slurp(const char *path)
      * silently searched to EOF and F-3 false-passed on a later identifier. */
     {
         size_t r = 0, w = 0;
-        while (r < n) {
+        while (r < (size_t)n) {
             if (buf[r] != '\r') buf[w++] = buf[r];
             r++;
         }

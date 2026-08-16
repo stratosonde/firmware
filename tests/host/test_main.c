@@ -350,7 +350,7 @@ static void test_bulk_v3(void)
     {
         uint32_t wire_crc = (uint32_t)buf[len-4] | ((uint32_t)buf[len-3] << 8) |
                             ((uint32_t)buf[len-2] << 16) | ((uint32_t)buf[len-1] << 24);
-        CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, len - 4));
+        CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, (uint32_t)(len - 4)));
     }
 
     /* Budget for exactly 2 records (82 B): packs 2, third stays pending */

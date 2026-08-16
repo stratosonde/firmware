@@ -43,7 +43,7 @@ static char *slurp(const char *path)
     /* Firmware sources are CRLF; scan anchors are written LF. */
     {
         size_t r = 0, w = 0;
-        while (r < n) {
+        while (r < (size_t)n) {
             if (buf[r] != '\r') buf[w++] = buf[r];
             r++;
         }

@@ -386,7 +386,7 @@ bool MultiRegion_ForceSaveCurrentContext(void)
             // DevAddr==0 means empty - region value doesn't matter
             if (g_storage.contexts[i].dev_addr == 0 || 
                 g_storage.contexts[i].dev_addr == 0xFFFFFFFF) {
-                slot = i;
+                slot = (int8_t)i;
                 g_storage.num_valid++;
                 SONDE_LOG("Found empty slot: %d\r\n", i);
                 break;
@@ -470,7 +470,7 @@ bool MultiRegion_ForceSaveCurrentContext(void)
     
     SONDE_LOG_STR("Context captured successfully\r\n");
     
-    g_storage.active_slot = slot;
+    g_storage.active_slot = (uint8_t)slot;
     
     /*
      * FRAME COUNTER MARGIN (C6 fix) — DR-07 (#239): the margin lives on the
@@ -921,7 +921,7 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region)
         }
         return status;
     }
-    g_storage.active_slot = slot;
+    g_storage.active_slot = (uint8_t)slot;
     ctx->last_used = HAL_GetTick();
     
     SONDE_LOG("Successfully switched to %s\r\n", RegionToString(region));
@@ -1014,12 +1014,12 @@ bool MultiRegion_ClearAllContexts(void)
     // Erase all tier pages (3x Tier-1 + 2x Tier-2)
     bool ok = true;
     for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
-        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+        if (FLASH_IF_Erase((void *)(uintptr_t)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
             ok = false;
         }
     }
     for (uint8_t i = 0; i < TIER2_NUM_SLOTS; i++) {
-        if (FLASH_IF_Erase((void*)TIER2_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+        if (FLASH_IF_Erase((void *)(uintptr_t)TIER2_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
             ok = false;
         }
     }
@@ -1447,7 +1447,7 @@ bool MultiRegion_InitializeRegionFromNetworkServer(
         for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
             if (g_storage.contexts[i].dev_addr == 0 || 
                 g_storage.contexts[i].dev_addr == 0xFFFFFFFF) {
-                slot = i;
+                slot = (int8_t)i;
                 g_storage.num_valid++;
                 break;
             }
@@ -1629,7 +1629,7 @@ static bool FlashReadTier1(Tier1Bank_t *out)
 
     for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
         Tier1Bank_t tmp;
-        if (FLASH_IF_Read(&tmp, (void*)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+        if (FLASH_IF_Read(&tmp, (void *)(uintptr_t)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
             continue;
         }
         if (tmp.magic != TIER1_MAGIC || tmp.version != MULTIREGION_VERSION) {
@@ -1670,10 +1670,10 @@ static bool FlashReadTier1(Tier1Bank_t *out)
             continue;
         }
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Repairing Tier-1 copy %d from copy %d\r\n", i, good);
-        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+        if (FLASH_IF_Erase((void *)(uintptr_t)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
             continue;
         }
-        FLASH_IF_Write((void*)TIER1_ADDRS[i], out, sizeof(Tier1Bank_t));
+        FLASH_IF_Write((void *)(uintptr_t)TIER1_ADDRS[i], out, sizeof(Tier1Bank_t));
     }
 
     return true;
@@ -1700,19 +1700,19 @@ static bool FlashWriteTier1(void)
 
     bool all_ok = true;
     for (uint8_t i = 0; i < TIER1_NUM_COPIES; i++) {
-        if (FLASH_IF_Erase((void*)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+        if (FLASH_IF_Erase((void *)(uintptr_t)TIER1_ADDRS[i], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
             APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d erase failed\r\n", i);
             all_ok = false;
             continue;
         }
-        if (FLASH_IF_Write((void*)TIER1_ADDRS[i], &t1, sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
+        if (FLASH_IF_Write((void *)(uintptr_t)TIER1_ADDRS[i], &t1, sizeof(Tier1Bank_t)) != FLASH_IF_OK) {
             APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d write failed\r\n", i);
             all_ok = false;
             continue;
         }
         // Commissioning read-back: verify the copy just written
         Tier1Bank_t verify;
-        if (FLASH_IF_Read(&verify, (void*)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK ||
+        if (FLASH_IF_Read(&verify, (void *)(uintptr_t)TIER1_ADDRS[i], sizeof(Tier1Bank_t)) != FLASH_IF_OK ||
             memcmp(&verify, &t1, sizeof(Tier1Bank_t)) != 0) {
             APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-1 copy %d verify failed\r\n", i);
             all_ok = false;
@@ -1731,7 +1731,7 @@ static bool FlashReadTier2(Tier2Bank_t *out)
 
     for (uint8_t i = 0; i < TIER2_NUM_SLOTS; i++) {
         Tier2Bank_t tmp;
-        if (FLASH_IF_Read(&tmp, (void*)TIER2_ADDRS[i], sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
+        if (FLASH_IF_Read(&tmp, (void *)(uintptr_t)TIER2_ADDRS[i], sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
             continue;
         }
         if (tmp.magic != TIER2_MAGIC || tmp.version != MULTIREGION_VERSION) {
@@ -1789,11 +1789,11 @@ static bool FlashWriteTier2(void)
 
     uint8_t slot = (uint8_t)((g_t2_last_slot + 1) % TIER2_NUM_SLOTS);
 
-    if (FLASH_IF_Erase((void*)TIER2_ADDRS[slot], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
+    if (FLASH_IF_Erase((void *)(uintptr_t)TIER2_ADDRS[slot], MULTIREGION_FLASH_PAGE_SIZE) != FLASH_IF_OK) {
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-2 slot %d erase failed\r\n", slot);
         return false;
     }
-    if (FLASH_IF_Write((void*)TIER2_ADDRS[slot], &t2, sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
+    if (FLASH_IF_Write((void *)(uintptr_t)TIER2_ADDRS[slot], &t2, sizeof(Tier2Bank_t)) != FLASH_IF_OK) {
         APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Tier-2 slot %d write failed\r\n", slot);
         return false;
     }
@@ -1953,7 +1953,7 @@ static int8_t FindContextSlot(LoRaMacRegion_t region)
 
         if (g_storage.contexts[i].region == region) {
             SONDE_LOG("  -> Found at slot %d!\r\n", i);
-            return i;
+            return (int8_t)i;
         }
     }
     
@@ -2004,7 +2004,7 @@ static bool CaptureCurrentContext(MinimalRegionContext_t *ctx)
     // Get datarate
     mib.Type = MIB_CHANNELS_DATARATE;
     LoRaMacMibGetRequestConfirm(&mib);
-    ctx->datarate = mib.Param.ChannelsDatarate;
+    ctx->datarate = (uint8_t)mib.Param.ChannelsDatarate;
     
     // Get TX power
     mib.Type = MIB_CHANNELS_TX_POWER;

@@ -55,7 +55,7 @@ static char *slurp(const char *path)
      * silently searched to EOF and F-3 false-passed on a later identifier. */
     {
         size_t r = 0, w = 0;
-        while (r < n) {
+        while (r < (size_t)n) {
             if (buf[r] != '\r') buf[w++] = buf[r];
             r++;
         }
@@ -86,33 +86,6 @@ static char *strip_comments(const char *src)
     }
     out[o] = '\0';
     return out;
-}
-
-/* Count non-overlapping occurrences of needle. */
-static int count_occurrences(const char *hay, const char *needle)
-{
-    int c = 0;
-    size_t nl = strlen(needle);
-    const char *p = hay;
-    while ((p = strstr(p, needle)) != NULL) { c++; p += nl; }
-    return c;
-}
-
-/* True if `needle` appears inside the function body that starts at the first
- * occurrence of `sig` and ends at the next line starting with '}' at col 0. */
-static bool in_function(const char *src, const char *sig, const char *needle)
-{
-    const char *start = strstr(src, sig);
-    if (!start) { printf("FATAL: signature not found: %s\n", sig); exit(2); }
-    const char *end = strstr(start, "\n}\n");
-    if (!end) end = src + strlen(src);
-    size_t len = (size_t)(end - start);
-    char *body = (char *)malloc(len + 1);
-    memcpy(body, start, len);
-    body[len] = '\0';
-    bool found = strstr(body, needle) != NULL;
-    free(body);
-    return found;
 }
 
 
