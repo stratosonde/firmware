@@ -22,6 +22,8 @@ tests/host/build/
 # which case-clashes with the tracked Debug/Makefile on Windows; the IDE
 # builder is therefore pointed at IDE/<config> in .cproject)
 IDE/
+# GUI-created build-configuration output folders (e.g. US915/)
+/US915/
 
 # Temporary files
 *.tmp
