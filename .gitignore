@@ -18,6 +18,10 @@ tests/host/build/
 # IDE files
 .settings/
 *.launch
+# CubeIDE managed-build output (the IDE generates its own lowercase makefile,
+# which case-clashes with the tracked Debug/Makefile on Windows; the IDE
+# builder is therefore pointed at IDE/<config> in .cproject)
+IDE/
 
 # Temporary files
 *.tmp
