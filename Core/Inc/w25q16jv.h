@@ -35,9 +35,9 @@ extern "C" {
 /* Exported defines ----------------------------------------------------------*/
 
 /* Memory size definitions (W25Q16JV nominal; W25Q80 derives its own at init) */
-#define W25Q16JV_FLASH_SIZE       (2 * 1024 * 1024)  /* 2MB total */
-#define W25Q80_FLASH_SIZE         (1 * 1024 * 1024)  /* 1MB total */
-#define W25Q_FLASH_SIZE           W25Q16JV_FLASH_SIZE
+#define W25Q16JV_FLASH_SIZE (2 * 1024 * 1024) /* 2MB total */
+#define W25Q80_FLASH_SIZE (1 * 1024 * 1024)   /* 1MB total */
+#define W25Q_FLASH_SIZE W25Q16JV_FLASH_SIZE
 #define W25Q_PAGE_SIZE            256                 /* 256 bytes per page */
 #define W25Q_SECTOR_SIZE          (4 * 1024)          /* 4KB per sector */
 #define W25Q_BLOCK_SIZE_32K       (32 * 1024)         /* 32KB block */
@@ -85,8 +85,8 @@ extern "C" {
  * sector and block geometry are identical, only total capacity differs,
  * and the capacity is derived per-device in the handle (no wrong-geometry
  * pass-through). */
-#define W25Q16JV_JEDEC_ID         0xEF4015  /* Manufacturer EF, Device 4015 */
-#define W25Q80_JEDEC_ID           0xEF4014  /* Manufacturer EF, Device 4014 */
+#define W25Q16JV_JEDEC_ID 0xEF4015 /* Manufacturer EF, Device 4015 */
+#define W25Q80_JEDEC_ID 0xEF4014   /* Manufacturer EF, Device 4014 */
 
 /* Timing specifications (in ms) */
 /* F-10 (#69): timeouts widened to >=3x datasheet max for -60C margin. The
@@ -153,20 +153,20 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
 W25Q_StatusTypeDef W25Q_DeInit(W25Q_HandleTypeDef *hw25q);
 
 /**
-  * @brief  Read JEDEC ID from device
-  * @param  hw25q: Pointer to W25Q handle structure
-  * @param  jedec_id: Pointer to store 24-bit JEDEC ID
-  * @retval W25Q_StatusTypeDef
-  */
+ * @brief  Read JEDEC ID from device
+ * @param  hw25q: Pointer to W25Q handle structure
+ * @param  jedec_id: Pointer to store 24-bit JEDEC ID
+ * @retval W25Q_StatusTypeDef
+ */
 W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hw25q, uint32_t *jedec_id);
 
 /**
-  * @brief  Device capacity in bytes (W25Q16JV=2MB, W25Q80=1MB)
-  * @note   Returns the nominal W25Q16 size before init/zero handle so
-  *         pre-init callers and host fakes keep the legacy compile-time
-  *         geometry; consumers (flash_log) must size the ring from THIS,
-  *         not from W25Q_FLASH_SIZE, once the device has been identified.
-  */
+ * @brief  Device capacity in bytes (W25Q16JV=2MB, W25Q80=1MB)
+ * @note   Returns the nominal W25Q16 size before init/zero handle so
+ *         pre-init callers and host fakes keep the legacy compile-time
+ *         geometry; consumers (flash_log) must size the ring from THIS,
+ *         not from W25Q_FLASH_SIZE, once the device has been identified.
+ */
 uint32_t W25Q_GetCapacity(const W25Q_HandleTypeDef *hw25q);
 
 /**

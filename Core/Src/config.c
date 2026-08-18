@@ -489,7 +489,7 @@ static ConfigStatus_t Config_FlashWrite(void) {
    * after the erase had already succeeded). */
   if ((sizeof(SystemConfig_t) % 8U) != 0U ||
       (((uint32_t)CONFIG_FLASH_ADDRESS) % 8U) != 0U ||
-      (((uint32_t)&g_config) % 8U) != 0U) {
+      (((uint32_t)(uintptr_t)&g_config) % 8U) != 0U) {
     /* The &g_config term turns a source-misalignment HardFault (LDRD in
      * FLASH_IF_INT_Write) into a clean error return - see the comment on
      * g_config's declaration. It should never fire now that g_config is
