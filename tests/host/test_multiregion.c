@@ -1154,6 +1154,101 @@ static void test_fr17_channel_mask_failure_aborts_restore(void)
 static void test_r8_tier1_generation_order(void);
 static void test_r11_capture_restore_symmetry(void);
 
+#ifdef SONDE_REGION_SUBSET_TEST
+/* Region-set subset entry point: this same harness compiled with only
+ * SONDE_REGION_US915=1 (Makefile multiregion-subset target). Proves a
+ * compiled-out region is uncommissionable, unswitchable and reads as
+ * never-joined even when a stale all-regions bank holds a CRC-valid session
+ * for it. The full-region tests above are compiled in but not run here (the
+ * subset target passes -Wno-unused-function). */
+static void test_subset_region_set(void)
+{
+    printf("-- Region-set subset build: US915 commissioned, all others compiled out\n");
+
+    /* The configured table is exactly {US915}. */
+    const LoRaMacRegion_t *cfg = NULL;
+    uint8_t n = MultiRegion_GetConfiguredRegions(&cfg);
+    printf("   configured regions: %u (want 1), first=%s (want US915)\n",
+           n, n > 0 ? RegionToString(cfg[0]) : "none");
+    CHECK_REGRESSION(n == 1 && cfg != NULL && cfg[0] == LORAMAC_REGION_US915,
+                     "SUBSET-table-us915-only");
+    CHECK_REGRESSION(MultiRegion_IsRegionConfigured(LORAMAC_REGION_US915),
+                     "SUBSET-cfg-us915-on");
+    CHECK_REGRESSION(!MultiRegion_IsRegionConfigured(LORAMAC_REGION_EU868) &&
+                     !MultiRegion_IsRegionConfigured(LORAMAC_REGION_AS923) &&
+                     !MultiRegion_IsRegionConfigured(LORAMAC_REGION_AU915) &&
+                     !MultiRegion_IsRegionConfigured(LORAMAC_REGION_IN865) &&
+                     !MultiRegion_IsRegionConfigured(LORAMAC_REGION_KR920) &&
+                     !MultiRegion_IsRegionConfigured(LORAMAC_REGION_RU864),
+                     "SUBSET-cfg-others-off");
+
+    /* Commissioning works for US915 and is refused for a compiled-out
+     * region (bench ABP path included). */
+    MultiRegion_Init();
+    static const uint8_t app_key[16] = { 0xA0 };
+    static const uint8_t nwk_key[16] = { 0xB0 };
+    CHECK_REGRESSION(MultiRegion_InitializeRegionFromNetworkServer(
+                         LORAMAC_REGION_US915, 0x26011111, app_key, nwk_key),
+                     "SUBSET-commission-us915");
+    CHECK_REGRESSION(!MultiRegion_InitializeRegionFromNetworkServer(
+                         LORAMAC_REGION_EU868, 0x26012222, app_key, nwk_key),
+                     "SUBSET-commission-eu868-refused");
+    CHECK_REGRESSION(MultiRegion_IsRegionJoined(LORAMAC_REGION_US915),
+                     "SUBSET-joined-us915");
+
+    /* Stale-bank case: a previous all-regions build left a CRC-valid EU868
+     * session in the bank. Plant one directly (the commissioning path above
+     * rightly refuses to create it in this build). */
+    int8_t slot = -1;
+    for (uint8_t i = 0; i < MAX_REGION_CONTEXTS; i++) {
+        if (g_storage.contexts[i].dev_addr == 0 ||
+            g_storage.contexts[i].dev_addr == 0xFFFFFFFFUL) { slot = (int8_t)i; break; }
+    }
+    if (slot < 0) { printf("   SETUP FAILED: no empty slot\n"); exit(2); }
+    MinimalRegionContext_t *stale = &g_storage.contexts[slot];
+    memset(stale, 0, sizeof(*stale));
+    stale->region = LORAMAC_REGION_EU868;
+    stale->activation = ACTIVATION_TYPE_ABP;
+    stale->dev_addr = 0x26012222UL;
+    memset(stale->app_s_key, 0xC0, 16);
+    memset(stale->nwk_s_key, 0xD0, 16);
+    UpdateContextCRC(stale);
+    g_storage.num_valid++;
+
+    printf("   stale EU868 bank planted: IsRegionJoined=%s (want no)\n",
+           MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868) ? "yes (BAD)" : "no");
+    CHECK_REGRESSION(!MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868),
+                     "SUBSET-stale-bank-never-joined");
+
+    /* Restore US915 into the fake MAC, then try to leave it: both the direct
+     * switch and the geofence policy path must refuse the compiled-out
+     * region and hold US915. */
+    mac_reset();
+    if (MultiRegion_SwitchToRegion(LORAMAC_REGION_US915) != LORAMAC_HANDLER_SUCCESS) {
+        printf("   SETUP FAILED: US915 restore\n"); exit(2);
+    }
+    LmHandlerErrorStatus_t st = MultiRegion_SwitchToRegion(LORAMAC_REGION_EU868);
+    CHECK_REGRESSION(st != LORAMAC_HANDLER_SUCCESS, "SUBSET-switch-eu868-blocked");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915,
+                     "SUBSET-switch-holds-us915");
+    st = MultiRegion_AutoSwitchToRegion(LORAMAC_REGION_EU868);
+    CHECK_REGRESSION(st == LORAMAC_HANDLER_SUCCESS, "SUBSET-autoswitch-stay");
+    CHECK_REGRESSION(MultiRegion_GetActiveRegion() == LORAMAC_REGION_US915,
+                     "SUBSET-autoswitch-holds-us915");
+}
+
+int main(void)
+{
+    printf("=== R15 harness (region-set subset build: US915 only) ===\n\n");
+    memset(g_flash, 0xFF, sizeof(g_flash));
+    mac_reset();
+
+    test_subset_region_set();
+
+    printf("\n%d checks, %d failures\n", g_checks, g_failures);
+    return g_failures ? 1 : 0;
+}
+#else
 int main(void)
 {
     printf("=== R15 harness: real multiregion_context.c vs fake LoRaMac ===\n\n");
@@ -1195,6 +1290,7 @@ test_sp05_all_seven_regions_supported();
     }
     return g_failures ? 1 : 0;
 }
+#endif /* SONDE_REGION_SUBSET_TEST */
 
 /* ========================================================================== */
 /* R8 (P1) — newest CRC-valid Tier-1 copy must win, not first-valid           */

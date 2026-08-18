@@ -31,6 +31,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "LmHandler.h"
 #include "LoRaMacInterfaces.h"
+#include "region_set.h" /* compile-time commissioned region set */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -156,8 +157,29 @@ LoRaMacRegion_t MultiRegion_GetActiveRegion(void);
  * @brief Check if a region has a valid joined context
  * @param region: Region to check
  * @retval bool: true if region is joined and context is valid
+ * @note A region compiled out via region_set.h always reads as not joined,
+ *       even if a stale flash bank still holds a valid session for it.
  */
 bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region);
+
+/**
+ * @brief Get the compile-time configured region set (region_set.h)
+ * @param regions_out: receives a pointer to the configured-region table
+ *        (may be NULL if only the count is wanted)
+ * @retval uint8_t: number of configured regions (always >= 1; an empty set
+ *         is a compile-time error in region_set.h)
+ * @note This is the single source of truth shared by the pre-join ceremony,
+ *       the provisioning-latch verification, the mission-state door anchor
+ *       and the boot session-resume scan - the lists cannot drift apart.
+ */
+uint8_t MultiRegion_GetConfiguredRegions(const LoRaMacRegion_t **regions_out);
+
+/**
+ * @brief Check whether a region is in the compile-time configured set
+ * @param region: Region to check
+ * @retval bool: true if the region is enabled in region_set.h
+ */
+bool MultiRegion_IsRegionConfigured(LoRaMacRegion_t region);
 
 /**
  * @brief Check whether provisioning is complete (durable latch)
@@ -246,7 +268,8 @@ bool MultiRegion_ClearAllContexts(void);
 /**
  * @brief Pre-join all required regions (ground operations)
  * @note Call this on the ground before flight
- * @note Joins all 6 regions: US915, EU868, AS923, AU915, IN865, KR920
+ * @note Joins every region in the compile-time configured set (region_set.h;
+ *       default all seven: US915, EU868, AS923, AU915, IN865, KR920, RU864)
  * @retval bool: true if all pre-joins successful
  */
 bool MultiRegion_PreJoinAllRegions(void);

@@ -56,6 +56,15 @@ STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src
 # fail-closed) and the other session-persistence findings.
 MREG_SRCS := test_multiregion.c
 
+# Region-set subset build (region_set.h): the SAME harness compiled with a
+# US915-only commissioned set (SONDE_REGION_SUBSET_TEST selects the subset
+# main). Proves a compiled-out region is unjoinable, unswitchable and reads
+# as never-joined even with a stale CRC-valid banked session.
+MREG_SUBSET_FLAGS := -DSONDE_REGION_SUBSET_TEST=1 -DSONDE_REGION_US915=1 \
+    -DSONDE_REGION_EU868=0 -DSONDE_REGION_AS923=0 -DSONDE_REGION_AU915=0 \
+    -DSONDE_REGION_IN865=0 -DSONDE_REGION_KR920=0 -DSONDE_REGION_RU864=0 \
+    -Wno-unused-function
+
 # F-002 (#201): the REAL timer_if.c against a minimal RTC HAL fake - proves
 # the post-failover re-init does the work (not just that the call exists).
 TIMERIF_SRCS := test_timerif.c
@@ -147,8 +156,11 @@ $(BUILD_DIR)/test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../
 # -fshort-enums matches the arm-none-eabi ABI default - the target builds
 # LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
 #struct layout with _Static_assert(offsetof(crc16) == 76, sizeof == 80).
-$(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h | $(BUILD_DIR)
+$(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h ../../Core/Inc/region_set.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -fshort-enums $(INCLUDES) -o $@ $(MREG_SRCS) -lm
+
+$(BUILD_DIR)/test_multiregion_subset$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h ../../Core/Inc/region_set.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -fshort-enums $(MREG_SUBSET_FLAGS) $(INCLUDES) -o $@ $(MREG_SRCS) -lm
 
 $(BUILD_DIR)/test_timerif$(EXE): $(TIMERIF_SRCS) ../../Core/Src/timer_if.c ../../Core/Inc/timer_if.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(TIMERIF_INCLUDES) -o $@ $(TIMERIF_SRCS) -lm
@@ -328,7 +340,7 @@ ddrmanifest:
 arminventory:
 	$(PYTHON) ../../tools/check_arm_source_inventory.py
 
-.PHONY: test flight findings burst stability multiregion baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters contracts check characterization integration structural release-gate
+.PHONY: test flight findings burst stability multiregion multiregion-subset baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters contracts check characterization integration structural release-gate
 test: $(BUILD_DIR)/test_runner$(EXE)
 	./$(BUILD_DIR)/test_runner$(EXE)
 
@@ -348,6 +360,9 @@ stability: $(BUILD_DIR)/test_stability$(EXE)
 
 multiregion: $(BUILD_DIR)/test_multiregion$(EXE)
 	./$(BUILD_DIR)/test_multiregion$(EXE)
+
+multiregion-subset: $(BUILD_DIR)/test_multiregion_subset$(EXE)
+	./$(BUILD_DIR)/test_multiregion_subset$(EXE)
 
 timerif: $(BUILD_DIR)/test_timerif$(EXE)
 	./$(BUILD_DIR)/test_timerif$(EXE)
@@ -429,12 +444,12 @@ sanitize: $(SAN_EXES)
 #                  build/artifact legs arrive with the Phase-6 CI restructure
 # all              check + characterization (the CI gate, STAB-09/#156)
 # ---------------------------------------------------------------------------
-check: test flight findings burst stability multiregion timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory
+check: test flight findings burst stability multiregion multiregion-subset timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory
 
 characterization: lt0813-gate geo-gate pwr-gate
 	@echo "characterization: 5 documented open failures awaited - LT-06 x2 (#248), PWR-02 x3 (#297)"
 
-integration: test flight multiregion timerif config txadapter gnssfix gpsloss
+integration: test flight multiregion multiregion-subset timerif config txadapter gnssfix gpsloss
 
 structural: findings burst stability review0812 deep dr sp0813 ddrmanifest arminventory
 

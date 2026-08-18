@@ -68,15 +68,19 @@ void MissionState_Init(void) {
   /* Door anchor (DDR-0018): the session bank decides, not the lone flag.
    * FW-1: the bank is now the Tier-1 credential store — IsRegionJoined()
    * only returns true when a CRC-valid Tier-1 copy supplied the context,
-   * so this anchors to Tier-1 presence even if the DR3 record is corrupt. */
-  bool bank_commissioned =
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_US915) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_EU868) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_AS923) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_AU915) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_IN865) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_KR920) ||
-      MultiRegion_IsRegionJoined(LORAMAC_REGION_RU864); /* SP-05 (#246) */
+   * so this anchors to Tier-1 presence even if the DR3 record is corrupt.
+   * Region-set (region_set.h): one loop over the compile-time configured
+   * set, so this anchor can never drift from the pre-join table; compiled-
+   * out regions read as never-joined inside IsRegionJoined itself. */
+  const LoRaMacRegion_t *door_regions;
+  uint8_t door_region_count = MultiRegion_GetConfiguredRegions(&door_regions);
+  bool bank_commissioned = false;
+  for (uint8_t i = 0; i < door_region_count; i++) {
+    if (MultiRegion_IsRegionJoined(door_regions[i])) {
+      bank_commissioned = true;
+      break;
+    }
+  }
 
   /* MISSION-01 (#142, DDR-0002 amendment): the persisted DR3 record now wins
    * outright — including COMMISSIONING. Previously a commissioned bank

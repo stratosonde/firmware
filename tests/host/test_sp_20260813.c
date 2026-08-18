@@ -383,11 +383,13 @@ static void test_sp05_structural(const char *conf, const char *app, const char *
     CHECK_REGRESSION(strstr(app, "LORAMAC_REGION_RU864") != NULL, "SP-05-loraapp-ru864");
     CHECK_REGRESSION(strstr(app, "DataratesRU864") != NULL, "SP-05-datarates-ru864");
 
-    /* Commissioning door anchor covers all joined regions. */
-    CHECK_REGRESSION(strstr(msstate, "MultiRegion_IsRegionJoined(LORAMAC_REGION_IN865)") != NULL,
-                     "SP-05-door-in865");
-    CHECK_REGRESSION(strstr(msstate, "MultiRegion_IsRegionJoined(LORAMAC_REGION_RU864)") != NULL,
-                     "SP-05-door-ru864");
+    /* Commissioning door anchor covers every configured region: one loop
+     * over MultiRegion_GetConfiguredRegions (region-set refactor) - no
+     * per-region hardcoded list that could drift from the pre-join table. */
+    CHECK_REGRESSION(strstr(msstate, "MultiRegion_GetConfiguredRegions") != NULL,
+                     "SP-05-door-configured-set");
+    CHECK_REGRESSION(strstr(msstate, "MultiRegion_IsRegionJoined(door_regions[i])") != NULL,
+                     "SP-05-door-loop-joined");
 }
 
 /* ========================================================================== */

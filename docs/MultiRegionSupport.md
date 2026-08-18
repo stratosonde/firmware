@@ -2,11 +2,45 @@
 
 ## Overview
 
-The sonde pre-joins every supported LoRaWAN region **on the ground** and
-switches between banked sessions in flight based on the GNSS position — no
-in-flight joins, ever (SI-015, DDR-0018 INV-COMM-001). Implementation:
+The sonde pre-joins every region in its compile-time configured set
+(default: all supported regions) **on the ground** and switches between
+banked sessions in flight based on the GNSS position — no in-flight joins,
+ever (SI-015, DDR-0018 INV-COMM-001). Implementation:
 `Core/Src/multiregion_context.c` (bank + switching + persistence),
 `Core/Src/multiregion_h3.c` (H3 detection, see RegionLookup.md).
+
+## Compile-Time Region Set (`Core/Inc/region_set.h`)
+
+Hardware bring-up does not need all seven regions. Each `SONDE_REGION_*`
+flag (`US915`, `EU868`, `AS923`, `AU915`, `IN865`, `KR920`, `RU864`;
+default `1`) selects whether that region is commissioned at all:
+
+- `1` — joined during the ground commissioning ceremony; usable in flight
+- `0` — **compiled out for the whole mission**: never joined
+  (`MultiRegion_JoinRegion` / `InitializeRegionFromNetworkServer` refuse),
+  never switched to (`MultiRegion_SwitchToRegion` refuses), and
+  `MultiRegion_IsRegionJoined` reads **false even if a stale flash bank from
+  an all-regions build still holds a CRC-valid session for it**
+
+Override per build with `PROJECT_CPPFLAGS`, e.g. a US915-only bring-up
+build: `make -C Debug clean all PROJECT_CPPFLAGS="-DSONDE_REGION_EU868=0
+-DSONDE_REGION_AS923=0 -DSONDE_REGION_AU915=0 -DSONDE_REGION_IN865=0
+-DSONDE_REGION_KR920=0 -DSONDE_REGION_RU864=0"`. Typical flow: US915-only
+bring-up → US915+EU868 dual-region testing → all-region flight build.
+
+The configured table (`kPreJoinRegions`) is the **single source of truth**
+shared by the pre-join ceremony, the C-01 PROVISIONED-latch verification
+(so a US915-only commissioning can actually latch), the mission-state door
+anchor, and the boot session-resume scan — the lists cannot drift apart.
+The flash layout is unchanged (`MAX_REGION_CONTEXTS` stays 7,
+`MULTIREGION_VERSION` stays 5), so subset and all-region builds read each
+other's banks; compiled-out entries are simply ignored. An empty set is a
+compile-time `#error`.
+
+In-flight behaviour towards a never-commissioned region is unchanged and
+fail-closed: if the geofence detects a region with no live session, the
+cycle archives locally and stays RF-silent (FR-03/#290, BEH-03/#301) —
+never transmit the wrong band plan in the wrong place.
 
 > This document describes the **as-built** system. It replaces a December 2025
 > design proposal that described 4 regions, a 75-byte context, and a
@@ -48,7 +82,8 @@ blocked in flight):
 
 1. Erase **both** LoRaWAN NVM slots via the owner (FR-11/#94: a page-126-only
    erase left a valid stale slot B that restore would select)
-2. Loop the 7-region table (`kPreJoinRegions`, F-R3/#73): OTAA join each with
+2. Loop the configured-region table (`kPreJoinRegions`, F-R3/#73; 7 regions
+   by default, subsettable via `region_set.h`): OTAA join each with
    a bounded 5-min-per-region wait and 30 s retry cadence (R30)
 3. Flight entry requires ≥ 1 successful join (R30/D6)
 4. C-01 (#270): on success the durable PROVISIONED latch is written to the
@@ -83,6 +118,7 @@ region is kept — never strand mid-ocean.
 | `MultiRegion_PreJoinAllRegions` | The commissioning ceremony above |
 | `MultiRegion_SwitchToRegion` / `AutoSwitchForLocation` / `AutoSwitchToRegion` | Transactional switch + policy wrappers |
 | `MultiRegion_GetActiveRegion` / `RegionToString` | Query + shared name map (#77) |
+| `MultiRegion_GetConfiguredRegions` / `MultiRegion_IsRegionConfigured` | Compile-time configured set (region_set.h) |
 | `MultiRegion_SaveCurrentContext` / `ForceSaveCurrentContext` / `SaveAllContexts` / `RestoreContexts` | Persistence |
 | `MultiRegion_GetStats` / `ClearAllContexts` | Diagnostics / emergency reset |
 | `MultiRegion_InitializeRegionFromNetworkServer` / `DisplaySessionKeys` | **Bench ABP helpers** (ChirpStack key paste; flight is OTAA) |

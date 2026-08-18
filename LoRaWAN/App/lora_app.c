@@ -350,7 +350,8 @@ static UTIL_TIMER_Time_t TxPeriodicity = APP_TX_DUTYCYCLE;
  *   #define ABP_DEV_ADDR_US915   0x78000005
  *   #define ABP_APP_SKEY_US915   0x14,0x47,...  (16 bytes, brace-less)
  *   #define ABP_NWK_SKEY_US915   0x84,0x2d,...
- * A region with no macros defined is simply absent from the table. */
+ * A region with no macros defined - or compiled out via region_set.h - is
+ * simply absent from the table. */
 #include "se-identity.h"
 typedef struct {
   LoRaMacRegion_t region;
@@ -359,17 +360,17 @@ typedef struct {
   uint8_t nwk_s_key[16];
 } ABPProvisioningEntry_t;
 static const ABPProvisioningEntry_t abp_provisioning_table[] = {
-#ifdef ABP_DEV_ADDR_US915
-  { LORAMAC_REGION_US915, ABP_DEV_ADDR_US915, {ABP_APP_SKEY_US915}, {ABP_NWK_SKEY_US915} },
+#if defined(ABP_DEV_ADDR_US915) && SONDE_REGION_US915
+    {LORAMAC_REGION_US915, ABP_DEV_ADDR_US915, {ABP_APP_SKEY_US915}, {ABP_NWK_SKEY_US915}},
 #endif
-#ifdef ABP_DEV_ADDR_EU868
-  { LORAMAC_REGION_EU868, ABP_DEV_ADDR_EU868, {ABP_APP_SKEY_EU868}, {ABP_NWK_SKEY_EU868} },
+#if defined(ABP_DEV_ADDR_EU868) && SONDE_REGION_EU868
+    {LORAMAC_REGION_EU868, ABP_DEV_ADDR_EU868, {ABP_APP_SKEY_EU868}, {ABP_NWK_SKEY_EU868}},
 #endif
-#ifdef ABP_DEV_ADDR_AS923
-  { LORAMAC_REGION_AS923, ABP_DEV_ADDR_AS923, {ABP_APP_SKEY_AS923}, {ABP_NWK_SKEY_AS923} },
+#if defined(ABP_DEV_ADDR_AS923) && SONDE_REGION_AS923
+    {LORAMAC_REGION_AS923, ABP_DEV_ADDR_AS923, {ABP_APP_SKEY_AS923}, {ABP_NWK_SKEY_AS923}},
 #endif
-#ifdef ABP_DEV_ADDR_AU915
-  { LORAMAC_REGION_AU915, ABP_DEV_ADDR_AU915, {ABP_APP_SKEY_AU915}, {ABP_NWK_SKEY_AU915} },
+#if defined(ABP_DEV_ADDR_AU915) && SONDE_REGION_AU915
+    {LORAMAC_REGION_AU915, ABP_DEV_ADDR_AU915, {ABP_APP_SKEY_AU915}, {ABP_NWK_SKEY_AU915}},
 #endif
 };
 #endif
@@ -550,12 +551,13 @@ void LoRaWAN_Init(void)
   LoRaMacRegion_t resume_region = MultiRegion_GetActiveRegion();
   bool have_session = MultiRegion_IsRegionJoined(resume_region);
   if (!have_session) {
-    static const LoRaMacRegion_t scan_regions[] = {
-      LORAMAC_REGION_US915, LORAMAC_REGION_EU868, LORAMAC_REGION_AS923,
-      LORAMAC_REGION_AU915, LORAMAC_REGION_IN865, LORAMAC_REGION_KR920,
-      LORAMAC_REGION_RU864   /* SP-05 (#246): seventh bank */
-    };
-    for (uint8_t i = 0; i < sizeof(scan_regions)/sizeof(scan_regions[0]); i++) {
+    /* Region-set (region_set.h): scan exactly the compile-time configured
+     * set, shared with the pre-join ceremony - compiled-out regions read as
+     * never-joined even with a stale bank, so a subset build can never
+     * resume onto a region it does not commission. */
+    const LoRaMacRegion_t *scan_regions;
+    uint8_t scan_region_count = MultiRegion_GetConfiguredRegions(&scan_regions);
+    for (uint8_t i = 0; i < scan_region_count; i++) {
       if (MultiRegion_IsRegionJoined(scan_regions[i])) {
         resume_region = scan_regions[i];
         have_session = true;

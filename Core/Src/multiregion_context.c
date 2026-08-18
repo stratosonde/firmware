@@ -193,17 +193,54 @@ static uint32_t g_provisioned = 0;   // C-01 (#270): RAM mirror of the Tier-1 PR
 
 /* F-R3 (#73) / SP-05 (#246) / C-01 (#270): the required-region set, at file
  * scope so the pre-join ceremony and the provisioning-latch checks share
- * one list - they can never drift apart. */
+ * one list - they can never drift apart.
+ * Region-set (region_set.h): each entry is compile-time gated, so a build
+ * commissions exactly the configured subset (e.g. US915 only for hardware
+ * bring-up) and the provisioning latch verifies that same subset. */
 static const LoRaMacRegion_t kPreJoinRegions[] = {
+#if SONDE_REGION_US915
     LORAMAC_REGION_US915,
+#endif
+#if SONDE_REGION_EU868
     LORAMAC_REGION_EU868,
+#endif
+#if SONDE_REGION_AS923
     LORAMAC_REGION_AS923,
+#endif
+#if SONDE_REGION_AU915
     LORAMAC_REGION_AU915,
+#endif
+#if SONDE_REGION_IN865
     LORAMAC_REGION_IN865,
+#endif
+#if SONDE_REGION_KR920
     LORAMAC_REGION_KR920,
+#endif
+#if SONDE_REGION_RU864
     LORAMAC_REGION_RU864,
+#endif
 };
 #define NUM_PREJOIN_REGIONS ((uint8_t)(sizeof(kPreJoinRegions) / sizeof(kPreJoinRegions[0])))
+
+/* region_set.h already #errors on an empty set; belt: pin the table here so
+ * a future edit cannot leave the pre-join loop with nothing to do. */
+_Static_assert(NUM_PREJOIN_REGIONS >= 1, "configured region set must not be empty");
+
+uint8_t MultiRegion_GetConfiguredRegions(const LoRaMacRegion_t **regions_out) {
+  if (regions_out) {
+    *regions_out = kPreJoinRegions;
+  }
+  return NUM_PREJOIN_REGIONS;
+}
+
+bool MultiRegion_IsRegionConfigured(LoRaMacRegion_t region) {
+  for (uint8_t i = 0; i < NUM_PREJOIN_REGIONS; i++) {
+    if (kPreJoinRegions[i] == region) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /* Batched frame counter save infrastructure */
 static uint8_t g_unsaved_tx_count = 0; // Track unsaved successful transmissions
@@ -289,6 +326,14 @@ LoRaMacRegion_t MultiRegion_GetActiveRegion(void) {
  */
 bool MultiRegion_IsRegionJoined(LoRaMacRegion_t region) {
   if (!g_initialized) {
+    return false;
+  }
+
+  /* Region-set (region_set.h): a compiled-out region reads as never joined,
+   * even when a stale flash bank from an all-regions build still holds a
+   * CRC-valid session for it. This one guard propagates to the mission door,
+   * the boot resume scan and every in-flight switch decision. */
+  if (!MultiRegion_IsRegionConfigured(region)) {
     return false;
   }
 
@@ -828,6 +873,15 @@ LmHandlerErrorStatus_t MultiRegion_SwitchToRegion(LoRaMacRegion_t region) {
     return LORAMAC_HANDLER_ERROR;
   }
 
+  /* Region-set (region_set.h): a compiled-out region is unswitchable even
+   * when a stale bank holds a valid context. AutoSwitch already gates via
+   * IsRegionJoined; this covers direct callers. */
+  if (!MultiRegion_IsRegionConfigured(region)) {
+    APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: %s compiled out (region_set.h) - switch refused\r\n",
+            RegionToString(region));
+    return LORAMAC_HANDLER_ERROR;
+  }
+
   // Debug current state
   SONDE_LOG("Current active_slot: %d, Current region: %s\r\n",
             g_storage.active_slot,
@@ -1083,6 +1137,15 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region) {
    * would have transmitted before returning the error. Check FIRST. */
   if (!MissionState_IsCommissioning()) {
     SONDE_LOG_STR("JoinRegion: BLOCKED - joins are commissioning-only (DDR-0018)\r\n");
+    return LORAMAC_HANDLER_ERROR;
+  }
+
+  /* Region-set (region_set.h): never join a compiled-out region. The
+   * pre-join loop only iterates the configured set; this guards any other
+   * caller. */
+  if (!MultiRegion_IsRegionConfigured(region)) {
+    SONDE_LOG("JoinRegion: BLOCKED - %s compiled out (region_set.h)\r\n",
+              RegionToString(region));
     return LORAMAC_HANDLER_ERROR;
   }
 
@@ -1409,6 +1472,14 @@ bool MultiRegion_InitializeRegionFromNetworkServer(
 
   if (!app_s_key || !nwk_s_key) {
     APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: Invalid key pointers\r\n");
+    return false;
+  }
+
+  /* Region-set (region_set.h): a compiled-out region must not be
+   * provisioned even via the bench ABP path. */
+  if (!MultiRegion_IsRegionConfigured(region)) {
+    APP_LOG(TS_ON, VLEVEL_M, "MultiRegion: %s compiled out (region_set.h) - not provisioned\r\n",
+            RegionToString(region));
     return false;
   }
 
