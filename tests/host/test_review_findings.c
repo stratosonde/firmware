@@ -692,11 +692,17 @@ static void test_f12_flight_build_verified(void)
 
 static void test_f13_f14_w25q_hardening(void)
 {
-    printf("-- F13/#174: exact JEDEC; F14: wrap-safe range checks\n");
+    printf("-- F13/#174: exact JEDEC whitelist (W25Q16 + W25Q80 bench); F14: wrap-safe range checks\n");
     char *src = slurp("../../Core/Src/w25q16jv.c");
-    CHECK_REGRESSION(strstr(src, "jedec_id != W25Q16JV_JEDEC_ID") != NULL, "F13");
+    /* The check is still an EXACT-match whitelist - W25Q80 (bench fallback)
+     * joined W25Q16 with its own resolved geometry, so the pins now look
+     * for both acceptance arms and a rejection of everything else. */
+    CHECK_REGRESSION(strstr(src, "jedec_id == W25Q16JV_JEDEC_ID") != NULL, "F13-w16");
+    CHECK_REGRESSION(strstr(src, "jedec_id == W25Q80_JEDEC_ID") != NULL, "F13-w80");
+    CHECK_REGRESSION(strstr(src, "W25Q_ERROR_NOT_FOUND") != NULL, "F13-reject");
     CHECK_REGRESSION(strstr(src, "(addr + len)") == NULL, "F14");
-    CHECK_REGRESSION(strstr(src, "W25Q_FLASH_SIZE - addr") != NULL, "F14-form");
+    /* Bound moved from the nominal macro to the resolved capacity */
+    CHECK_REGRESSION(strstr(src, "capacity - addr") != NULL, "F14-form");
     free(src);
 }
 

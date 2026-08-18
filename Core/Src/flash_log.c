@@ -35,7 +35,7 @@ static bool crc32_table_initialized = false;
 static void FlashLog_InitCRC32Table(void);
 static FlashLog_StatusTypeDef FlashLog_ReadHeader(FlashLog_HandleTypeDef *hlog, uint32_t addr, FlashLog_Header_t *header);
 static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog);
-static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header);
+static bool FlashLog_ValidateHeader(const FlashLog_HandleTypeDef *hlog, const FlashLog_Header_t *header);
 static uint32_t FlashLog_GetRecordAddress(FlashLog_HandleTypeDef *hlog, uint32_t record_index);
 static FlashLog_StatusTypeDef FlashLog_EraseSectorIfNeeded(FlashLog_HandleTypeDef *hlog, uint32_t addr);
 static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog);
@@ -408,7 +408,7 @@ uint32_t FlashLog_GetUnsentCount(FlashLog_HandleTypeDef *hlog) {
 /**
  * @brief  Validate header magic, version, and CRC
  */
-static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header) {
+static bool FlashLog_ValidateHeader(const FlashLog_HandleTypeDef *hlog, const FlashLog_Header_t *header) {
   uint32_t calculated_crc;
 
   /* Check magic number */
@@ -428,11 +428,13 @@ static bool FlashLog_ValidateHeader(const FlashLog_Header_t *header) {
   /* F-021 (#55): beyond magic+CRC, header field CONTENTS must be plausible
    * before a header is trusted — a CRC-valid but semantically impossible
    * header must not steer the log. */
-  if (header->write_addr < FLASH_LOG_DATA_START || header->write_addr >= FLASH_LOG_DATA_END ||
+  /* Bounds follow the RUNTIME device capacity (hlog->data_end), so a
+   * W25Q80 bench board validates its own compressed ring correctly. */
+  if (header->write_addr < FLASH_LOG_DATA_START || header->write_addr >= hlog->data_end ||
       (header->write_addr % FLASH_LOG_RECORD_SIZE) != 0) {
     return false; /* write frontier outside the data region or unaligned */
   }
-  if (header->oldest_addr < FLASH_LOG_DATA_START || header->oldest_addr >= FLASH_LOG_DATA_END ||
+  if (header->oldest_addr < FLASH_LOG_DATA_START || header->oldest_addr >= hlog->data_end ||
       (header->oldest_addr % FLASH_LOG_RECORD_SIZE) != 0) {
     return false;
   }
@@ -526,7 +528,7 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
  * @brief  Calculate record address from index
  */
 static uint32_t FlashLog_GetRecordAddress(FlashLog_HandleTypeDef *hlog, uint32_t record_index) {
-  uint32_t offset = (record_index % FLASH_LOG_MAX_RECORDS) * FLASH_LOG_RECORD_SIZE;
+  uint32_t offset = (record_index % hlog->max_records) * FLASH_LOG_RECORD_SIZE;
   return FLASH_LOG_DATA_START + offset;
 }
 
@@ -568,6 +570,11 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
   memset(hlog, 0, sizeof(FlashLog_HandleTypeDef));
   hlog->hw25q = hw25q;
 
+  /* Resolve the ring geometry from the actual device (W25Q16 flight part or
+   * W25Q80 bench fallback). Header validation below uses these bounds. */
+  hlog->data_end = W25Q_GetCapacity(hw25q);
+  hlog->max_records = (hlog->data_end - FLASH_LOG_DATA_START) / FLASH_LOG_RECORD_SIZE;
+
   /* Initialize CRC32 table */
   FlashLog_InitCRC32Table();
 
@@ -583,8 +590,8 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
   }
 
   /* Validate headers */
-  valid_a = FlashLog_ValidateHeader(&header_a);
-  valid_b = FlashLog_ValidateHeader(&header_b);
+  valid_a = FlashLog_ValidateHeader(hlog, &header_a);
+  valid_b = FlashLog_ValidateHeader(hlog, &header_b);
 
   if (valid_a && valid_b) {
     /* Both valid — F-007/R12 (#50): sequence is now a real generation
@@ -638,7 +645,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     uint32_t valid = 0;
     uint32_t max_seq = 0, min_seq = 0;
     uint32_t max_slot = 0, min_slot = 0;
-    for (uint32_t slot = 0; slot < FLASH_LOG_MAX_RECORDS; slot++) {
+    for (uint32_t slot = 0; slot < hlog->max_records; slot++) {
       uint32_t addr = FLASH_LOG_DATA_START + slot * FLASH_LOG_RECORD_SIZE;
       if (W25Q_Read(hw25q, addr, (uint8_t *)&probe, sizeof(probe)) != W25Q_OK) {
         return FLASH_LOG_ERROR_FLASH;
@@ -666,7 +673,7 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
        * possibly-unsent science beats the risk of silently dropping it. */
       hlog->record_count = max_seq + 1U;
       hlog->write_addr = FLASH_LOG_DATA_START +
-                         (((max_slot + 1U) % FLASH_LOG_MAX_RECORDS) * FLASH_LOG_RECORD_SIZE);
+                         (((max_slot + 1U) % hlog->max_records) * FLASH_LOG_RECORD_SIZE);
       hlog->oldest_addr = FLASH_LOG_DATA_START + min_slot * FLASH_LOG_RECORD_SIZE;
       hlog->tx_high_water = 0;
       hlog->recovery_frontier = 0;
@@ -789,14 +796,14 @@ static FlashLog_StatusTypeDef FlashLog_FrontierScan(FlashLog_HandleTypeDef *hlog
       break; /* valid but from a previous lap: frontier found */
     }
     hlog->write_addr += FLASH_LOG_RECORD_SIZE;
-    if (hlog->write_addr >= FLASH_LOG_DATA_END) {
+    if (hlog->write_addr >= hlog->data_end) {
       hlog->write_addr = FLASH_LOG_DATA_START;
     }
     hlog->record_count++;
-    if (hlog->record_count > FLASH_LOG_MAX_RECORDS) {
+    if (hlog->record_count > hlog->max_records) {
       /* FR-10 (#90): sector-boundary convention — see WriteRecord */
       hlog->oldest_addr = ((hlog->write_addr / W25Q_SECTOR_SIZE) + 1U) * W25Q_SECTOR_SIZE;
-      if (hlog->oldest_addr >= FLASH_LOG_DATA_END) {
+      if (hlog->oldest_addr >= hlog->data_end) {
         hlog->oldest_addr = FLASH_LOG_DATA_START;
       }
     }
@@ -936,7 +943,7 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
   hlog->record_count++;
 
   /* Handle wraparound */
-  if (hlog->write_addr >= FLASH_LOG_DATA_END) {
+  if (hlog->write_addr >= hlog->data_end) {
     hlog->write_addr = FLASH_LOG_DATA_START;
   }
 
@@ -948,9 +955,9 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
    * phantom records reported as corrupt on every post-wrap bulk read.
    * Now: oldest_addr = end of the sector containing write_addr — the
    * oldest slot that can still hold valid data. */
-  if (hlog->record_count > FLASH_LOG_MAX_RECORDS) {
+  if (hlog->record_count > hlog->max_records) {
     hlog->oldest_addr = ((hlog->write_addr / W25Q_SECTOR_SIZE) + 1U) * W25Q_SECTOR_SIZE;
-    if (hlog->oldest_addr >= FLASH_LOG_DATA_END) {
+    if (hlog->oldest_addr >= hlog->data_end) {
       hlog->oldest_addr = FLASH_LOG_DATA_START;
     }
   }
@@ -1061,7 +1068,7 @@ uint32_t FlashLog_GetAvailableRecords(FlashLog_HandleTypeDef *hlog) {
   }
 
   /* If we haven't wrapped yet, all records are available */
-  if (hlog->record_count <= FLASH_LOG_MAX_RECORDS) {
+  if (hlog->record_count <= hlog->max_records) {
     return hlog->record_count;
   }
 
@@ -1073,7 +1080,7 @@ uint32_t FlashLog_GetAvailableRecords(FlashLog_HandleTypeDef *hlog) {
   if (hlog->write_addr >= hlog->oldest_addr) {
     span = hlog->write_addr - hlog->oldest_addr;
   } else {
-    span = (FLASH_LOG_DATA_END - hlog->oldest_addr) +
+    span = (hlog->data_end - hlog->oldest_addr) +
            (hlog->write_addr - FLASH_LOG_DATA_START);
   }
   return span / FLASH_LOG_RECORD_SIZE;
@@ -1084,7 +1091,7 @@ bool FlashLog_HasWrapped(FlashLog_HandleTypeDef *hlog) {
     return false;
   }
 
-  return (hlog->record_count > FLASH_LOG_MAX_RECORDS);
+  return (hlog->record_count > hlog->max_records);
 }
 
 FlashLog_StatusTypeDef FlashLog_SyncHeader(FlashLog_HandleTypeDef *hlog) {
@@ -1127,7 +1134,7 @@ FlashLog_StatusTypeDef FlashLog_GetStats(FlashLog_HandleTypeDef *hlog,
   available = FlashLog_GetAvailableRecords(hlog);
 
   if (total_capacity != NULL) {
-    *total_capacity = FLASH_LOG_MAX_RECORDS;
+    *total_capacity = hlog->max_records;
   }
 
   if (used_records != NULL) {
@@ -1135,8 +1142,8 @@ FlashLog_StatusTypeDef FlashLog_GetStats(FlashLog_HandleTypeDef *hlog,
   }
 
   if (free_records != NULL) {
-    if (hlog->record_count < FLASH_LOG_MAX_RECORDS) {
-      *free_records = FLASH_LOG_MAX_RECORDS - hlog->record_count;
+    if (hlog->record_count < hlog->max_records) {
+      *free_records = hlog->max_records - hlog->record_count;
     } else {
       *free_records = 0; /* Circular buffer is full, will overwrite */
     }

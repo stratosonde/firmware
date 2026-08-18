@@ -59,6 +59,15 @@ void fake_w25q_free(void)
     g_mem = NULL;
 }
 
+/* flash_log resolves geometry through this accessor just like the real
+ * driver; host always reports nominal W25Q16 (2MB), keeping the geometry
+ * assertions compile-time-stable. */
+uint32_t W25Q_GetCapacity(const W25Q_HandleTypeDef *hw25q)
+{
+    (void)hw25q;
+    return W25Q_FLASH_SIZE;
+}
+
 void fake_w25q_corrupt(uint32_t addr, uint32_t len)
 {
     /* Flip bits to 0 the way a torn program would: clear the low nibble of

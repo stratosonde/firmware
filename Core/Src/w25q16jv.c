@@ -131,11 +131,19 @@ W25Q_StatusTypeDef W25Q_Init(W25Q_HandleTypeDef *hw25q, SPI_HandleTypeDef *hspi,
     return status;
   }
 
-  /* F13 (#174): require the EXACT JEDEC ID. The whole driver (geometry,
-   * addressing, erase sizes) assumes W25Q16; masking off the capacity byte
-   * let a W25Q32/64/08 pass identification with the wrong fixed geometry. */
-  if (jedec_id != W25Q16JV_JEDEC_ID) {
-    /* Not a Winbond W25Q series device */
+  /* F13 (#174): still an EXACT match, but against a small whitelist with
+   * per-device geometry. Page/sector/block sizes, the command set and the
+   * 24-bit addressing are identical across W25Q16/W80; ONLY total capacity
+   * differs, and it is now cached in the handle (no wrong-geometry
+   * pass-through). W25Q80 (0xEF4014) exists to rescue bench boards stuffed
+   * with the 1MB BOM option; W25Q32/64 remain correctly rejected. */
+  if (jedec_id == W25Q16JV_JEDEC_ID) {
+    hw25q->capacity_bytes = W25Q16JV_FLASH_SIZE;
+  } else if (jedec_id == W25Q80_JEDEC_ID) {
+    SONDE_LOG_STR("W25Q_Init: W25Q80 accepted (bench fallback, 1MB geometry)\r\n");
+    hw25q->capacity_bytes = W25Q80_FLASH_SIZE;
+  } else {
+    /* Unrecognized capacity - NOT a wrong-size pass-through */
     SONDE_LOG("W25Q_Init: VERIFICATION FAILED - Wrong device ID: 0x%06lX\r\n", jedec_id);
     return W25Q_ERROR_NOT_FOUND;
   }
@@ -251,6 +259,15 @@ W25Q_StatusTypeDef W25Q_ReadJEDECID(W25Q_HandleTypeDef *hw25q, uint32_t *jedec_i
   }
 
   return status;
+}
+
+uint32_t W25Q_GetCapacity(const W25Q_HandleTypeDef *hw25q) {
+  if (hw25q == NULL || hw25q->capacity_bytes == 0) {
+    /* Pre-init or zeroed handle: nominal geometry. W25Q_Init fills in the
+     * real capacity before any read/write path can legitimately run. */
+    return W25Q_FLASH_SIZE;
+  }
+  return hw25q->capacity_bytes;
 }
 
 W25Q_StatusTypeDef W25Q_ReadStatus1(W25Q_HandleTypeDef *hw25q, uint8_t *status) {
@@ -383,8 +400,10 @@ W25Q_StatusTypeDef W25Q_Read(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     return W25Q_ERROR_PARAM;
   }
 
-  /* F14 (#174): subtraction form - the sum can wrap */
-  if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
+  /* F14 (#174): subtraction form - the sum can wrap; bound is the handle's
+   * resolved capacity (W25Q16=2MB, W25Q80=1MB), not the nominal macro */
+  uint32_t capacity = W25Q_GetCapacity(hw25q);
+  if (addr >= capacity || len > capacity - addr) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -435,8 +454,10 @@ W25Q_StatusTypeDef W25Q_FastRead(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     return W25Q_ERROR_PARAM;
   }
 
-  /* F14 (#174): subtraction form - the sum can wrap */
-  if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
+  /* F14 (#174): subtraction form - the sum can wrap; bound is the handle's
+   * resolved capacity (W25Q16=2MB, W25Q80=1MB), not the nominal macro */
+  uint32_t capacity = W25Q_GetCapacity(hw25q);
+  if (addr >= capacity || len > capacity - addr) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -487,8 +508,10 @@ W25Q_StatusTypeDef W25Q_PageProgram(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     return W25Q_ERROR_PARAM;
   }
 
-  /* F14 (#174): subtraction form - the sum can wrap */
-  if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
+  /* F14 (#174): subtraction form - the sum can wrap; bound is the handle's
+   * resolved capacity (W25Q16=2MB, W25Q80=1MB), not the nominal macro */
+  uint32_t capacity = W25Q_GetCapacity(hw25q);
+  if (addr >= capacity || len > capacity - addr) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -550,8 +573,10 @@ W25Q_StatusTypeDef W25Q_Write(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     return W25Q_ERROR_PARAM;
   }
 
-  /* F14 (#174): subtraction form - the sum can wrap */
-  if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
+  /* F14 (#174): subtraction form - the sum can wrap; bound is the handle's
+   * resolved capacity (W25Q16=2MB, W25Q80=1MB), not the nominal macro */
+  uint32_t capacity = W25Q_GetCapacity(hw25q);
+  if (addr >= capacity || len > capacity - addr) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -591,7 +616,8 @@ W25Q_StatusTypeDef W25Q_EraseSector(W25Q_HandleTypeDef *hw25q, uint32_t addr) {
     return W25Q_ERROR_PARAM;
   }
 
-  if (addr >= W25Q_FLASH_SIZE) {
+  /* Bound = resolved device capacity (NOT the nominal W25Q16 macro) */
+  if (addr >= W25Q_GetCapacity(hw25q)) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -640,7 +666,8 @@ W25Q_StatusTypeDef W25Q_EraseBlock32K(W25Q_HandleTypeDef *hw25q, uint32_t addr) 
     return W25Q_ERROR_PARAM;
   }
 
-  if (addr >= W25Q_FLASH_SIZE) {
+  /* Bound = resolved device capacity (NOT the nominal W25Q16 macro) */
+  if (addr >= W25Q_GetCapacity(hw25q)) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -689,7 +716,8 @@ W25Q_StatusTypeDef W25Q_EraseBlock64K(W25Q_HandleTypeDef *hw25q, uint32_t addr) 
     return W25Q_ERROR_PARAM;
   }
 
-  if (addr >= W25Q_FLASH_SIZE) {
+  /* Bound = resolved device capacity (NOT the nominal W25Q16 macro) */
+  if (addr >= W25Q_GetCapacity(hw25q)) {
     return W25Q_ERROR_PARAM;
   }
 
@@ -845,8 +873,10 @@ W25Q_StatusTypeDef W25Q_IsErased(W25Q_HandleTypeDef *hw25q, uint32_t addr,
     return W25Q_ERROR_PARAM;
   }
 
-  /* F14 (#174): subtraction form - the sum can wrap */
-  if (addr >= W25Q_FLASH_SIZE || len > W25Q_FLASH_SIZE - addr) {
+  /* F14 (#174): subtraction form - the sum can wrap; bound is the handle's
+   * resolved capacity (W25Q16=2MB, W25Q80=1MB), not the nominal macro */
+  uint32_t capacity = W25Q_GetCapacity(hw25q);
+  if (addr >= capacity || len > capacity - addr) {
     return W25Q_ERROR_PARAM;
   }
 

@@ -176,6 +176,12 @@ typedef struct __attribute__((packed)) {
 typedef struct {
   W25Q_HandleTypeDef *hw25q;  /**< Pointer to W25Q flash handle */
   bool initialized;           /**< Initialization flag */
+  /* Runtime flash geometry (W25Q80 bench fallback vs W25Q16 flight part):
+   * resolved from the W25Q handle in FlashLog_Init. The FLASH_LOG_DATA_END /
+   * FLASH_LOG_MAX_RECORDS macros remain the 2MB-device COMPILE-TIME values
+   * used by host tests and documentation; on target the ring follows THESE. */
+  uint32_t data_end;          /**< End of data area = device capacity */
+  uint32_t max_records;       /**< (data_end - DATA_START) / RECORD_SIZE */
   uint32_t write_addr;        /**< Cached next write address */
   uint32_t oldest_addr;       /**< Cached oldest record address */
   uint32_t record_count;      /**< Cached total record count */

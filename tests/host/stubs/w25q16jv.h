@@ -12,6 +12,9 @@
 #define W25Q_FLASH_SIZE   (2U * 1024U * 1024U)
 typedef enum { W25Q_OK = 0, W25Q_ERROR, W25Q_ERROR_INIT } W25Q_StatusTypeDef;
 typedef struct { int _host_stub; } W25Q_HandleTypeDef;
+/* Real driver resolves capacity in the handle; the fake always reports the
+ * nominal W25Q16 (2MB) geometry so host geometry checks stay compile-time. */
+uint32_t W25Q_GetCapacity(const W25Q_HandleTypeDef *hw25q);
 
 /* FR-10 / T-7: full API surface used by flash_log.c. Implemented by
  * tests/host/fake_w25q.c (simulated NOR semantics). */
