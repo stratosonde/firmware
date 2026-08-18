@@ -23,7 +23,14 @@
 #define CRC32_POLYNOMIAL 0xEDB88320
 
 /* Private variables ---------------------------------------------------------*/
-static SystemConfig_t g_config;
+/* g_config MUST be 8-byte aligned: SystemConfig_t is __attribute__((packed))
+ * (alignment 1), so without this attribute the linker may place it at any
+ * byte boundary. FLASH_IF_INT_Write reads the source buffer with 64-bit
+ * loads (LDRD); an unaligned LDRD faults on Cortex-M4 -> HardFault ->
+ * reset -> boot loop, self-sustaining because the erase has already
+ * blanked the page so every boot retries the save. Observed on target:
+ * g_config at 0x20000BD1 (odd), fault inside Config_Init's defaults save. */
+static SystemConfig_t g_config __attribute__((aligned(8)));
 static bool g_config_initialized = false;
 static uint32_t g_flash_read_count = 0;
 static uint32_t g_flash_write_count = 0;
@@ -481,7 +488,12 @@ static ConfigStatus_t Config_FlashWrite(void) {
    * 99-byte struct always failed FLASH_IF_Write's 64-bit alignment check
    * after the erase had already succeeded). */
   if ((sizeof(SystemConfig_t) % 8U) != 0U ||
-      (((uint32_t)CONFIG_FLASH_ADDRESS) % 8U) != 0U) {
+      (((uint32_t)CONFIG_FLASH_ADDRESS) % 8U) != 0U ||
+      (((uint32_t)&g_config) % 8U) != 0U) {
+    /* The &g_config term turns a source-misalignment HardFault (LDRD in
+     * FLASH_IF_INT_Write) into a clean error return - see the comment on
+     * g_config's declaration. It should never fire now that g_config is
+     * declared __attribute__((aligned(8))); it is a tripwire, not a fix. */
     SONDE_LOG("Config flash precondition failed (size/alignment)\r\n");
     return CONFIG_ERROR_FLASH;
   }
