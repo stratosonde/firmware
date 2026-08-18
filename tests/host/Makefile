@@ -56,6 +56,13 @@ STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src
 # fail-closed) and the other session-persistence findings.
 MREG_SRCS := test_multiregion.c
 
+# The full-region harness is hermetic: pin every region ON so it does not
+# depend on the local region_set.h defaults (a bench bring-up tree may
+# legitimately default to a subset, e.g. US915-only).
+MREG_ALL_FLAGS := -DSONDE_REGION_US915=1 -DSONDE_REGION_EU868=1 \
+    -DSONDE_REGION_AS923=1 -DSONDE_REGION_AU915=1 -DSONDE_REGION_IN865=1 \
+    -DSONDE_REGION_KR920=1 -DSONDE_REGION_RU864=1
+
 # Region-set subset build (region_set.h): the SAME harness compiled with a
 # US915-only commissioned set (SONDE_REGION_SUBSET_TEST selects the subset
 # main). Proves a compiled-out region is unjoinable, unswitchable and reads
@@ -157,7 +164,7 @@ $(BUILD_DIR)/test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../
 # LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
 #struct layout with _Static_assert(offsetof(crc16) == 76, sizeof == 80).
 $(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h ../../Core/Inc/region_set.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -fshort-enums $(INCLUDES) -o $@ $(MREG_SRCS) -lm
+	$(CC) $(CFLAGS) -fshort-enums $(MREG_ALL_FLAGS) $(INCLUDES) -o $@ $(MREG_SRCS) -lm
 
 $(BUILD_DIR)/test_multiregion_subset$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h ../../Core/Inc/region_set.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -fshort-enums $(MREG_SUBSET_FLAGS) $(INCLUDES) -o $@ $(MREG_SRCS) -lm
@@ -398,7 +405,7 @@ endef
 $(eval $(call SAN_SUITE_RULE,test_sanitize,SRCS,INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_flight,FLIGHT_SRCS,FLIGHT_INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_stability,STAB_SRCS,INCLUDES,,,))
-$(eval $(call SAN_SUITE_RULE,test_multiregion,MREG_SRCS,INCLUDES,-fshort-enums,,../../Core/Src/multiregion_context.c))
+$(eval $(call SAN_SUITE_RULE,test_multiregion,MREG_SRCS,INCLUDES,-fshort-enums $(MREG_ALL_FLAGS),,../../Core/Src/multiregion_context.c))
 $(eval $(call SAN_SUITE_RULE,test_timerif,TIMERIF_SRCS,TIMERIF_INCLUDES,,,../../Core/Src/timer_if.c))
 $(eval $(call SAN_SUITE_RULE,test_review0812,REVIEW0812_SRCS,INCLUDES,,,))
 $(eval $(call SAN_SUITE_RULE,test_config,CONFIG_SRCS,INCLUDES,,,../../Core/Src/config.c))
