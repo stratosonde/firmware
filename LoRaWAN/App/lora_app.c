@@ -2768,6 +2768,7 @@ static void OnTxData(LmHandlerTxParams_t *params)
           LmHandlerSend(&liveData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
       SONDE_LOG("COMM-TX: live full-res packet sent (SF7 port %d, status %d)\r\n",
                 LORAWAN_BULK_PORT, live_status);
+      (void)live_status; /* FR-19: log-only in flight */
     }
     return;
   }
