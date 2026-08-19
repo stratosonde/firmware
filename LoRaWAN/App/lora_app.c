@@ -1969,13 +1969,13 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
         }
 
         /* D1 (#33) SUPERSEDED 2026-08-18: probe at SF10 in EVERY region. The
-       * heartbeat is fixed at 11 bytes - sized exactly for US915 DR0 - so
-       * SF9's headroom bought nothing and cost ~2.5 dB of link budget on
-       * the packet that matters most at range. Accepted residual: a queued
-       * MAC answer (e.g. DevStatusAns) cannot fit beside 11 B inside DR0's
-       * dwell-limited budget and drops that one probe cycle; the next wake
-       * recovers. LinkCheckReq rides the first ARCHIVE packet (protocol
-       * §5.2), never the probe. Per-region DR resolution stays (F16). */
+         * heartbeat is fixed at 11 bytes - sized exactly for US915 DR0 - so
+         * SF9's headroom bought nothing and cost ~2.5 dB of link budget on
+         * the packet that matters most at range. Accepted residual: a queued
+         * MAC answer (e.g. DevStatusAns) cannot fit beside 11 B inside DR0's
+         * dwell-limited budget and drops that one probe cycle; the next wake
+         * recovers. LinkCheckReq rides the first ARCHIVE packet (protocol
+         * §5.2), never the probe. Per-region DR resolution stays (F16). */
         LmHandlerSetTxDatarate(DatarateFromSF(10));
 
         // Prepare packet data BEFORE requesting LinkCheck
