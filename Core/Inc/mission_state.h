@@ -22,9 +22,9 @@ extern "C" {
 
 /** @brief Mission states (also the status-byte b6-b7 codes, DDR-0003) */
 typedef enum {
-    MISSION_COMMISSIONING = 0,  /* Ground: joins allowed, LEDs on, GPS config allowed */
-    MISSION_ASCENT        = 1,  /* Flight, fast cadence to capture the climb */
-    MISSION_FLOAT         = 2   /* Flight, float cadence (final state) */
+  MISSION_COMMISSIONING = 0, /* Ground: joins allowed, LEDs on, privacy-safe TX (COMM-TX, DDR-0002 §7) */
+  MISSION_ASCENT = 1,        /* Flight, fast cadence to capture the climb */
+  MISSION_FLOAT = 2          /* Flight, float cadence (final state) */
 } MissionState_t;
 
 /* Float detection (D8/#59, FR-17/#98, reworked 2026-08-10 finding #7):

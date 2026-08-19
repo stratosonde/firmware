@@ -26,14 +26,16 @@ extern "C" {
 
 /** @brief Why a cycle was degraded/skipped — first veto wins */
 typedef enum {
-    VETO_NONE = 0,          /**< go */
-    VETO_TEMP_STALE,        /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
-    VETO_TEMP_LOCKOUT,      /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
-    VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0018) */
-    VETO_RESTRICTED_REGION, /**< regulatory RF prohibition (set by executor) */
-    VETO_GPS_LOSS,          /**< DR-06 (#241): GPS-loss silence (#141, GPS_LOSS_SILENCE_S) */
-    VETO_PRELAUNCH_QUIET    /**< DR-06 (#241): commissioned-but-not-launched quiet watch */
-    /* NOTE: archived in flash record flags bits 5-7 (3 bits) - max value 7. */
+  VETO_NONE = 0,          /**< go */
+  VETO_TEMP_STALE,        /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
+  VETO_TEMP_LOCKOUT,      /**< DEPRECATED (RV-08/#164, DDR-0021): never produced */
+  VETO_RF_SILENCE,        /**< FLIGHT with no valid session (DDR-0018) */
+  VETO_RESTRICTED_REGION, /**< regulatory RF prohibition (set by executor) */
+  VETO_GPS_LOSS,          /**< DR-06 (#241): GPS-loss silence (#141, GPS_LOSS_SILENCE_S) */
+  VETO_PRELAUNCH_QUIET    /**< DR-06 (#241): RETIRED 2026-08-18 - never produced since
+                               COMM-TX privacy-safe commissioning telemetry (DDR-0002
+                               §7); value stays reserved for the 3-bit flags budget */
+                          /* NOTE: archived in flash record flags bits 5-7 (3 bits) - max value 7. */
 } TransmitVeto_t;
 
 /** @brief Pure-data output of the decide half */

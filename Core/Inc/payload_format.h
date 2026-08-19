@@ -245,6 +245,18 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
                                   OperatingMode_t power_mode);
 
 /**
+ * @brief Encode a live high-resolution record for COMMISSIONING telemetry
+ *        (COMM-TX, DDR-0002 §7 / BR-LIFE-004): full fidelity EXCEPT the
+ *        horizontal position - withheld (zeroed), CRC16 re-sealed.
+ * @retval bool: true if encoding successful
+ */
+bool EncodeCommissioningLiveRecord(HighResTelemetryRecord_t *record,
+                                   const void *sensor_data,
+                                   uint32_t timestamp,
+                                   int16_t voltage_slope,
+                                   OperatingMode_t power_mode);
+
+/**
  * @brief Encode a variable-length bulk packet (wire v6, packet_type 0x06) — STAB-04 (#151)
  * @param buf: output buffer
  * @param buf_cap: output buffer capacity in bytes

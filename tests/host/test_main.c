@@ -388,71 +388,91 @@ static void test_bulk_v3(void)
     printf("\n");
 }
 
-
-static void test_flashlog_conversion(void)
-{
-    FlashLog_Record_t fr;
-    memset(&fr, 0, sizeof(fr));
-    fr.timestamp = 1754500999u;
-    fr.latitude = 111111;
-    fr.longitude = -222222;
-    fr.altitude_gps = 9000;
-    fr.temperature = -45.5f;
-    fr.humidity = 12.3f;
-    fr.pressure = 250.0f;
-    fr.battery_mv = 4800;
-    fr.solar_mv = 5100;        /* D5/F-025 (#35): archived solar */
-    fr.voltage_slope = -7;     /* D5 (#35): archived slope */
-    fr.power_mode = MODE_REDUCED;  /* D5 (#35): archived mode */
-    fr.satellites = 7;
-    fr.gnss_hdop_x10 = 15;
-    fr.gnss_valid = 1;
-
-    HighResTelemetryRecord_t hr;
-    /* STAB-05 (#152): the voltage_slope/power_mode params are gone — every
-     * historical field must come from the record itself. */
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK_EQ_I(hr.timestamp, 1754500999u);
-    CHECK_EQ_I(hr.latitude, 111111);
-    CHECK_EQ_I(hr.longitude, -222222);
-    CHECK_EQ_I(hr.altitude, 9000);
-    CHECK_EQ_I(hr.temperature, -455);
-    CHECK_EQ_I(hr.battery_voltage, 4800);
-    CHECK_EQ_I(hr.solar_voltage, 5100);       /* from the record, not 0 (F-025) */
-    CHECK_EQ_I(hr.voltage_slope, -7);         /* from the record */
-    CHECK_EQ_I(hr.hdop, 15);
-    CHECK_EQ_I(hr.power_mode, MODE_REDUCED);  /* from the record */
-    /* STAB-05 (#152): the flags byte's mode field is the HISTORICAL mode too
-     * (was: live retransmission-time mode packed into a historical record) */
-    CHECK_REGRESSION(((hr.flags >> 5) & 0x07) == MODE_REDUCED, "STAB-05");
-
-    /* STAB-04 (#151): the flash record's data-honesty provenance survives
-     * conversion. b0 press_stale + veto reason 3 (b5-b7) in flash flags. */
-    fr.flags = 0x01 | (3u << 5);
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK_REGRESSION(hr.sensor_quality == 0x01, "STAB-04");   /* press_stale */
-    CHECK_REGRESSION(hr.veto_reason == 3, "STAB-04");
-    /* ...and the stale bits do NOT leak into the legacy flags byte */
-    CHECK((hr.flags & 0x1F) == (1u | (7u << 1)));  /* gps_valid + 7 sats only */
-    /* all five stale bits round-trip */
-    fr.flags = 0x1F | (7u << 5);
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK_REGRESSION(hr.sensor_quality == 0x1F, "STAB-04");
-    CHECK_REGRESSION(hr.veto_reason == 7, "STAB-04");
-    /* fresh record -> zero provenance */
-    fr.flags = 0;
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK(hr.sensor_quality == 0 && hr.veto_reason == 0);
-
-    /* D5: int32 flash altitude clamps to the u16 wire field */
-    fr.altitude_gps = 40000;   /* float altitude beyond int16 */
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK_EQ_I(hr.altitude, 40000);
-    fr.altitude_gps = -50;
-    CHECK(ConvertFlashLogToHighRes(&fr, &hr));
-    CHECK_EQ_I(hr.altitude, 0);
+/* COMM-TX (2026-08-18, DDR-0002 §7 / BR-LIFE-004): the commissioning live
+ * record withholds the horizontal position while keeping every other field
+ * honest, and re-seals the CRC over the zeroed record. */
+static void test_commissioning_live_record(void) {
+  printf("-- COMM-TX: commissioning live record withholds X/Y, CRC re-sealed\n");
+  sensor_t s = make_nominal_sensors();
+  HighResTelemetryRecord_t full, live;
+  CHECK(EncodeHighResTelemetryRecord(&full, &s, 1754500000U, 0, MODE_NORMAL));
+  CHECK(EncodeCommissioningLiveRecord(&live, &s, 1754500000U, 0, MODE_NORMAL));
+  CHECK(full.latitude != 0 && full.longitude != 0); /* guard: input HAS a position */
+  CHECK_EQ_I(live.latitude, 0);
+  CHECK_EQ_I(live.longitude, 0);
+  /* honesty: fix validity/sats, environment, and timestamp survive */
+  CHECK_EQ_I(live.flags, full.flags);
+  CHECK_EQ_I(live.sensor_quality, full.sensor_quality);
+  CHECK_EQ_I(live.temperature, full.temperature);
+  CHECK_EQ_I(live.pressure, full.pressure);
+  CHECK_EQ_I(live.timestamp, full.timestamp);
+  CHECK_EQ_I(live.satellites, full.satellites);
+  /* the CRC covers the zeroed record, not the un-zeroed one */
+  CHECK(live.crc16 != full.crc16);
+  CHECK_EQ_I(live.crc16, CalculateCRC16((const uint8_t *)&live, sizeof(live) - 2));
 }
+static void test_flashlog_conversion(void) {
+  FlashLog_Record_t fr;
+  memset(&fr, 0, sizeof(fr));
+  fr.timestamp = 1754500999u;
+  fr.latitude = 111111;
+  fr.longitude = -222222;
+  fr.altitude_gps = 9000;
+  fr.temperature = -45.5f;
+  fr.humidity = 12.3f;
+  fr.pressure = 250.0f;
+  fr.battery_mv = 4800;
+  fr.solar_mv = 5100;           /* D5/F-025 (#35): archived solar */
+  fr.voltage_slope = -7;        /* D5 (#35): archived slope */
+  fr.power_mode = MODE_REDUCED; /* D5 (#35): archived mode */
+  fr.satellites = 7;
+  fr.gnss_hdop_x10 = 15;
+  fr.gnss_valid = 1;
 
+  HighResTelemetryRecord_t hr;
+  /* STAB-05 (#152): the voltage_slope/power_mode params are gone — every
+   * historical field must come from the record itself. */
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK_EQ_I(hr.timestamp, 1754500999u);
+  CHECK_EQ_I(hr.latitude, 111111);
+  CHECK_EQ_I(hr.longitude, -222222);
+  CHECK_EQ_I(hr.altitude, 9000);
+  CHECK_EQ_I(hr.temperature, -455);
+  CHECK_EQ_I(hr.battery_voltage, 4800);
+  CHECK_EQ_I(hr.solar_voltage, 5100); /* from the record, not 0 (F-025) */
+  CHECK_EQ_I(hr.voltage_slope, -7);   /* from the record */
+  CHECK_EQ_I(hr.hdop, 15);
+  CHECK_EQ_I(hr.power_mode, MODE_REDUCED); /* from the record */
+  /* STAB-05 (#152): the flags byte's mode field is the HISTORICAL mode too
+   * (was: live retransmission-time mode packed into a historical record) */
+  CHECK_REGRESSION(((hr.flags >> 5) & 0x07) == MODE_REDUCED, "STAB-05");
+
+  /* STAB-04 (#151): the flash record's data-honesty provenance survives
+   * conversion. b0 press_stale + veto reason 3 (b5-b7) in flash flags. */
+  fr.flags = 0x01 | (3u << 5);
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK_REGRESSION(hr.sensor_quality == 0x01, "STAB-04"); /* press_stale */
+  CHECK_REGRESSION(hr.veto_reason == 3, "STAB-04");
+  /* ...and the stale bits do NOT leak into the legacy flags byte */
+  CHECK((hr.flags & 0x1F) == (1u | (7u << 1))); /* gps_valid + 7 sats only */
+  /* all five stale bits round-trip */
+  fr.flags = 0x1F | (7u << 5);
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK_REGRESSION(hr.sensor_quality == 0x1F, "STAB-04");
+  CHECK_REGRESSION(hr.veto_reason == 7, "STAB-04");
+  /* fresh record -> zero provenance */
+  fr.flags = 0;
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK(hr.sensor_quality == 0 && hr.veto_reason == 0);
+
+  /* D5: int32 flash altitude clamps to the u16 wire field */
+  fr.altitude_gps = 40000; /* float altitude beyond int16 */
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK_EQ_I(hr.altitude, 40000);
+  fr.altitude_gps = -50;
+  CHECK(ConvertFlashLogToHighRes(&fr, &hr));
+  CHECK_EQ_I(hr.altitude, 0);
+}
 
 /* R23 (#22): pre-commit guard for the PCAS command bodies. Includes the REAL
  * atgm336h.h (HAL stubbed) so an accidental edit of a body string fails here.
@@ -1052,27 +1072,28 @@ static void test_r2_19_dma_overrun_blind_spot(void)
 
 int main(void)
 {
-    test_crc_vectors();
-    test_compact_packet();
-    test_highres_record();
-    test_flashlog_conversion();
-    test_bulk_v3();
-    test_power_model();
-    test_decide_transmit_plan();
-    test_nmea_checksum_guard();
-    test_gnss_parser();
-    test_r2_10_slope_temperature_contamination();
-    test_r2_11_no_history_default_uses_raw_voltage();
-    test_r2_17_already_critical_never_reports_stable();
-    test_r2_30_rmc_valid_clears_on_void();
-    test_r2_19_dma_overrun_blind_spot();
-    test_mission_logic();
-    test_ts_wrap_restore();
+  test_crc_vectors();
+  test_compact_packet();
+  test_highres_record();
+  test_commissioning_live_record();
+  test_flashlog_conversion();
+  test_bulk_v3();
+  test_power_model();
+  test_decide_transmit_plan();
+  test_nmea_checksum_guard();
+  test_gnss_parser();
+  test_r2_10_slope_temperature_contamination();
+  test_r2_11_no_history_default_uses_raw_voltage();
+  test_r2_17_already_critical_never_reports_stable();
+  test_r2_30_rmc_valid_clears_on_void();
+  test_r2_19_dma_overrun_blind_spot();
+  test_mission_logic();
+  test_ts_wrap_restore();
 
-    printf("\n%d checks, %d failures", g_checks, g_failures);
-    if (g_expected_failures > 0) {
-        printf(" (%d are documented R2 regressions)", g_expected_failures);
-    }
+  printf("\n%d checks, %d failures", g_checks, g_failures);
+  if (g_expected_failures > 0) {
+    printf(" (%d are documented R2 regressions)", g_expected_failures);
+  }
     printf("\n");
 
     const char *expect_unfixed = getenv("EXPECT_UNFIXED");

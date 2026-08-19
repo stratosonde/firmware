@@ -1431,8 +1431,9 @@ bool MultiRegion_PreJoinAllRegions(void) {
   g_multiregion_in_prejoin = 0;
 
   /* MISSION-01b (#142, DDR-0002 amendment): commissioning no longer enters
-   * FLIGHT. A freshly commissioned unit holds COMMISSIONING (quiet watch:
-   * no GPS, no telemetry TX) until deliberate arming (PB13 button,
+   * FLIGHT. A freshly commissioned unit holds COMMISSIONING (COMM-TX
+   * privacy-safe telemetry since 2026-08-18, DDR-0002 §7: GNSS + uplinks
+   * with X/Y withheld, still no flash traffic) until deliberate arming (PB13 button,
    * arming_input.c - PRETEST-DEC-01 2026-08-16) or autonomous launch detection
    * (BR-LIFE-007 pressure departure, in MissionState_Update). The old
    * join-triggered EnterFlight put a bench unit into the 10 s ASCENT
@@ -1443,7 +1444,7 @@ bool MultiRegion_PreJoinAllRegions(void) {
     SONDE_LOG_STR("PRE-JOIN: 0/4 regions joined - STAYING IN COMMISSIONING (power cycle to retry)\r\n");
     APP_LOG(TS_ON, VLEVEL_H, "PRE-JOIN: no banks provisioned (R30/D6)\r\n");
   } else {
-    SONDE_LOG_STR("PRE-JOIN complete - COMMISSIONING quiet watch until arming/launch (#142)\r\n");
+    SONDE_LOG_STR("PRE-JOIN complete - COMMISSIONING telemetry watch until arming/launch (#142)\r\n");
   }
 
   /* C-01 (#270, DDR-0018): the durable PROVISIONED latch is written only

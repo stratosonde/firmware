@@ -255,6 +255,31 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
   return true;
 }
 
+/**
+ * @brief Encode a live high-resolution record for COMMISSIONING telemetry
+ *        (COMM-TX, DDR-0002 §7 / BR-LIFE-004): identical to
+ *        EncodeHighResTelemetryRecord but with the horizontal position
+ *        WITHHELD - zeroed after encode, CRC re-sealed so the wire record
+ *        is self-consistent. Flags and sensor_quality stay honest: a valid
+ *        fix with a withheld position must not masquerade as no fix
+ *        (SYS-GNSS-011).
+ * @retval bool: true if encoding successful
+ */
+bool EncodeCommissioningLiveRecord(HighResTelemetryRecord_t *record,
+                                   const void *sensor_data,
+                                   uint32_t timestamp,
+                                   int16_t voltage_slope,
+                                   OperatingMode_t power_mode) {
+  if (!EncodeHighResTelemetryRecord(record, sensor_data, timestamp,
+                                    voltage_slope, power_mode)) {
+    return false;
+  }
+  record->latitude = 0; /* DDR-0002 §7: commissioning X/Y never transmits */
+  record->longitude = 0;
+  record->crc16 =
+      CalculateCRC16((const uint8_t *)record, sizeof(HighResTelemetryRecord_t) - 2);
+  return true;
+}
 /* ---- Explicit little-endian serialization helpers (D9, #33) ----
  * Wire v3 is explicitly LE-serialized per LoRaWANApplicationProtocol.md §3 —
  * no raw struct casts on the new format. */

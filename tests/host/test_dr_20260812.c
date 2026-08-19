@@ -287,7 +287,11 @@ static void test_dr06_silence_records_why(void)
 
     /* The previously-unrecorded causes must name their veto at the site. */
     CHECK_REGRESSION(strstr(src, "VETO_GPS_LOSS") != NULL, "DR-06-gps-loss");
-    CHECK_REGRESSION(strstr(src, "VETO_PRELAUNCH_QUIET") != NULL, "DR-06-prelaunch");
+    /* COMM-TX (2026-08-18, DDR-0002 §7): the prelaunch quiet watch is RETIRED -
+     * commissioning transmits privacy-safe telemetry, so the veto has no site
+     * left in lora_app.c. The enum value stays reserved in transmit_plan.h
+     * (checked below): historical flash records may carry it. */
+    CHECK_REGRESSION(strstr(src, "VETO_PRELAUNCH_QUIET") == NULL, "DR-06-prelaunch-retired");
     CHECK_REGRESSION(count_occurrences(src, "VETO_RESTRICTED_REGION") >= 3, "DR-06-restricted");
 
     free(src);

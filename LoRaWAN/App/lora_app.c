@@ -1623,6 +1623,85 @@ static void ArchiveSample(sensor_t *sensor_data,
   }
 }
 
+/* COMM-TX (DDR-0002 §7 / BR-LIFE-004, maintainer decision 2026-08-18):
+ * privacy-safe commissioning telemetry, called from the commissioning
+ * branch of SendTxData: GNSS every wake (bounded flight budget) for UTC
+ * discipline and hardware validation, the production SF10 confirmed probe
+ * with X/Y withheld, and one best-effort SF7 live-record uplink (port 11,
+ * v6 envelope, seq = record UTC timestamp) sent from the probe's confirm
+ * in OnTxData. Hard constraints, unchanged from the quiet watch: NO W25Q
+ * flash traffic (PB13 arming shares the SPI2_SCK net, PRETEST-DEC-01), no
+ * archive record (a commissioning wake is not a science observation), no
+ * region switch (the joined home session is used as-is). There is no
+ * firmware "experiment mode": privacy grouping is a backend concern - the
+ * firmware rule is simply "commissioning X/Y never leaves the device". */
+static uint8_t s_comm_live_buf[BULK_V6_OVERHEAD + BULK_V6_RECORD_WIRE];
+static uint16_t s_comm_live_len = 0;
+
+static void CommissioningTelemetryCycle(const sensor_t *sensor_data_pre,
+                                        uint32_t gps_timeout_ms,
+                                        int16_t slope_mv_per_hour,
+                                        OperatingMode_t current_mode) {
+  sensor_t sd = *sensor_data_pre;
+
+  /* GNSS + post-acquisition re-sample (the flight LT-03/#271 pattern, minus
+   * the archive write): environment and position describe the same moment.
+   * No fix gate: indoors the honest stale/valid bits carry the failure and
+   * the coordinates are withheld on the wire anyway. */
+  uint32_t ttf_ms = 0;
+  bool time_disciplined_this_wake = false;
+  (void)AcquireGnssFix(gps_timeout_ms, &ttf_ms, &time_disciplined_this_wake);
+  EnvSensors_MergeGnss(&sd);
+  EnvSensors_Read(&sd);
+
+  /* Probe: the production encode path, coordinates withheld after encode. */
+  CompactTelemetryPacket_t compact_packet;
+  uint16_t timestamp_min = Payload_TimestampMinutesNow();
+  if (!EncodeCompactBinaryPacket(&compact_packet, &sd, timestamp_min,
+                                 slope_mv_per_hour, current_mode)) {
+    SONDE_LOG_STR("COMM-TX: compact encode failed - cycle skipped\r\n");
+    return;
+  }
+  compact_packet.latitude_100m = 0; /* DDR-0002 §7: withheld, not absent */
+  compact_packet.longitude_100m = 0;
+
+  /* Pre-build the live full-resolution follow-up; OnTxData sends it from the
+   * probe's confirm (MAC ready after RX2 - the packet-queue drain's own
+   * assumption). A live record has no flash sequence, so seq carries the
+   * record's UTC timestamp: identity for the backend's (device, seq) dedup;
+   * no watermark is ever committed. */
+  s_comm_live_len = 0;
+  HighResTelemetryRecord_t live_record;
+  if (EncodeCommissioningLiveRecord(&live_record, &sd, SysTimeGet().Seconds,
+                                    slope_mv_per_hour, current_mode)) {
+    uint32_t live_seq = live_record.timestamp;
+    uint8_t packed_count = 0;
+    uint16_t out_len = 0;
+    if (EncodeBulkPacketV6(s_comm_live_buf, (uint16_t)sizeof(s_comm_live_buf),
+                           (uint16_t)sizeof(s_comm_live_buf), &live_record,
+                           &live_seq, 1, &packed_count, &out_len) &&
+        packed_count == 1U) {
+      s_comm_live_len = out_len;
+    }
+  }
+
+  /* SF10 in every region (D1 superseded 2026-08-18, see RunTxStateMachine). */
+  LmHandlerSetTxDatarate(DatarateFromSF(10));
+  LmHandlerAppData_t probeData;
+  probeData.Port = LORAWAN_COMPACT_PORT;
+  probeData.BufferSize = sizeof(compact_packet);
+  probeData.Buffer = (uint8_t *)&compact_packet;
+  LmHandlerErrorStatus_t send_status =
+      LmHandlerSend(&probeData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
+  if (send_status != LORAMAC_HANDLER_SUCCESS) {
+    s_comm_live_len = 0; /* no probe in flight -> no confirm slot */
+    SONDE_LOG("COMM-TX: probe send failed (status %d)\r\n", send_status);
+  } else {
+    SONDE_LOG("COMM-TX: probe sent (SF10 confirmed), live follow-up %u bytes\r\n",
+              (unsigned)s_comm_live_len);
+  }
+}
+
 #if ENABLE_DEBUG_LPP
 /**
  * @brief F-R1 (#74): build the CayenneLPP debug payload. Only transmitted when
@@ -1888,26 +1967,29 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
           extern RTC_HandleTypeDef hrtc;
           HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_TS_WRAP, TS_WRAP_MAGIC);
         }
-        
-      /* D1 (#33): probe at SF9 in US915/AU915 — SF10/DR0's 11-byte budget is an
-       * exact fit there with zero headroom; SF9 buys 42 B for ~2.5 dB link
-       * budget. Elsewhere keep SF10. Resolved per-region via DatarateFromSF. */
-      uint8_t probe_sf = ((LmHandlerParams.ActiveRegion == LORAMAC_REGION_US915) ||
-                          (LmHandlerParams.ActiveRegion == LORAMAC_REGION_AU915)) ? 9 : 10;
-      LmHandlerSetTxDatarate(DatarateFromSF(probe_sf));
-      
-      // Prepare packet data BEFORE requesting LinkCheck
-      LmHandlerAppData_t compactData;
-      compactData.Port = LORAWAN_COMPACT_PORT;  // Port 10
-      compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
-      compactData.Buffer = (uint8_t*)&compact_packet;
-      
-      /* DDR-0005 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
-       * No archive opportunity opens without its network ACK (evaluated in
-       * OnTxData via params->AckReceived). LinkCheck no longer rides the probe —
-       * it attaches to the first archive packet (protocol §5.2, §14). */
-      LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
-        
+
+        /* D1 (#33) SUPERSEDED 2026-08-18: probe at SF10 in EVERY region. The
+       * heartbeat is fixed at 11 bytes - sized exactly for US915 DR0 - so
+       * SF9's headroom bought nothing and cost ~2.5 dB of link budget on
+       * the packet that matters most at range. Accepted residual: a queued
+       * MAC answer (e.g. DevStatusAns) cannot fit beside 11 B inside DR0's
+       * dwell-limited budget and drops that one probe cycle; the next wake
+       * recovers. LinkCheckReq rides the first ARCHIVE packet (protocol
+       * §5.2), never the probe. Per-region DR resolution stays (F16). */
+        LmHandlerSetTxDatarate(DatarateFromSF(10));
+
+        // Prepare packet data BEFORE requesting LinkCheck
+        LmHandlerAppData_t compactData;
+        compactData.Port = LORAWAN_COMPACT_PORT; // Port 10
+        compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
+        compactData.Buffer = (uint8_t *)&compact_packet;
+
+        /* DDR-0005 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
+         * No archive opportunity opens without its network ACK (evaluated in
+         * OnTxData via params->AckReceived). LinkCheck no longer rides the probe —
+         * it attaches to the first archive packet (protocol §5.2, §14). */
+        LmHandlerErrorStatus_t status = LmHandlerSend(&compactData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
+
         if (status == LORAMAC_HANDLER_SUCCESS) {
           /* LT-07 (#277): the step stamps the wait with this fresh tick and
            * moves to WAIT_PROBE_ACK (the confirmed-uplink ACK is evaluated
@@ -1916,84 +1998,84 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
           SONDE_LOG_STR("Confirmed heartbeat sent, waiting for network ACK...\r\n");
         } else {
           SONDE_LOG("Compact packet send failed (status: %d)\r\n", status);
-          TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());  // Complete cycle on error
+          TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts()); // Complete cycle on error
         }
       } else {
         SONDE_LOG_STR("ERROR: Failed to encode compact packet!\r\n");
         TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());
       }
   } else if (fsm_out.action == TXFSM_ACT_SEND_BULK) {
-    
-      SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n",
-                        g_tx_fsm.bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
 
-      // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
-      LmHandlerSetTxDatarate(DatarateFromSF(7));  // SF7 in ANY region
+    SONDE_LOG("Bulk transfer mode: packet %d/%d\r\n",
+              g_tx_fsm.bulk_packets_sent + 1, MAX_BULK_PACKETS_PER_CYCLE);
 
-      uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
-      uint8_t v5_packed = 0;
-      uint16_t v5_len = 0;
+    // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
+    LmHandlerSetTxDatarate(DatarateFromSF(7)); // SF7 in ANY region
 
-      if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
-                             highres_records, highres_seqs, packed_count,
-                             &v5_packed, &v5_len)) {
+    uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
+    uint8_t v5_packed = 0;
+    uint16_t v5_len = 0;
 
-        /* DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
-         * archive packet of a burst carries LinkCheckReq (protocol §5.2);
-         * records commit only on network ACK (OnTxData). */
-        if (fsm_out.linkcheck_req) {
-          LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
-          (void)lc_status;  /* FR-19: log-only in flight; the call has the side effect */
-          SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
+    if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
+                           highres_records, highres_seqs, packed_count,
+                           &v5_packed, &v5_len)) {
+
+      /* DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
+       * archive packet of a burst carries LinkCheckReq (protocol §5.2);
+       * records commit only on network ACK (OnTxData). */
+      if (fsm_out.linkcheck_req) {
+        LmHandlerErrorStatus_t lc_status = LmHandlerLinkCheckReq();
+        (void)lc_status; /* FR-19: log-only in flight; the call has the side effect */
+        SONDE_LOG("LinkCheckReq on first archive packet: %d\r\n", lc_status);
+      }
+
+      LmHandlerAppData_t bulkData;
+      bulkData.Port = LORAWAN_BULK_PORT; // Port 11
+      bulkData.BufferSize = v5_len;
+      bulkData.Buffer = v6_buf;
+
+      SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
+                v5_len, LORAWAN_BULK_PORT, v5_packed);
+
+      /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
+       * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
+       * frame is never retried autonomously. The backend owns gap
+       * repair (BR-TX-012, deferred: #125). */
+      LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+
+      if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
+        /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
+         * TIME, per packed record (newest-first as read). Records read
+         * but cut by the payload budget stay sendable. */
+        for (uint8_t i = 0; i < v5_packed; i++) {
+          FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
+        }
+        if (v5_packed != record_count) {
+          SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
+                    v5_packed, (unsigned long)record_count);
         }
 
-        LmHandlerAppData_t bulkData;
-        bulkData.Port = LORAWAN_BULK_PORT;  // Port 11
-        bulkData.BufferSize = v5_len;
-        bulkData.Buffer = v6_buf;
+        /* The step counts the packet and decides stay-vs-complete from
+         * the post-mark watermark. */
+        TxFsm_OnSendResult(&g_tx_fsm, now_ms, true,
+                           FlashLog_HasUnsentData(&hflashlog), CfgMaxBulkPkts());
 
-        SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
-                          v5_len, LORAWAN_BULK_PORT, v5_packed);
+        SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
+                  g_tx_fsm.bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
 
-        /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
-         * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
-         * frame is never retried autonomously. The backend owns gap
-         * repair (BR-TX-012, deferred: #125). */
-        LmHandlerErrorStatus_t bulk_status = LmHandlerSend(&bulkData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
-
-        if (bulk_status == LORAMAC_HANDLER_SUCCESS) {
-          /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
-           * TIME, per packed record (newest-first as read). Records read
-           * but cut by the payload budget stay sendable. */
-          for (uint8_t i = 0; i < v5_packed; i++) {
-            FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
-          }
-          if (v5_packed != record_count) {
-            SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
-                              v5_packed, (unsigned long)record_count);
-          }
-
-          /* The step counts the packet and decides stay-vs-complete from
-           * the post-mark watermark. */
-          TxFsm_OnSendResult(&g_tx_fsm, now_ms, true,
-                             FlashLog_HasUnsentData(&hflashlog), CfgMaxBulkPkts());
-
-          SONDE_LOG("Bulk packet sent successfully! (%d/%d packets sent)\r\n",
-                            g_tx_fsm.bulk_packets_sent, MAX_BULK_PACKETS_PER_CYCLE);
-
-          if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER) {
-            SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
-          } else {
-            SONDE_LOG_STR("Bulk transfer complete (no more data or packet limit reached)\r\n");
-          }
+        if (g_tx_fsm.state == TX_FSM_BULK_TRANSFER) {
+          SONDE_LOG_STR("More unsent data available, continuing bulk transfer...\r\n");
         } else {
-          SONDE_LOG("Bulk packet send failed (status: %d)\r\n", bulk_status);
-          TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());  // Complete on error
+          SONDE_LOG_STR("Bulk transfer complete (no more data or packet limit reached)\r\n");
         }
       } else {
-        SONDE_LOG_STR("ERROR: Failed to encode bulk packet!\r\n");
-        TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());
+        SONDE_LOG("Bulk packet send failed (status: %d)\r\n", bulk_status);
+        TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts()); // Complete on error
       }
+    } else {
+      SONDE_LOG_STR("ERROR: Failed to encode bulk packet!\r\n");
+      TxFsm_OnSendResult(&g_tx_fsm, now_ms, false, false, CfgMaxBulkPkts());
+    }
   }
 }
 
@@ -2226,20 +2308,21 @@ static void SendTxData(void)
     SONDE_LOG_STR("SendTxData: FLIGHT with no session - RF silence, logging only\r\n");
   }
 
-  /* MISSION-01b (#142): commissioned but not launched = QUIET WATCH. No GPS,
-   * archive record, or telemetry TX — the cycle still reads sensors (pressure
-   * feeds the BR-LIFE-007 launch detector in MissionState_Update above).
-   * Entry to ASCENT is by arming (button hook) or launch detection.
-   * Unjoined commissioning is untouched above (join retry path). */
+  /* MISSION-01b (#142) + COMM-TX (2026-08-18): commissioned but not launched.
+   * The cycle still reads sensors (pressure feeds the BR-LIFE-007 launch
+   * detector in MissionState_Update above), still polls the arming input, and
+   * now also transmits privacy-safe telemetry (DDR-0002 §7). It is still NOT
+   * a science observation: no archive record, no flash traffic, no region
+   * switch. Entry to ASCENT is by arming (button hook) or launch detection.
+   * Unjoined commissioning is untouched above (the join retry path). */
   if (MissionState_IsCommissioning() && LmHandlerJoinStatus() == LORAMAC_HANDLER_SET) {
     /* PRETEST-DEC-01 (#142): poll the PB13 arming button (active-low to GND,
-     * sharing the SPI2_SCK net - safe here because the quiet watch performs
+     * sharing the SPI2_SCK net - safe here because commissioning performs
      * no flash logging). A confirmed hold enters FLIGHT via arming_input.c
      * (the EnterFlight call deliberately lives there, not in this file). */
     ArmingInput_Poll();
-    RegionPolicy_Silence(&plan, &rf_silence, VETO_PRELAUNCH_QUIET);  /* DR-06 (#241) */
-    /* Quiet watch still samples pressure above for launch detection, but it
-     * is not a science observation and must not create an incomplete record. */
+    CommissioningTelemetryCycle(&sensor_data, gps_timeout_ms,
+                                slope_mv_per_hour, current_mode);
     ResetCause_ClearBootAttempts();
     return;
   }
@@ -2665,6 +2748,28 @@ static void OnTxData(LmHandlerTxParams_t *params)
         UTIL_SEQ_SetTask((1 << CFG_SEQ_Task_LoRaStoreContextEvent), CFG_SEQ_Prio_0);
       }
     }
+  }
+
+  /* COMM-TX (DDR-0002 §7): in commissioning the probe's confirm (after RX2,
+   * MAC ready - the same assumption the packet-queue drain below relies on)
+   * sends the best-effort SF7 live-record follow-up pre-built by
+   * CommissioningTelemetryCycle. Commissioning never opens the archive
+   * opportunity: the TX FSM and the hflashlog reads below stay parked, so
+   * SPI2 stays idle for the PB13 arming input (PRETEST-DEC-01). */
+  if (MissionState_IsCommissioning()) {
+    if (s_comm_live_len > 0U) {
+      LmHandlerAppData_t liveData;
+      liveData.Port = LORAWAN_BULK_PORT; /* port 11: the v6 decoder applies */
+      liveData.BufferSize = s_comm_live_len;
+      liveData.Buffer = s_comm_live_buf;
+      s_comm_live_len = 0;                       /* consume first: a busy MAC must not retrigger */
+      LmHandlerSetTxDatarate(DatarateFromSF(7)); /* SF7 in ANY region (F16) */
+      LmHandlerErrorStatus_t live_status =
+          LmHandlerSend(&liveData, LORAMAC_HANDLER_UNCONFIRMED_MSG, 0);
+      SONDE_LOG("COMM-TX: live full-res packet sent (SF7 port %d, status %d)\r\n",
+                LORAWAN_BULK_PORT, live_status);
+    }
+    return;
   }
 
   /* R3-04 (#218): the commit-on-ACK block is DELETED. DDR-0005 one-pass
