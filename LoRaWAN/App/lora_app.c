@@ -1118,8 +1118,7 @@ static bool GnssMissionFixAccepted(const GnssFixLimits_t *limits)
 static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
                                               bool keep_hot,
                                               uint32_t *ttf_ms,
-                                              bool *time_disciplined_this_wake)
-{
+                                              bool *time_disciplined_this_wake) {
   /* Last known GPS position storage (persistent across transmission cycles) */
   /* F-15 (#72): on first use after boot, restore from backup registers if a
    * real fix was parked there; only a true cold boot falls back to the
@@ -1359,14 +1358,14 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
         }
         have_previous_fix = true;
       }
-      EnvSensors_MarkGnssStale(false);  /* F8/T2: fresh fix, clear stale */
+      EnvSensors_MarkGnssStale(false); /* F8/T2: fresh fix, clear stale */
       /* DR-13: the duplicate SysTimeSyncFromGnss() here is deleted - the F-1
        * (#176) ordering discipline ("discipline the clock FIRST, then stamp
        * in UTC") lives inside the GNSS_HasPosition block above; the second
        * call ran even when the position gate had just rejected the fix. */
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
     }
-    
+
     /* Short-cadence exception (MISSION-01a/#142): keep the receiver powered,
      * UART/DMA streaming and the driver's STOP2 lock held - the next wake's
      * fix costs ~1-2 s instead of a 5-60 s reacquisition. The first wake
@@ -1379,12 +1378,12 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
     } else {
       SONDE_LOG_STR("GPS stays HOT (wake cadence <= acquisition budget)\r\n");
     }
-  /* Only this result authorizes a first-flight science record.  Basic or
-   * restored last-known positions remain useful for legacy region handling,
-   * but are never promoted to this wake's accepted fix. */
-  return (got_fix && GNSS_HasPosition(&hgnss))
-         ? GNSS_ACQUIRE_FRESH_GOOD_FIX
-         : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
+    /* Only this result authorizes a first-flight science record.  Basic or
+     * restored last-known positions remain useful for legacy region handling,
+     * but are never promoted to this wake's accepted fix. */
+    return (got_fix && GNSS_HasPosition(&hgnss))
+               ? GNSS_ACQUIRE_FRESH_GOOD_FIX
+               : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
 }
 
 /**
@@ -2297,11 +2296,11 @@ static void SendTxData(void)
   MissionState_t mission = MissionState_Get();
   (void)mission; /* FR-19: log-only in flight */
   SONDE_LOG("Mode=%s GPS=%s Mission=%s ===\r\n",
-           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF",
-           mission == MISSION_COMMISSIONING
-               ? "COMMISSIONING"
-               : (mission == MISSION_ASCENT ? "ASCENT" : "FLOAT"));
-  
+            GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF",
+            mission == MISSION_COMMISSIONING
+                ? "COMMISSIONING"
+                : (mission == MISSION_ASCENT ? "ASCENT" : "FLOAT"));
+
   /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
    * (see below). Previously the record was written here with the PREVIOUS
    * cycle's position and the CURRENT timestamp — the whole track was
@@ -2427,7 +2426,7 @@ static void SendTxData(void)
    * (plan.tx_interval_ms <= gps_timeout_ms, e.g. ASCENT at 10 s) keep the
    * receiver hot between wakes instead - see AcquireGnssFix(keep_hot). */
   // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
-  
+
   /* Declare ttf_ms at function scope so it's available for telemetry */
   uint32_t ttf_ms = 0;
   bool time_disciplined_this_wake = false;
@@ -2488,56 +2487,56 @@ static void SendTxData(void)
   hgnss.data.date = 150826U;
   hgnss.data.timestamp = 120000U;
   time_disciplined_this_wake = SysTimeSyncFromGnss();
-  const GnssFixLimits_t fix_limits = GnssMissionFixLimits();  /* A5 (#284) */
+  const GnssFixLimits_t fix_limits = GnssMissionFixLimits(); /* A5 (#284) */
   gnss_result = (time_disciplined_this_wake && GnssMissionFixAccepted(&fix_limits))
-                ? GNSS_ACQUIRE_FRESH_GOOD_FIX
-                : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
-  
-  ttf_ms = 0;  /* No actual fix acquired */
-  
-  SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
-  
-  #else  
-  /* F-R1 (#74): acquisition and region selection are extracted phases. */
-  gnss_result = AcquireGnssFix(gps_timeout_ms,
-                               (plan.tx_interval_ms <= gps_timeout_ms), &ttf_ms,
-                               &time_disciplined_this_wake);
-  /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
-   * GPS-loss RF silence before region selection and TX - only when GPS loss
-   * is the recorded veto. RegionPolicy_Silence records first-wins
-   * (DR-06/#241), so plan.veto == VETO_GPS_LOSS proves no independent
-   * no-session, restricted-region, or prelaunch-quiet veto is active: any
-   * of those would have been recorded FIRST and this guard would read
-   * false. Nothing silences between the GPS-loss check and here on this
-   * path, and rf_silence is a per-call local, so the guard also proves the
-   * silence being cleared is the GPS-loss one. A below-quality fix fails
-   * the first conjunct and never clears. Region selection below may
-   * independently reapply VETO_RESTRICTED_REGION / VETO_RF_SILENCE. */
-  if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX &&
-      plan.veto == VETO_GPS_LOSS) {
-    plan.veto = VETO_NONE;
-    rf_silence = false;
-    SONDE_LOG_STR("GPS-LOSS SILENCE CLEARED: fresh fix this wake - radio eligibility restored\r\n");
-  }
-  if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX) {
-    SelectRegionAndSession(&rf_silence, &plan);
-  } else {
-    /* S-02 (#226): a failed GNSS wake still leaves the restricted-region
-     * duty — the last-known position is exactly what the geofence consumes
-     * on every other stale path (BURST-03 GPS-skip path above). INHIBIT
-     * ONLY — never switch regions on a stale fix (F10/#175). No fix EVER
-     * (cold boot) -> transmit: a never-fixed sonde cannot be known
-     * restricted, and going dark forever is worse. */
-    float la, lo, al;
-    /* DR-02 (#237): explicit RESTRICTED only; UNKNOWN -> transmit (same
-     * policy as the GPS-skip path above). */
-    if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
-      RegionPolicy_Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION);  /* DR-06 (#241) */
-      SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
-    }
-  }
+                    ? GNSS_ACQUIRE_FRESH_GOOD_FIX
+                    : GNSS_ACQUIRE_NO_FRESH_GOOD_FIX;
 
-  #endif  /* GPS_DISABLED_FOR_TESTING */
+  ttf_ms = 0; /* No actual fix acquired */
+
+  SONDE_LOG_STR("Fake GPS: Center USA (Kansas) | 39.8283°N, 98.5795°W | Alt: 500m | Sats: 8\r\n");
+
+#else
+    /* F-R1 (#74): acquisition and region selection are extracted phases. */
+    gnss_result = AcquireGnssFix(gps_timeout_ms,
+                                 (plan.tx_interval_ms <= gps_timeout_ms), &ttf_ms,
+                                 &time_disciplined_this_wake);
+    /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
+     * GPS-loss RF silence before region selection and TX - only when GPS loss
+     * is the recorded veto. RegionPolicy_Silence records first-wins
+     * (DR-06/#241), so plan.veto == VETO_GPS_LOSS proves no independent
+     * no-session, restricted-region, or prelaunch-quiet veto is active: any
+     * of those would have been recorded FIRST and this guard would read
+     * false. Nothing silences between the GPS-loss check and here on this
+     * path, and rf_silence is a per-call local, so the guard also proves the
+     * silence being cleared is the GPS-loss one. A below-quality fix fails
+     * the first conjunct and never clears. Region selection below may
+     * independently reapply VETO_RESTRICTED_REGION / VETO_RF_SILENCE. */
+    if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX &&
+        plan.veto == VETO_GPS_LOSS) {
+      plan.veto = VETO_NONE;
+      rf_silence = false;
+      SONDE_LOG_STR("GPS-LOSS SILENCE CLEARED: fresh fix this wake - radio eligibility restored\r\n");
+    }
+    if (gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX) {
+      SelectRegionAndSession(&rf_silence, &plan);
+    } else {
+      /* S-02 (#226): a failed GNSS wake still leaves the restricted-region
+       * duty — the last-known position is exactly what the geofence consumes
+       * on every other stale path (BURST-03 GPS-skip path above). INHIBIT
+       * ONLY — never switch regions on a stale fix (F10/#175). No fix EVER
+       * (cold boot) -> transmit: a never-fixed sonde cannot be known
+       * restricted, and going dark forever is worse. */
+      float la, lo, al;
+      /* DR-02 (#237): explicit RESTRICTED only; UNKNOWN -> transmit (same
+       * policy as the GPS-skip path above). */
+      if (LastPos_Load(&la, &lo, &al) && GeofenceRestricted(la, lo) == GEO_PERMISSION_RESTRICTED) {
+        RegionPolicy_Silence(&plan, &rf_silence, VETO_RESTRICTED_REGION); /* DR-06 (#241) */
+        SONDE_LOG_STR("RESTRICTED REGION (last-known pos, GNSS wake failed): RF silence\r\n");
+      }
+    }
+
+#endif /* GPS_DISABLED_FOR_TESTING */
   }  /* End of else block for gps_enabled_by_power_mgmt */
   /* BEH-01 (#300): the GNSS-package abort gate is REMOVED. An admitted wake
    * continues through the post-GNSS re-sample and archives its record even
