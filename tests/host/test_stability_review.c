@@ -1062,6 +1062,34 @@ static void test_s01_dma_overrun_detector(void)
     }
 }
 
+/* ========================================================================== */
+/* GNSS-HOT (MISSION-01a/#142, bench 2026-08-19): short cadence => hot GNSS    */
+/* ========================================================================== */
+/* When plan.tx_interval_ms <= gps_timeout_ms a power-cycled receiver can
+ * never deliver a fresh fix per wake (acquisition may legally take the whole
+ * budget), so the receiver must stay powered between wakes. The GNSS driver's
+ * STOP2 lock makes this coherent: GNSS_WakeFromStandby early-returns when
+ * is_powered and holds the LPM lock, so the MCU idles in SLEEP with
+ * USART1+DMA streaming until the cadence relaxes and EnterStandby runs again.
+ * Scans pin the decision rule, the gate, the unchanged commissioning path,
+ * the explicit per-wake mission log, and the DR3 persist read-back (bench
+ * finding: BKP writes silently no-op on a dead backup domain -> commissioned
+ * unit boots ASCENT forever via the DDR-0018 door anchor). */
+static void test_gnss_hot_short_cadence(const char *app, const char *mstate)
+{
+    printf("-- GNSS-HOT (MISSION-01a/#142): short cadence keeps the receiver hot\n");
+
+    CHECK_REGRESSION(strstr(app, "plan.tx_interval_ms <= gps_timeout_ms") != NULL,
+                     "GNSS-HOT-1-rule");
+    CHECK_REGRESSION(in_function(app, "static GnssAcquisitionResult_t AcquireGnssFix(",
+                                 "if (!keep_hot)"), "GNSS-HOT-2-gate");
+    CHECK_REGRESSION(strstr(app, "AcquireGnssFix(gps_timeout_ms, false") != NULL,
+                     "GNSS-HOT-3-commissioning-cold");
+    CHECK_REGRESSION(strstr(app, "Mission=%s") != NULL, "MISSION-LOG-1");
+    CHECK_REGRESSION(in_function(mstate, "static void MissionState_Persist(",
+                                 "HAL_RTCEx_BKUPRead"), "BKP-VERIFY-1");
+}
+
 int main(void)
 {
     printf("=== 2026-08-11 (second pass) stability review regressions ===\n\n");
@@ -1078,6 +1106,7 @@ int main(void)
     char *mainsrc = slurp("../../Core/Src/main.c");
     char *msp = slurp("../../Core/Src/stm32wlxx_hal_msp.c");
     char *h3 = slurp("../../Middlewares/Third_Party/h3lite/src/h3lite.c");
+    char *mstate = slurp("../../Core/Src/mission_state.c");
 
     /* F-1c intentionally scans the UNSTRIPPED text: it asserts that the
      * declaration comment and the runtime gate agree on a time base. */
@@ -1141,6 +1170,8 @@ int main(void)
     test_se_streak_consistency();
     printf("\n");
     test_sd_ttf_printf(app);
+    printf("\n");
+    test_gnss_hot_short_cadence(app, mstate);
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);

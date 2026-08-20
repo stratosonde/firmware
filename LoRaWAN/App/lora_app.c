@@ -1116,6 +1116,7 @@ static bool GnssMissionFixAccepted(const GnssFixLimits_t *limits)
 }
 
 static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
+                                              bool keep_hot,
                                               uint32_t *ttf_ms,
                                               bool *time_disciplined_this_wake)
 {
@@ -1366,9 +1367,18 @@ static GnssAcquisitionResult_t AcquireGnssFix(uint32_t gps_timeout_ms,
       SONDE_LOG_STR("GPS: Fix acquired and stored as last known position\r\n");
     }
     
-    /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
-    GNSS_EnterStandby(&hgnss);
-    SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
+    /* Short-cadence exception (MISSION-01a/#142): keep the receiver powered,
+     * UART/DMA streaming and the driver's STOP2 lock held - the next wake's
+     * fix costs ~1-2 s instead of a 5-60 s reacquisition. The first wake
+     * after the cadence relaxes (FLOAT/survival/commissioning) runs the
+     * normal path and powers it off here as before. */
+    if (!keep_hot) {
+      /* Put GPS back to full power-off (0µA) and allow MCU to sleep */
+      GNSS_EnterStandby(&hgnss);
+      SONDE_LOG_STR("GPS fully powered off (0µA), MCU can now sleep\r\n");
+    } else {
+      SONDE_LOG_STR("GPS stays HOT (wake cadence <= acquisition budget)\r\n");
+    }
   /* Only this result authorizes a first-flight science record.  Basic or
    * restored last-known positions remain useful for legacy region handling,
    * but are never promoted to this wake's accepted fix. */
@@ -1650,7 +1660,8 @@ static void CommissioningTelemetryCycle(const sensor_t *sensor_data_pre,
    * the coordinates are withheld on the wire anyway. */
   uint32_t ttf_ms = 0;
   bool time_disciplined_this_wake = false;
-  (void)AcquireGnssFix(gps_timeout_ms, &ttf_ms, &time_disciplined_this_wake);
+  (void)AcquireGnssFix(gps_timeout_ms, false, &ttf_ms,
+                       &time_disciplined_this_wake);
   EnvSensors_MergeGnss(&sd);
   EnvSensors_Read(&sd);
 
@@ -2283,8 +2294,13 @@ static void SendTxData(void)
     SONDE_LOG_STR("Stable ");
   }
 
-  SONDE_LOG("Mode=%s GPS=%s ===\r\n",
-           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF");
+  MissionState_t mission = MissionState_Get();
+  (void)mission; /* FR-19: log-only in flight */
+  SONDE_LOG("Mode=%s GPS=%s Mission=%s ===\r\n",
+           GetModeName(current_mode), gps_enabled_by_power_mgmt ? "ON" : "OFF",
+           mission == MISSION_COMMISSIONING
+               ? "COMMISSIONING"
+               : (mission == MISSION_ASCENT ? "ASCENT" : "FLOAT"));
   
   /* F11 FIX: Flash logging moved to AFTER GPS acquisition + sensor re-read
    * (see below). Previously the record was written here with the PREVIOUS
@@ -2406,7 +2422,10 @@ static void SendTxData(void)
   /* FW-8: full power-off between cycles (PB10=LOW, PB5=LOW, 0µA) — ephemeris
    * is persisted to GPS internal flash via PCAS12; hot-start on wake uses the
    * flash-persisted ephemeris. Between TX cycles: UART1 deinitialized, MCU
-   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected. */
+   * sleeps. During TX: PB10/PB5 HIGH, UART1 active, fix in ~1-5s expected.
+   * Exception (MISSION-01a/#142): short-cadence cycles
+   * (plan.tx_interval_ms <= gps_timeout_ms, e.g. ASCENT at 10 s) keep the
+   * receiver hot between wakes instead - see AcquireGnssFix(keep_hot). */
   // #define GPS_DISABLED_FOR_TESTING  1  // COMMENTED OUT - GPS NOW ACTIVE
   
   /* Declare ttf_ms at function scope so it's available for telemetry */
@@ -2480,7 +2499,8 @@ static void SendTxData(void)
   
   #else  
   /* F-R1 (#74): acquisition and region selection are extracted phases. */
-  gnss_result = AcquireGnssFix(gps_timeout_ms, &ttf_ms,
+  gnss_result = AcquireGnssFix(gps_timeout_ms,
+                               (plan.tx_interval_ms <= gps_timeout_ms), &ttf_ms,
                                &time_disciplined_this_wake);
   /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
    * GPS-loss RF silence before region selection and TX - only when GPS loss

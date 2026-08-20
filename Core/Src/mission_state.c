@@ -41,8 +41,19 @@ static bool s_no_launch_ref = false;
 #define LAUNCH_REF_MASK 0xFFFF0000UL
 
 static void MissionState_Persist(void) {
-  HAL_RTCEx_BKUPWrite(&hrtc, MISSION_STATE_BKP_REG,
-                      MISSION_STATE_MAGIC | (uint32_t)s_state);
+  uint32_t written = MISSION_STATE_MAGIC | (uint32_t)s_state;
+  HAL_RTCEx_BKUPWrite(&hrtc, MISSION_STATE_BKP_REG, written);
+  /* Bench finding (2026-08-19): on a unit with a dead backup domain (VBAT
+   * rail fault - LSE also fails) BKP writes silently do not stick. A
+   * commissioned unit then always boots "DR3 invalid" -> bank door-anchor ->
+   * ASCENT. Read back and name the failure class instead of persisting
+   * silently into the void. */
+  static bool s_persist_warned = false;
+  if (!s_persist_warned &&
+      HAL_RTCEx_BKUPRead(&hrtc, MISSION_STATE_BKP_REG) != written) {
+    s_persist_warned = true;
+    SONDE_LOG_STR("MissionState: WARNING DR3 persist failed - backup domain dead (VBAT?)\r\n");
+  }
 }
 
 void MissionState_Init(void) {
