@@ -1,14 +1,14 @@
 /**
-  ******************************************************************************
-  * @file    mission_state.h
-  * @brief   Minimal one-way mission state machine (T3 / DDR-0002)
-  ******************************************************************************
-  * COMMISSIONING -> FLIGHT (ASCENT -> FLOAT). All transitions one-way, never
-  * toward higher power. Door anchored to the session bank (DDR-0018):
-  * ambiguity resolves to FLIGHT — a mid-air reboot must never land in
-  * commissioning.
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    mission_state.h
+ * @brief   Minimal one-way mission state machine (T3 / DDR-0002)
+ ******************************************************************************
+ * COMMISSIONING -> FLIGHT (ASCENT -> FLOAT). All transitions one-way, never
+ * toward higher power. Door anchored to the session bank (DDR-0018):
+ * ambiguity resolves to FLIGHT — a mid-air reboot must never land in
+ * commissioning.
+ ******************************************************************************
+ */
 
 #ifndef __MISSION_STATE_H
 #define __MISSION_STATE_H
@@ -17,8 +17,8 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 /** @brief Mission states (also the status-byte b6-b7 codes, DDR-0003) */
 typedef enum {
@@ -47,10 +47,10 @@ typedef enum {
  * move them into SystemConfig_t (config.h) — the detector reads the macros
  * in exactly one place (mission_state.c) to make that a mechanical change. */
 #ifndef MISSION_FLOAT_RANGE_PCT
-#define MISSION_FLOAT_RANGE_PCT 0.05f        /* (max-min)/P below this = level */
+#define MISSION_FLOAT_RANGE_PCT 0.05f /* (max-min)/P below this = level */
 #endif
 #ifndef MISSION_FLOAT_WINDOW_S
-#define MISSION_FLOAT_WINDOW_S 900U          /* sustained this long = FLOAT */
+#define MISSION_FLOAT_WINDOW_S 900U /* sustained this long = FLOAT */
 #endif
 /* STAB-07 (#154): 900 s (was 300) so that ascent STALLS (1/3/5/10 min in the
  * review's profile set) cannot reach the latch — combined with the
@@ -92,10 +92,10 @@ typedef enum {
  * (never toward higher power). NOTE: 10 s uplinks are duty-cycle/dwell-time
  * sensitive in some regions; ascent is short and this is deliberate. */
 #ifndef MISSION_ASCENT_TX_INTERVAL_MS
-#define MISSION_ASCENT_TX_INTERVAL_MS 10000U    /* 10 s during ascent */
+#define MISSION_ASCENT_TX_INTERVAL_MS 10000U /* 10 s during ascent */
 #endif
 #ifndef MISSION_FLOAT_TX_INTERVAL_MS
-#define MISSION_FLOAT_TX_INTERVAL_MS 300000U    /* 5 min at float */
+#define MISSION_FLOAT_TX_INTERVAL_MS 300000U /* 5 min at float */
 #endif
 
 /**
@@ -124,6 +124,12 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
 
 /** @brief 2-bit code for the uplink status byte (b6-b7, DDR-0003) */
 uint8_t MissionState_GetStatusBits(void);
+
+/** @brief H-11 (#287): mark that GNSS first-fix acceptance was observed.
+ *        The commissioning -> flight door requires this latch (in addition
+ *        to the PROVISIONED credential latch) before it opens. */
+void MissionState_MarkGnssAccepted(bool accepted);
+bool MissionState_GnssAccepted(void);
 
 #ifdef __cplusplus
 }

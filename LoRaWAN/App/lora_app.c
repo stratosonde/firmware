@@ -2547,6 +2547,10 @@ static void SendTxData(void) {
                     (plan.power_mode <= MODE_CONSERVATIVE);
     gnss_result = AcquireGnssFix(gps_timeout_ms, keep_hot, &ttf_ms,
                                  &time_disciplined_this_wake);
+    /* H-11 (#287): the commissioning -> flight door cannot open on
+     * PROVISIONED alone. Mark the accepted GNSS fix (or clear the mark)
+     * every wake so MissionState_Update is honest. */
+    MissionState_MarkGnssAccepted(gnss_result == GNSS_ACQUIRE_FRESH_GOOD_FIX);
     /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
      * GPS-loss RF silence before region selection and TX - only when GPS loss
      * is the recorded veto. RegionPolicy_Silence records first-wins

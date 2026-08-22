@@ -28,6 +28,13 @@ static MissionState_t s_state = MISSION_COMMISSIONING;
 /* STAB-06/07 (#153/#154): the detection policy lives in the pure,
  * host-testable mission_logic.c; the state structs stay here (caller-owned). */
 static LaunchDetector_t s_launch_det;
+/* H-11 (#287): the commissioning -> flight door requires this latch (in
+ * addition to PROVISIONED) before it opens. RAM-only by design: a latch
+ * that survives a power-cut is wrong - a reboot means reverify GNSS. */
+static bool s_gnss_accepted = false;
+
+void MissionState_MarkGnssAccepted(bool accepted) { s_gnss_accepted = accepted; }
+bool MissionState_GnssAccepted(void) { return s_gnss_accepted; }
 static FloatDetector_t s_float_det;
 /* F1 (#167): ASCENT restored without a launch reference (backup-domain wipe
  * mid-flight) — the min-ascent guard is unprovable, so FLOAT falls back to
@@ -174,6 +181,13 @@ void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s
        * already-flying unit still restores ASCENT. */
       if (!MultiRegion_IsProvisioningComplete()) {
         SONDE_LOG_STR("MissionState: LAUNCH detected but NOT provisioned - door stays shut (DDR-0018)\r\n");
+        return;
+      }
+      /* H-11 (#287): a commissioning-time accepted GNSS fix is the third
+       * latch beside PROVISIONED - the home-region fallback stays a
+       * documented option, never guessed on the pad. */
+      if (!MissionState_GnssAccepted()) {
+        SONDE_LOG_STR("MissionState: LAUNCH detected but GNSS not yet accepted - door stays shut (H-11 #287)\r\n");
         return;
       }
       SONDE_LOG_STR("MissionState: LAUNCH detected (pressure departure) -> ASCENT\r\n");
