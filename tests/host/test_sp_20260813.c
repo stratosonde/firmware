@@ -490,10 +490,10 @@ static void test_sp17_i2c2_capability_marked(const char *mainc)
      * digital filter); each must mark SYS_CAP_SENSORS before degrading. */
     /* Anchor on the DEFINITION: the '\n{' braces suffix skips the CubeMX
      * forward declaration at the file top. */
-    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void)\n{",
+    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void) {",
                                        "SysCaps_MarkFailed(SYS_CAP_SENSORS)") >= 3,
                      "SP-17-three-marks");
-    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void)\n{",
+    CHECK_REGRESSION(count_in_function(mainc, "static void MX_I2C2_Init(void) {",
                                        "SONDE_LOG") >= 3, "SP-17-logs");
 }
 
