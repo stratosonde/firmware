@@ -87,6 +87,10 @@ const struct UTIL_LPM_Driver_s UTIL_PowerDriver =
  * True margin at 25 s was ~4–5 s. 20 s restores real margin for free. */
 #define IWDG_SAFE_SLEEP_SECONDS 20                          /* Must be < ~31 s worst-case IWDG timeout */
 #define IWDG_WAKEUP_COUNTS (IWDG_SAFE_SLEEP_SECONDS * 2048) /* 40960 */
+/* SP-06 (#256): commissioning polls the PB13 arming button at 1 s for UX; in
+ * FLIGHT/ASCENT the chunk stays at IWDG_SAFE_SLEEP_SECONDS so the cadence
+ * never shortens. Both must be valid for the F-7 derived chunk bound below. */
+#define POLLING_CHUNK_COUNTS 2048UL /* 1 s at RTCCLK/16 = 2048 Hz */
 /* F-7 (#182): the chunk ceiling is DERIVED, not a literal. It must cover the
  * largest interval Config_Validate accepts in IWDG_SAFE_SLEEP_SECONDS chunks,
  * plus one - the hardcoded 180 (181 x 20 s = 3620 s) aborted chunked sleep
@@ -292,7 +296,13 @@ void PWR_EnterStopMode(void) {
     /* F-09 (#76): if the WUT fails to arm, entering STOP2 here would sleep
      * with NO scheduled wake. Fall back to a bounded busy-wait (with IWDG
      * refresh) and exit chunked sleep instead. */
-    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, IWDG_WAKEUP_COUNTS,
+    /* SP-06 (#256): commissioning runs a 1 s WUT chunk so the PB13 arming
+     * button responds quickly; FLIGHT/ASCENT uses the 20 s chunk. The F-7
+     * bound must cover either (20-derived; 1 s is strictly smaller). */
+    const uint32_t wakeup_counts = MissionState_IsCommissioning()
+                                       ? POLLING_CHUNK_COUNTS
+                                       : IWDG_WAKEUP_COUNTS;
+    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, wakeup_counts,
                                     RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0) != HAL_OK) {
       /* Bounded busy-wait fallback: one chunk's worth of 1 s IWDG-refreshed
        * delays (F-011/#210: was a hardcoded 25 s vs the 20 s chunk). */
@@ -328,6 +338,12 @@ void PWR_EnterStopMode(void) {
     /* === Woke up — immediately refresh IWDG === */
     HAL_IWDG_Refresh(&hiwdg);
     Deadman_Check(); /* FW-4: no-op in COMMISSIONING; resets if no work cycle for 3h */
+    /* SP-06 (#256): the 1 s commissioning chunk serves as the PB13 arming poll.
+     * Commissioning gate lives inside ArmingInput_Poll (compiled-out in
+     * FLIGHT), so the call is safe against a mission switch mid-sleep. */
+    extern void ArmingInput_Poll(void); /* arming_input.c */
+    if (MissionState_IsCommissioning())
+      ArmingInput_Poll();
 
     /* The WUT interrupt pended but its ISR never ran (PRIMASK set), so the
      * NVIC pending bit is still latched. Clear it or the next WFI returns
