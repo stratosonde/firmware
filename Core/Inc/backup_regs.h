@@ -1,26 +1,26 @@
 /**
-  ******************************************************************************
-  * @file    backup_regs.h
-  * @brief   RTC backup register allocation map (R01/R02 fix)
-  ******************************************************************************
-  * Single source of truth for who owns which RTC backup register. Backup
-  * registers survive any reset that keeps VBAT/backup domain alive, so two
-  * owners of the same register silently corrupt each other (R01/R02).
-  *
-  * DR0-DR2 are RESERVED for the ST timer_if / SysTime layer
-  * (Core/Src/timer_if.c: RTC_BKP_SECONDS / RTC_BKP_SUBSECONDS /
-  * RTC_BKP_MSBTICKS). Application code must NEVER touch DR0-DR2: SysTimeSet()
-  * rewrites them on every GPS time discipline, which previously clobbered
-  * the mission state, the fault breadcrumb, and the deadman timestamp.
-  *
-  * Application-owned registers start at DR3:
-  *   DR3  mission_state.c   mission state record (magic | MissionState_t)
-  *   DR4  reset_cause.c     fault breadcrumb (RESET_CAUSE_FAULT_MAGIC | code)
-  *   DR5  lora_app.c        deadman last-progress timestamp (RTC seconds)
-  *
-  * RULE: any new backup-register user must add its allocation here first.
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    backup_regs.h
+ * @brief   RTC backup register allocation map (R01/R02 fix)
+ ******************************************************************************
+ * Single source of truth for who owns which RTC backup register. Backup
+ * registers survive any reset that keeps VBAT/backup domain alive, so two
+ * owners of the same register silently corrupt each other (R01/R02).
+ *
+ * DR0-DR2 are RESERVED for the ST timer_if / SysTime layer
+ * (Core/Src/timer_if.c: RTC_BKP_SECONDS / RTC_BKP_SUBSECONDS /
+ * RTC_BKP_MSBTICKS). Application code must NEVER touch DR0-DR2: SysTimeSet()
+ * rewrites them on every GPS time discipline, which previously clobbered
+ * the mission state, the fault breadcrumb, and the deadman timestamp.
+ *
+ * Application-owned registers start at DR3:
+ *   DR3  mission_state.c   mission state record (magic | MissionState_t)
+ *   DR4  reset_cause.c     fault breadcrumb (RESET_CAUSE_FAULT_MAGIC | code)
+ *   DR5  lora_app.c        deadman last-progress timestamp (RTC seconds)
+ *
+ * RULE: any new backup-register user must add its allocation here first.
+ ******************************************************************************
+ */
 
 #ifndef __BACKUP_REGS_H
 #define __BACKUP_REGS_H
@@ -32,24 +32,30 @@ extern "C" {
 #include "stm32wlxx_hal.h"
 
 /* DR0-DR2: owned by timer_if.c (ST SysTime). Do not use. */
-#define BKP_REG_RESERVED_SYSTIME_SECONDS     RTC_BKP_DR0
-#define BKP_REG_RESERVED_SYSTIME_SUBSECONDS  RTC_BKP_DR1
-#define BKP_REG_RESERVED_SYSTIME_MSBTICKS    RTC_BKP_DR2
+#define BKP_REG_RESERVED_SYSTIME_SECONDS RTC_BKP_DR0
+#define BKP_REG_RESERVED_SYSTIME_SUBSECONDS RTC_BKP_DR1
+#define BKP_REG_RESERVED_SYSTIME_MSBTICKS RTC_BKP_DR2
 
 /* Application-owned backup registers */
-#define BKP_REG_MISSION_STATE      RTC_BKP_DR3   /* mission_state.c */
-#define BKP_REG_RESET_CAUSE_FAULT  RTC_BKP_DR4   /* reset_cause.c breadcrumb */
-#define BKP_REG_DEADMAN            RTC_BKP_DR5   /* lora_app.c deadman mark */
-#define BKP_REG_BOOT_ATTEMPTS      RTC_BKP_DR6   /* reset_cause.c consecutive boot counter (F-03/#65) */
-#define BKP_REG_SYSTIME_VALID      RTC_BKP_DR7   /* timer_if.c MSB-ticks validity marker (F-04/#63) */
-#define BKP_REG_LASTPOS_VALID      RTC_BKP_DR8   /* lora_app.c last-position magic (F-15/#72) */
-#define BKP_REG_LASTPOS_LAT        RTC_BKP_DR9   /* lora_app.c last valid latitude (float bits) */
-#define BKP_REG_LASTPOS_LON        RTC_BKP_DR10  /* lora_app.c last valid longitude (float bits) */
-#define BKP_REG_LASTPOS_ALT        RTC_BKP_DR11  /* lora_app.c last valid altitude (float bits) */
-#define BKP_REG_LASTPOS_EPOCH      RTC_BKP_DR12  /* lora_app.c last fresh-fix epoch seconds (STAB-01/#148) */
-#define BKP_REG_TS_WRAP            RTC_BKP_DR13  /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
-#define BKP_REG_GPS_LOSS_EPOCH     RTC_BKP_DR14  /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
-#define BKP_REG_LAUNCH_REF         RTC_BKP_DR15  /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
+#define BKP_REG_MISSION_STATE RTC_BKP_DR3     /* mission_state.c */
+#define BKP_REG_RESET_CAUSE_FAULT RTC_BKP_DR4 /* reset_cause.c breadcrumb */
+#define BKP_REG_DEADMAN RTC_BKP_DR5           /* lora_app.c deadman mark */
+#define BKP_REG_BOOT_ATTEMPTS RTC_BKP_DR6     /* reset_cause.c consecutive boot counter (F-03/#65) */
+#define BKP_REG_SYSTIME_VALID RTC_BKP_DR7     /* timer_if.c MSB-ticks validity marker (F-04/#63) */
+#define BKP_REG_LASTPOS_VALID RTC_BKP_DR8     /* lora_app.c last-position magic (F-15/#72) */
+#define BKP_REG_LASTPOS_LAT RTC_BKP_DR9       /* lora_app.c last valid latitude (float bits) */
+#define BKP_REG_LASTPOS_LON RTC_BKP_DR10      /* lora_app.c last valid longitude (float bits) */
+#define BKP_REG_LASTPOS_ALT RTC_BKP_DR11      /* lora_app.c last valid altitude (float bits) */
+#define BKP_REG_LASTPOS_EPOCH RTC_BKP_DR12    /* lora_app.c last fresh-fix epoch seconds (STAB-01/#148) */
+#define BKP_REG_TS_WRAP RTC_BKP_DR13          /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
+#define BKP_REG_GPS_LOSS_EPOCH RTC_BKP_DR14   /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
+#define BKP_REG_LAUNCH_REF RTC_BKP_DR15       /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
+#define BKP_REG_SLOPE_VALID RTC_BKP_DR16      /* power-model slope sentinel magic (H-12/#288) */
+#define BKP_REG_SLOPE_BASE_MV RTC_BKP_DR17    /* power-model baseline_voltage_mv */
+#define BKP_REG_SLOPE_BASE_TS RTC_BKP_DR18    /* power-model baseline_timestamp */
+#define BKP_REG_SLOPE_CUR_MV RTC_BKP_DR19     /* power-model current_voltage_mv */
+#define BKP_REG_SLOPE_CUR_TS RTC_BKP_DR20     /* power-model current_timestamp */
+#define BKP_REG_SLOPE_LAST RTC_BKP_DR21       /* power-model last_slope_mv_per_hour */
 
 #ifdef __cplusplus
 }
