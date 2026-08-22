@@ -34,6 +34,7 @@
 #include "mission_state.h"  // R09: LED gating
 #include "sys_caps.h"  // LT-05 (#275): wake re-init failures mark capabilities
 #include "config.h"  // DR-04 (#240): CONFIG_MAX_TX_INTERVAL_MS for MAX_SLEEP_CHUNKS
+#include "timer_if.h"  // [DIAG] TIMER_IF_GetTimerValue for the wake-source dump
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -275,6 +276,14 @@ void PWR_EnterStopMode(void)
   extern void Deadman_Check(void);  /* defined in lora_app.c */
   uint32_t chunks = 0;
 
+  /* [DIAG] radio state at sleep entry: RFBUSYS was set in PWR_SR2 at every
+   * spurious wake - confirm the chip mode the stack left the radio in. */
+  {
+    RadioPhyStatus_t rstat = SUBGRF_GetStatus();
+    SONDE_LOG("LPE: enter sleep sr2=0x%04lX chipmode=%d cmdstat=%d\r\n",
+              (unsigned long)(PWR->SR2 & 0xFFFFUL),
+              (int)rstat.Fields.ChipMode, (int)rstat.Fields.CmdStatus);
+  }
   while (1)
   {
     /* Set RTC Wakeup Timer: RTCCLK/16 = 2048 Hz,
@@ -298,6 +307,20 @@ void PWR_EnterStopMode(void)
 
     /* Clear wakeup flags before sleeping */
     __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
+    /* Clear any latched SysTick pend before WFI. SysTick is the live 1 ms
+     * HAL timebase (HAL_InitTick is not overridden) and wraps during the
+     * PRIMASK-masked sleep-entry path, latching PENDSTSET. HAL_SuspendTick()
+     * clears TICKINT but NOT the pend, and WFI wakes on a pending exception
+     * even with PRIMASK set -> instant wake with no RTC flags (LPC: other),
+     * a ~50 ms full exit/re-enter spin where the MCU never actually sleeps. */
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
+    /* RTC_WKUP NVIC pend must be re-cleared HERE, not right after the wake:
+     * WUTF is still set at that point (it deasserts ~2 RTCCLK cycles after
+     * DeactivateWakeUpTimer writes SCR), so the pend re-asserts instantly and
+     * the next WFI returns in the SAME millisecond - the flag-less "LPC: other"
+     * every second chunk. The WUTWF poll inside HAL_RTCEx_SetWakeUpTimer_IT
+     * guarantees WUTF is quiet by this line. */
+    NVIC_ClearPendingIRQ(RTC_WKUP_IRQn);
     LL_PWR_ClearFlag_C1STOP_C1STB();
 
     /* USER CODE END EnterStopMode_2 */
@@ -325,16 +348,19 @@ void PWR_EnterStopMode(void)
     uint32_t is_alarm_a      = (rtc_sr & RTC_SR_ALRAF) != 0U;
     uint32_t is_wakeup_timer = (rtc_sr & RTC_SR_WUTF) != 0U;
 
+    SONDE_LOG_STR("LPC: up\r\n");  /* [DIAG] */
+
     /* F-08 (#76): deactivate the wakeup timer BEFORE any exit path. The
      * chunk-overflow break used to skip this, leaving the WUT armed. */
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
 
-    if (++chunks > MAX_SLEEP_CHUNKS) break;  /* FW-4: never sleep forever; F-7 (#182): derived from the max validated interval */
+    if (++chunks > MAX_SLEEP_CHUNKS) { SONDE_LOG_STR("LPC: bound\r\n"); break; }  /* FW-4: never sleep forever; F-7 (#182) [DIAG print] */
 
     /* Alarm A (LoRaWAN timer event) wins over the IWDG chunk timer. */
     if (is_alarm_a)
     {
       /* LoRaWAN timer event — exit chunked sleep. WUTF PR already consumed. */
+      SONDE_LOG_STR("LPC: alarm\r\n");  /* [DIAG] */
       break;
     }
 
@@ -342,10 +368,25 @@ void PWR_EnterStopMode(void)
     {
       /* Only our IWDG refresh timer fired — PR consumed by handler,
        * re-enter STOP2 for the next chunk. */
+      SONDE_LOG("LPC: wut t=%lu\r\n", (unsigned long)TIMER_IF_GetTimerValue());  /* [DIAG] */
       continue;
     }
 
     /* Something else woke us (GPIO interrupt, etc.) — exit */
+    /* [DIAG] wake-source dump, fault-safe: a raw RTC->SR read here hard-
+     * faulted twice (IWDG recovered, no LPC prints). Read the HAL-shadowed
+     * SR via HAL_RTCEx_GetWakeUpTimer (== WUTR content) plus EXTI/NVIC
+     * pending; WUTF-in-SR is mirrored by the WUTR-then-SR sequence the HAL
+     * uses, so this cannot touch a volatile RTC register directly. */
+    uint32_t wutr = HAL_RTCEx_GetWakeUpTimer(&hrtc);
+    SONDE_LOG("LPC: other t=%lu I=%08lX S=%08lX\r\n",
+              (unsigned long)TIMER_IF_GetTimerValue(),
+              (unsigned long)SCB->ICSR, (unsigned long)SysTick->CTRL);
+    SONDE_LOG("LPCD: N0=%08lX N1=%08lX P1=%08lX\r\n",
+              (unsigned long)NVIC->ISPR[0], (unsigned long)NVIC->ISPR[1],
+              (unsigned long)EXTI->PR1);
+    SONDE_LOG("LPCD: P2=%08lX WUTR=%lu\r\n",
+              (unsigned long)EXTI->PR2, (unsigned long)wutr);
     break;
   }
 
@@ -364,6 +405,9 @@ void PWR_ExitStopMode(void)
   if (MissionState_IsCommissioning()) {
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
   }
+
+  /* [DIAG 2026-08-18] post-STOP2 hang bisection breadcrumbs - REMOVE AFTER DEBUG */
+  SONDE_LOG_STR("LPX: wake\r\n");
   
   /* === PERIPHERAL RE-INITIALIZATION AFTER STOP2 === */
   /* STM32WL loses peripheral configuration in STOP2 mode */
@@ -399,9 +443,11 @@ void PWR_ExitStopMode(void)
 
   /* Re-initialize DMA before peripherals that use it (UART) */
   MX_DMA_Init();
+  SONDE_LOG_STR("LPX: dma\r\n");  /* [DIAG] */
 
   /* Re-initialize I2C2 - sensors need this to work */
   HAL_I2C_DeInit(&hi2c2);
+  SONDE_LOG_STR("LPX: i2c deinit\r\n");  /* [DIAG] */
   if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
     SONDE_LOG_STR("STOP2 REINIT FAIL: I2C2\r\n");
     reinit_failed = true;
@@ -415,6 +461,7 @@ void PWR_ExitStopMode(void)
     HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE);
     HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0);
   }
+  SONDE_LOG_STR("LPX: i2c done\r\n");  /* [DIAG] */
 
   /* Re-initialize SPI2 - external flash needs this */
   bool flash_class_ok = true;
@@ -424,6 +471,7 @@ void PWR_ExitStopMode(void)
     reinit_failed = true;
     flash_class_ok = false;
   }
+  SONDE_LOG_STR("LPX: spi\r\n");  /* [DIAG] */
 
   /* FW-14: wake the flash from deep power-down. tRES1 = 3us max per
    * datasheet; W25Q_ReleasePowerDown already delays 1ms. */
@@ -434,6 +482,7 @@ void PWR_ExitStopMode(void)
       flash_class_ok = false;
     }
   }
+  SONDE_LOG_STR("LPX: w25q\r\n");  /* [DIAG] */
   /* LT-05 (#275): SPI2 and W25Q are one capability class (the archive). */
   if (flash_class_ok) {
     stop2_flash_fail_streak = 0;
@@ -479,6 +528,7 @@ void PWR_ExitStopMode(void)
 
   /* Resume not retained USARTx and DMA */
   vcom_Resume();
+  SONDE_LOG_STR("LPX: exit done\r\n");  /* [DIAG] */
   /* USER CODE BEGIN ExitStopMode_2 */
 
   /* USER CODE END ExitStopMode_2 */
@@ -491,6 +541,9 @@ void PWR_EnterSleepMode(void)
   /* USER CODE END EnterSleepMode_1 */
   /* Suspend sysTick */
   HAL_SuspendTick();
+  /* Clear any latched SysTick pend: WFI wakes on a pending exception even
+   * with PRIMASK set (see the PWR_EnterStopMode chunk-loop note). */
+  SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
   /* USER CODE BEGIN EnterSleepMode_2 */
 
   /* USER CODE END EnterSleepMode_2 */

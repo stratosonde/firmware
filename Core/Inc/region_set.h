@@ -34,27 +34,27 @@ extern "C" {
 #endif
 
 #ifndef SONDE_REGION_EU868
-#define SONDE_REGION_EU868 1
+#define SONDE_REGION_EU868 0
 #endif
 
 #ifndef SONDE_REGION_AS923
-#define SONDE_REGION_AS923 1
+#define SONDE_REGION_AS923 0
 #endif
 
 #ifndef SONDE_REGION_AU915
-#define SONDE_REGION_AU915 1
+#define SONDE_REGION_AU915 0
 #endif
 
 #ifndef SONDE_REGION_IN865
-#define SONDE_REGION_IN865 1
+#define SONDE_REGION_IN865 0
 #endif
 
 #ifndef SONDE_REGION_KR920
-#define SONDE_REGION_KR920 1
+#define SONDE_REGION_KR920 0
 #endif
 
 #ifndef SONDE_REGION_RU864
-#define SONDE_REGION_RU864 1
+#define SONDE_REGION_RU864 0
 #endif
 
 /* An empty set would leave the pre-join table zero-length (illegal C) and

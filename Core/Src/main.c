@@ -108,6 +108,7 @@ static void MX_I2C2_Init(void);
 static void MX_IWDG_Init(void);
 static void LSE_FailoverToLSI(void);   /* F-14 (#70) */
 static void RTC_LivenessCheck(void);   /* F-14 (#70) */
+static bool LSE_StartWithDriveEscalation(void);  /* 2026-08-19: drive-ramp LSE start */
 /* RV-09 (#165): the CSS interrupt only flags; the failover runs in the main
  * loop. RCC reconfiguration + RTC re-init inside an ISR races any main-loop
  * RTC access. */
@@ -208,6 +209,12 @@ int main(void)
    * early, then clear flags so the next boot reads clean. Surfaced in the
    * uplink status byte (DDR-0003). */
   ResetCause_CaptureBoot();
+  /* Diag (bench 2026-08-19): name the last reset on the RTT stream so a
+   * boot loop is immediately classed - 0=POR/BOR (power), 1=IWDG (hang),
+   * 2=SW/pin, 3=fault breadcrumb. The attempt counter climbs while no
+   * work cycle completes (F-03/#65). */
+  SONDE_LOG("Reset cause: %u, boot attempt #%lu\r\n",
+            (unsigned)ResetCause_Get(), (unsigned long)ResetCause_GetBootAttempts());
 
   /* USER CODE BEGIN SysInit */
 
@@ -391,6 +398,87 @@ volatile const char g_sonde_build_marker[] __attribute__((used)) = "SONDE_BUILD:
  * marker (even volatile) is garbage-collected and the CI grep finds nothing.
  * Verified missing from both debug and flight .bin before this fix. */
 
+/* Bench finding (2026-08-19): this unit's LSE never reaches LSERDY at
+ * the default LOW drive. The F3/R08 failover then parked the RTC on LSI
+ * with the 32768 Hz prescalers unchanged (~2% slow), so every LoRaWAN
+ * RX window opened ~100ms late at the 5s join window - uplinks fine,
+ * joins impossible. LSEDRV may only be written while LSE is disabled,
+ * so each attempt disables LSE, sets the next drive level, re-enables
+ * and polls LSERDY. The working level stays programmed for the run;
+ * only a full failure falls through to the LSI failover below. */
+#define LSE_START_TIMEOUT_MS 3000U /* per level; 4x3s worst case, IWDG ~33s */
+static bool LSE_StartWithDriveEscalation(void) {
+  static const uint32_t kDrives[] = {RCC_LSEDRIVE_LOW, RCC_LSEDRIVE_MEDIUMLOW,
+                                     RCC_LSEDRIVE_MEDIUMHIGH, RCC_LSEDRIVE_HIGH};
+  static const char *const kNames[] = {"LOW", "MEDLOW", "MEDHIGH", "HIGH"};
+
+  /* Diag: is the backup domain accepting writes at all? (TAMP writes were
+   * already seen failing today - same domain. bit0 LSEON, bit1 LSERDY,
+   * bit2 LSEBYP, bits4:3 LSEDRV, bit5 LSECSSON, bit6 LSECSSD latched,
+   * bits9:8 RTCSEL, bit15 RTCEN.) */
+  SONDE_LOG("LSE diag: BDCR=0x%08lX at entry\r\n", (unsigned long)RCC->BDCR);
+
+  /* A latched CSS fault (LSECSSD) survives in the backup domain across
+   * warm resets and holds the LSE in the fault state: no drive level can
+   * start it (bench finding 2026-08-19 - BDCR showed LSECSSD=1 at entry
+   * after an earlier boot tripped the F-14 CSS, and nothing ever cleared
+   * it). RM0461: disable CSS (legal only after a detected fault), then
+   * clear the latch via LSECSSC. The F-14 CSS is re-armed later in
+   * SystemClock_Config once the RTC is confirmed on LSE. */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSECSSD) != 0U) {
+    SONDE_LOG_STR("LSE diag: stale CSS fault latched - clearing\r\n");
+    __HAL_RCC_LSE_CONFIG(RCC_LSE_OFF);
+    HAL_RCCEx_DisableLSECSS();
+    RCC->CICR = RCC_CICR_LSECSSC;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSECSSD) != 0U) {
+      /* LSECSSC did not clear the latch on the bench unit (2026-08-19):
+       * force a backup-domain reset. Wipes RTC config + TAMP backup
+       * registers - acceptable while commissioning (nothing provisioned);
+       * the flight-grade variant must snapshot/restore mission registers
+       * like LSE_FailoverToLSI does. */
+      SONDE_LOG_STR("LSE diag: latch survives LSECSSC - BDRST\r\n");
+      LL_RCC_ForceBackupDomainReset();
+      LL_RCC_ReleaseBackupDomainReset();
+    }
+    SONDE_LOG("LSE diag: BDCR=0x%08lX after CSS clear\r\n", (unsigned long)RCC->BDCR);
+  }
+
+  for (uint32_t i = 0; i < (sizeof(kDrives) / sizeof(kDrives[0])); i++) {
+    __HAL_RCC_LSE_CONFIG(RCC_LSE_OFF);
+    __HAL_RCC_LSEDRIVE_CONFIG(kDrives[i]);
+    __HAL_RCC_LSE_CONFIG(RCC_LSE_ON);
+
+    /* uwTick directly: HAL_GetTick becomes the RTC-derived timer value
+     * once TIMER_IF is up, and the RTC is the very thing at stake here.
+     * Same early-boot tick contract as the F-007 fix in sys_app.c. */
+    uint32_t start = uwTick;
+    while (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == 0U) {
+      if ((uint32_t)(uwTick - start) > LSE_START_TIMEOUT_MS) {
+        break;
+      }
+    }
+    HAL_IWDG_Refresh(&hiwdg); /* MX_IWDG_Init runs before SystemClock_Config */
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) != 0U) {
+      SONDE_LOG("LSE start: %s drive OK in %lums\r\n", kNames[i],
+                (unsigned long)(uwTick - start));
+      /* The CSS-clear BDRST above wiped RTCSEL to NONE. Restore it NOW, at
+       * the wipe site: left unset, HAL_RTC_MspInit's PeriphCLKConfig sees
+       * "source changed" and takes its own backup-domain reset (stopping
+       * the crystal it is trying to select, re-latching CSS, RTC unclocked
+       * -> RTC_Init timeout -> fatal -> the 5 s boot loop observed
+       * 2026-08-21). Restored here, that call is a no-op. This is safe
+       * because the crystal is confirmed running: RTCSEL is written after
+       * the LSERDY gate, before CSS is re-armed in SystemClock_Config. */
+      __HAL_RCC_RTC_CONFIG(RCC_RTCCLKSOURCE_LSE);
+      return true;
+    }
+    SONDE_LOG("LSE start: %s drive no-start\r\n", kNames[i]);
+  }
+  SONDE_LOG("LSE diag: BDCR=0x%08lX after all levels\r\n", (unsigned long)RCC->BDCR);
+  return false;
+}
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -400,10 +488,10 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Configure LSE Drive Capability
-  */
+  /** Configure LSE Drive Capability and start LSE: ramp LOW..HIGH until
+   * LSERDY sets (see LSE_StartWithDriveEscalation). */
   HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+  bool lse_started = LSE_StartWithDriveEscalation();
 
   /** Configure the main internal regulator output voltage
   */
@@ -413,7 +501,7 @@ void SystemClock_Config(void)
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_LSE
                               |RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+  RCC_OscInitStruct.LSEState = lse_started ? RCC_LSE_ON : RCC_LSE_OFF;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_10;
@@ -435,6 +523,17 @@ void SystemClock_Config(void)
     }
     /* Switch RTC clock source LSE -> LSI (R08: recorded so HAL_RTC_MspInit
      * does not force LSE again and wipe the backup domain) */
+    RCC_PeriphCLKInitTypeDef rtcClk = {0};
+    rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+    rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+    HAL_RCCEx_PeriphCLKConfig(&rtcClk);
+    g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
+    SONDE_LOG_STR("WARNING: LSE failed - RTC on LSI (~1% drift)\r\n");
+  }
+  else if (!lse_started)
+  {
+    /* LSE never started at any drive level: the same LSI switch the
+     * F3/R08 fallback performs, minus the OscConfig retry (LSE off). */
     RCC_PeriphCLKInitTypeDef rtcClk = {0};
     rtcClk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
     rtcClk.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
@@ -782,6 +881,7 @@ void MX_RTC_Init(void)
   {
     Error_Handler_Fatal(FAULT_CODE_RTC_INIT);
   }
+
 
   /** Enable the Alarm A
   */

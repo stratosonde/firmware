@@ -184,6 +184,7 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
   float ms_temp, ms_press;
   
   /* Read SHT31 sensor */
+  SONDE_LOG_STR("SEN: sht31...\r\n");  /* [DIAG] */
   if (SHT31_ReadTempAndHumidity(&hsht31, &sht_temp_scaled, &sht_hum_scaled) == SHT31_OK) {
     float t_c = sht_temp_scaled / 100.0f;
     float h_pct = sht_hum_scaled / 100.0f;
@@ -219,8 +220,10 @@ int32_t EnvSensors_Read(sensor_t *sensor_data)
     th_stale = true;
     SONDE_LOG_STR("SHT31 read failed, using last-known-good (STALE)\r\n");
   }
-  
+  SONDE_LOG_STR("SEN: sht31 done\r\n");  /* [DIAG] */
+
   /* Read MS5607 sensor */
+  SONDE_LOG_STR("SEN: ms5607...\r\n");  /* [DIAG] */
   if (MS5607_ReadPressureAndTemperature(&hms5607, &ms_temp, &ms_press) == MS5607_OK) {
     /* R28 (#36): plausibility gate before cache accept (defense in depth —
      * the driver gates too, 1..1200 hPa) */

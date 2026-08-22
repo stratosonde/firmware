@@ -2139,6 +2139,16 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
   }
 
   FirstFlightAbortTransmitCycle();
+  /* GN-01: the abort must also release GNSS power. Short-cadence
+   * (ASCENT) cycles deliberately leave the receiver hot (MISSION-01a/#142),
+   * so a low-energy reject arriving after such a cycle used to carry a hot
+   * GNSS + its STOP2 lock into survival cadence - an unrecoverable latch.
+   * Guarded on is_powered: a reject that never powered the receiver skips
+   * the PCAS12 + 100 ms save round-trip entirely (stm32_lpm_if.c precedent). */
+  if (hgnss.is_powered) {
+    GNSS_EnterStandby(&hgnss);
+    SONDE_LOG_STR("First-flight abort: GNSS off, STOP2 re-enabled\r\n");
+  }
   /* Rebase from now. This helper can run either before the normal science
    * deadline advances or after GNSS, so phase-advancing the existing deadline
    * here could accidentally add two intervals. */
@@ -2498,8 +2508,14 @@ static void SendTxData(void)
 
 #else
     /* F-R1 (#74): acquisition and region selection are extracted phases. */
-    gnss_result = AcquireGnssFix(gps_timeout_ms,
-                                 (plan.tx_interval_ms <= gps_timeout_ms), &ttf_ms,
+    /* GN-03: keep-hot needs more than cadence. Without a power-mode
+     * conjunct the receiver stayed hot through REDUCED/RECOVERY/SURVIVAL
+     * whenever the interval was short (ASCENT is the extreme case). Reuse the
+     * cadence override's own threshold (plan.power_mode <= MODE_CONSERVATIVE)
+     * - no new concept introduced. */
+    bool keep_hot = (plan.tx_interval_ms <= gps_timeout_ms) &&
+                    (plan.power_mode <= MODE_CONSERVATIVE);
+    gnss_result = AcquireGnssFix(gps_timeout_ms, keep_hot, &ttf_ms,
                                  &time_disciplined_this_wake);
     /* H-09 (#285) / 2026-08-15 handoff A7: an ACCEPTED fix in THIS wake clears
      * GPS-loss RF silence before region selection and TX - only when GPS loss

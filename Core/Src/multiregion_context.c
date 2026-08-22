@@ -1211,6 +1211,21 @@ LmHandlerErrorStatus_t MultiRegion_JoinRegion(LoRaMacRegion_t region) {
   LmHandlerSetKey(NWK_KEY, (uint8_t *)nwkkey);
   SONDE_LOG("Identity and join credentials set for %s\r\n", RegionToString(region));
 
+  /* OTAA channel plan: restrict the MAC to the deployment sub-band
+   * BEFORE the first join. With MAC defaults (all 64 US915 channels)
+   * a fresh join sweeps one 8-channel group per attempt
+   * (RegionBaseUSComputeNext125kHzJoinChannel, starting at group 0)
+   * plus a 500kHz DR4 probe every 9th attempt
+   * (RegionUS915AlternateDr) - an 8-channel gateway hears at best
+   * 1 of 9 join requests, which is why only the first attempt after
+   * a power cycle ever reached the network. Fail closed like
+   * FR-17 (#294): a join on the wrong channel plan can never
+   * succeed. */
+  if (!ApplyRegionChannelMask(region)) {
+    SONDE_LOG_STR("JoinRegion: channel mask FAILED - join aborted\r\n");
+    return LORAMAC_HANDLER_ERROR;
+  }
+
   // Reset join success flag before triggering join
   g_multiregion_join_success = false;
 

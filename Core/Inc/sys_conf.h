@@ -76,7 +76,7 @@ extern "C" {
   * @note  by HW serial wires are ON by default, need to put them OFF to save power
   * @note  MUST BE 0 for proper STOP2 low power mode operation
   */
-#define DEBUGGER_ENABLED                     0
+#define DEBUGGER_ENABLED                     1  /* TEMP: bench RTT debugging - revert to 0 before power measurement/flight */
 
 /**
   * @brief Disable Low Power mode
