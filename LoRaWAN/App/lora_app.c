@@ -958,6 +958,9 @@ static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params) {
  * Allocation map lives in backup_regs.h. */
 #include "backup_regs.h"
 #define DEADMAN_BKP_REG BKP_REG_DEADMAN
+/* H-12 (#288): slope-persistence helpers below use hrtc; nesting extern
+ * declarations in callers' scope was misleading. Declare it file-scope. */
+extern RTC_HandleTypeDef hrtc;
 /* S-04 (#228): the timeout is DERIVED from the configured survival cadence
  * (ConfigGetDeadmanTimeoutS: max(3 h, 3x survival)) - a fixed 3 h constant
  * gave a 1.5x margin at the validator's 2 h ceiling. */
@@ -2167,22 +2170,26 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
 #define SLOPE_PERSIST_MAGIC 0x53504F57U /* 'SPOW' */
 
 static void SlopeRestoreFromBackup(VoltageSlope_t *slope) {
-  if (HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_VALID) == SLOPE_PERSIST_MAGIC) {
-    slope->baseline_voltage_mv = (uint16_t)HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_BASE_MV);
+  uint32_t vl = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_VALID_LAST);
+  if ((vl >> 16) == (SLOPE_PERSIST_MAGIC & 0xFFFFU)) { /* H-12: low 16b = last_slope */
+    uint32_t mv = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_MV);
+    slope->baseline_voltage_mv = (uint16_t)(mv >> 16);
+    slope->current_voltage_mv = (uint16_t)(mv & 0xFFFFU);
     slope->baseline_timestamp = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_BASE_TS);
-    slope->current_voltage_mv = (uint16_t)HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_CUR_MV);
     slope->current_timestamp = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_CUR_TS);
-    slope->last_slope_mv_per_hour = (int16_t)HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_LAST);
+    slope->last_slope_mv_per_hour = (int16_t)(vl & 0xFFFFU);
   }
 }
 
 static void SlopePersistToBackup(const VoltageSlope_t *slope) {
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_BASE_MV, slope->baseline_voltage_mv);
+  uint32_t packed_mv = ((uint32_t)slope->baseline_voltage_mv << 16) |
+                       (uint32_t)slope->current_voltage_mv;
+  uint32_t packed_valid_last = ((SLOPE_PERSIST_MAGIC << 16) |
+                                ((uint32_t)slope->last_slope_mv_per_hour & 0xFFFFU));
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_MV, packed_mv);
+  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_VALID_LAST, packed_valid_last);
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_BASE_TS, slope->baseline_timestamp);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_CUR_MV, slope->current_voltage_mv);
   HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_CUR_TS, slope->current_timestamp);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_LAST, (uint32_t)slope->last_slope_mv_per_hour);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_VALID, SLOPE_PERSIST_MAGIC);
 }
 
 static void SendTxData(void) {

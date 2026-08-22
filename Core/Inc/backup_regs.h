@@ -50,12 +50,11 @@ extern "C" {
 #define BKP_REG_TS_WRAP RTC_BKP_DR13          /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
 #define BKP_REG_GPS_LOSS_EPOCH RTC_BKP_DR14   /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
 #define BKP_REG_LAUNCH_REF RTC_BKP_DR15       /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
-#define BKP_REG_SLOPE_VALID RTC_BKP_DR16      /* power-model slope sentinel magic (H-12/#288) */
-#define BKP_REG_SLOPE_BASE_MV RTC_BKP_DR17    /* power-model baseline_voltage_mv */
-#define BKP_REG_SLOPE_BASE_TS RTC_BKP_DR18    /* power-model baseline_timestamp */
-#define BKP_REG_SLOPE_CUR_MV RTC_BKP_DR19     /* power-model current_voltage_mv */
-#define BKP_REG_SLOPE_CUR_TS RTC_BKP_DR20     /* power-model current_timestamp */
-#define BKP_REG_SLOPE_LAST RTC_BKP_DR21       /* power-model last_slope_mv_per_hour */
+/* H-12 (#288): packed for WLE5 (the HAL driver has no DR20/DR21). */
+#define BKP_REG_SLOPE_VALID_LAST RTC_BKP_DR16 /* magic | last_slope (u16|u16) */
+#define BKP_REG_SLOPE_MV RTC_BKP_DR17         /* base_mv | cur_mv packed        */
+#define BKP_REG_SLOPE_BASE_TS RTC_BKP_DR18    /* baseline_timestamp             */
+#define BKP_REG_SLOPE_CUR_TS RTC_BKP_DR19     /* current_timestamp              */
 
 #ifdef __cplusplus
 }
