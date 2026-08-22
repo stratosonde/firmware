@@ -19,6 +19,13 @@
  *   DR5  lora_app.c        deadman last-progress timestamp (RTC seconds)
  *
  * RULE: any new backup-register user must add its allocation here first.
+ *
+ * DURABILITY POLICY (H-01/#281, docs/decisions/0017-mission-manifest.md): the
+ * RTC backup registers are a RESET CACHE, never the durable truth. Facts that
+ * must survive a full power loss without a trusted VBAT rail live in internal
+ * flash (Tier-1/Tier-2 credentials, the Mission Manifest lifecycle record) or
+ * the external W25Q (science archive). Registers below are diagnostics or
+ * fast-path caches; losing them costs observability, not correctness.
  ******************************************************************************
  */
 

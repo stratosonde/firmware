@@ -1,25 +1,25 @@
-# Host test harness (R49 / issue #46) — builds the real firmware pure-logic
-# sources with the host compiler and runs assert-based tests.
+#Host test harness(R49 / issue #46) — builds the real firmware pure - logic
+#sources with the host compiler and runs assert - based tests.
 #
-# Usage:  make -C tests/host test        (CC overridable: make CC=clang)
-# CI:     .github/workflows/ci.yml runs this on ubuntu-latest (gcc).
+#Usage : make - C tests / host test(CC overridable : make CC = clang)
+#CI :.github / workflows / ci.yml runs this on ubuntu - latest(gcc).
 
 CC      ?= gcc
 PYTHON  ?= python3
-# F-01 (#62): -Wsign-conversion catches the mixed-sign division class of bug
-# Phase 2: -Werror locks the zero-warning baseline (box gcc 10.3.1 + CI)
+#F - 01(#62) : -Wsign - conversion catches the mixed - sign division class of bug
+#Phase 2 : -Werror locks the zero - warning baseline(box gcc 10.3.1 + CI)
 CFLAGS  ?= -std=c99 -Wall -Wextra -Wsign-conversion -Werror -Wno-unused-parameter -g
 INCLUDES := -Istubs -I../../Core/Inc -I../../LoRaWAN/App -I../../Utilities/misc
 
-# Out-of-tree outputs (pretest-hardening handoff 2026-08-15, Phase 1 / PIPE-01):
-# every executable lands under build/<configuration>/ so a changed CFLAGS
-# string can never silently reuse a stale binary, and `git status` stays clean
-# (only tests/host/build/ is ignored). Override per configuration, e.g.
-#   make BUILD_DIR=build/coverage CFLAGS="... --coverage"
+#Out - of - tree outputs(pretest - hardening handoff 2026 - 08 - 15, Phase 1 / PIPE - 01):
+#every executable lands under build / < configuration> / so a changed CFLAGS
+#string can never silently reuse a stale binary, and `git status` stays clean
+#(only tests / host / build / is ignored).Override per configuration, e.g.
+#make BUILD_DIR = build / coverage CFLAGS = "... --coverage"
 BUILD_DIR ?= build/gcc
 ifeq ($(OS),Windows_NT)
-# cmd builtins (forced through the shell by the `if` syntax; CreateProcess
-# fast-path cannot run builtins and plain `mkdir a/b` is not portable)
+#cmd builtins(forced through the shell by the `if ` syntax; CreateProcess
+#fast - path cannot run builtins and plain `mkdir a / b` is not portable)
 MKDIR = if not exist "$(subst /,\,$@)" mkdir "$(subst /,\,$@)"
 RMBUILD = if exist build rmdir /s /q build
 else
@@ -29,120 +29,124 @@ endif
 
 SRCS := test_main.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/mission_logic.c
 
-# Flight-readiness regression suite (2026-08-08 review). Separate binary: it
-# compiles flash_log.c against the simulated NOR backend in fake_w25q.c, which
-# the main runner neither needs nor wants linked in.
+#Flight - readiness regression suite(2026 - 08 - 08 review).Separate binary : it
+#compiles flash_log.c against the simulated NOR backend in fake_w25q.c, which
+#the main runner neither needs nor wants linked in.
 FLIGHT_SRCS := test_flightreadiness.c fake_w25q.c
 FLIGHT_INCLUDES := $(INCLUDES) -I.
 
-# 2026-08-10 review findings: source-scan regressions for the HAL-bound
-# findings (#1/#2/#3/#5, gate half of #6). Self-contained, no firmware objects.
+# 2026 - 08 - 10 review findings : source - scan regressions for the HAL - bound
+#findings(#1 / #2 / #3 / #5, gate half of #6).Self - contained, no firmware objects.
 FINDINGS_SRCS := test_review_findings.c
 
-# 2026-08-11 review: archive-burst FSM (BURST-01, BURST-02). Replays the
-# OnTxData/OnRxData/SendTxData callback order; the model shape is selected by
-# a scan of lora_app.c, so it cannot go green without a firmware change.
+# 2026 - 08 - 11 review : archive - burst FSM(BURST - 01, BURST - 02).Replays the
+#OnTxData / OnRxData / SendTxData callback order; the model shape is selected by
+#a scan of lora_app.c, so it cannot go green without a firmware change.
 BURST_SRCS := test_burst_fsm.c
 
-# 2026-08-11 (second pass) stability review: F-1..F-11. Source scans for the
-# HAL-bound findings plus behavioural F-4 (burst defeats mode hysteresis,
-# needs the real transmit_plan.c/power_model.c) and F-10/F-11 (GNSS parser,
-# atgm336h.c #included by the test TU).
+# 2026 - 08 - 11(second pass) stability review : F - 1..F - 11. Source scans for the
+#HAL - bound findings plus behavioural F - 4(burst defeats mode hysteresis,
+#needs the real transmit_plan.c / power_model.c) and F - 10 / F - 11(GNSS parser,
+#atgm336h.c #included by the test TU).
 STAB_SRCS := test_stability_review.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/sys_caps.c
 
-# R15 (2026-08-11 ChatGPT review): the REAL multiregion_context.c compiled
-# against a fake LoRaMac/LmHandler surface with fault injection
-# (test_multiregion.c #includes the unit under test). Covers R1 (restore
-# fail-closed) and the other session-persistence findings.
+#R15(2026 - 08 - 11 ChatGPT review) : the REAL multiregion_context.c compiled
+#against a fake LoRaMac / LmHandler surface with fault injection
+#(test_multiregion.c #includes the unit under test).Covers R1(restore
+#fail - closed) and the other session - persistence findings.
 MREG_SRCS := test_multiregion.c
 
-# The full-region harness is hermetic: pin every region ON so it does not
-# depend on the local region_set.h defaults (a bench bring-up tree may
-# legitimately default to a subset, e.g. US915-only).
+#The full - region harness is hermetic : pin every region ON so it does not
+#depend on the local region_set.h defaults(a bench bring - up tree may
+#legitimately default to a subset, e.g.US915 - only).
 MREG_ALL_FLAGS := -DSONDE_REGION_US915=1 -DSONDE_REGION_EU868=1 \
     -DSONDE_REGION_AS923=1 -DSONDE_REGION_AU915=1 -DSONDE_REGION_IN865=1 \
     -DSONDE_REGION_KR920=1 -DSONDE_REGION_RU864=1
 
-# Region-set subset build (region_set.h): the SAME harness compiled with a
-# US915-only commissioned set (SONDE_REGION_SUBSET_TEST selects the subset
-# main). Proves a compiled-out region is unjoinable, unswitchable and reads
-# as never-joined even with a stale CRC-valid banked session.
+#Region - set subset build(region_set.h) : the SAME harness compiled with a
+#US915 - only commissioned set(SONDE_REGION_SUBSET_TEST selects the subset
+#main).Proves a compiled - out region is unjoinable, unswitchable and reads
+#as never - joined even with a stale CRC - valid banked session.
 MREG_SUBSET_FLAGS := -DSONDE_REGION_SUBSET_TEST=1 -DSONDE_REGION_US915=1 \
     -DSONDE_REGION_EU868=0 -DSONDE_REGION_AS923=0 -DSONDE_REGION_AU915=0 \
     -DSONDE_REGION_IN865=0 -DSONDE_REGION_KR920=0 -DSONDE_REGION_RU864=0 \
     -Wno-unused-function
 
-# F-002 (#201): the REAL timer_if.c against a minimal RTC HAL fake - proves
-# the post-failover re-init does the work (not just that the call exists).
+#F - 002(#201) : the REAL timer_if.c against a minimal RTC HAL fake - proves
+#the post - failover re - init does the work(not just that the call exists).
 TIMERIF_SRCS := test_timerif.c
 TIMERIF_INCLUDES := $(INCLUDES) -I../../Utilities/timer
 
-# 2026-08-12 review (S-A/S-B/S-C, #211/#212/#213): S-A/S-C structural scans,
-# S-B behavioral against the real power_model.c.
+# 2026 - 08 - 12 review(S - A / S - B / S - C, #211 / #212 / #213) : S - A / S - C structural scans,
+#S - B behavioral against the real power_model.c.
 REVIEW0812_SRCS := test_review_20260812.c ../../Core/Src/power_model.c
 
-# 2026-08-12 stability & predictability deep review (R3 series, #215+):
-# scan-configured scheduler replay (test_burst_fsm.c precedent) for the
-# HAL-bound lora_app.c findings.
+# 2026 - 08 - 12 stability & predictability deep review(R3 series, #215 +):
+#scan - configured scheduler replay(test_burst_fsm.c precedent) for the
+#HAL - bound lora_app.c findings.
 DEEP_SRCS := test_deepreview_20260812.c
 
-# STAB-REVIEW-2026-08-12 (S-04/S-07, #228/#229): the REAL config.c against a
-# stub flash - deadman derivation + validator bounds, behavioural.
+#STAB - REVIEW - 2026 - 08 - 12(S - 04 / S - 07, #228 / #229) : the REAL config.c against a
+#stub flash - deadman derivation + validator bounds, behavioural.
 CONFIG_SRCS := test_config.c
 
-# 2026-08-12 independent deep review (DR series) + stability review P1 GNSS:
-# DR-01/STAB-P1#1/DR-02 behavioural against the real atgm336h.c parser,
-# DR-03 behavioural against the real transmit_plan.c, DR-02c source scan.
+# 2026 - 08 - 12 independent deep review(DR series) + stability review P1 GNSS:
+#DR - 01 / STAB - P1 #1 / DR - 02 behavioural against the real atgm336h.c parser,
+#DR - 03 behavioural against the real transmit_plan.c, DR - 02c source scan.
 DR_SRCS := test_dr_20260812.c ../../Core/Src/power_model.c ../../Core/Src/transmit_plan.c ../../Core/Src/sys_caps.c
 
-# 2026-08-14 review (docs/temp/stratosonde-review-20260814.md):
-# GEO-01 (dataset) / GEO-04 (guards) against the real h3lite submodule sources;
-# PWR-02 behavioural against the real power_model.c. Both red-gated until the
-# owner's RESTRICTED dataset and the bench characterization land.
+# 2026 - 08 - 14 review(docs / temp / stratosonde - review - 20260814.md):
+#GEO - 01(dataset) / GEO - 04(guards)against the real h3lite submodule sources;
+#PWR - 02 behavioural against the real power_model.c.Both red - gated until the
+#owner's RESTRICTED dataset and the bench characterization land.
 GEO_SRCS := test_geo_20260814.c
 GEO_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 
 PWR_SRCS := test_pwr_20260814.c ../../Core/Src/power_model.c
 FIRST_FLIGHT_SRCS := test_first_flight_policy.c ../../Core/Src/first_flight_policy.c
 
-# Refactor stage 1: module contract for the extracted PacketQueue ADT
-# (Core/Src/packet_queue.c). -DENABLE_GNSS_DETAIL_PACKET=1 so the Push path
-# (compiled out of flight builds) is exercised by the contract too.
+#Refactor stage 1 : module contract for the extracted PacketQueue ADT
+#(Core / Src / packet_queue.c).- DENABLE_GNSS_DETAIL_PACKET = 1 so the Push path
+#(compiled out of flight builds) is exercised by the contract too.
 PQ_SRCS := test_packet_queue.c ../../Core/Src/packet_queue.c
 
-# Refactor stage 2: module contract for the extracted NVM slot codec
-# (Core/Src/nvm_slot.c) - header build/plausibility, CRC match, generation
-# race with wraparound, torn-write selection scenarios.
+#Refactor stage 2 : module contract for the extracted NVM slot codec
+#(Core / Src / nvm_slot.c) - header build / plausibility, CRC match, generation
+#race with wraparound, torn - write selection scenarios.
 NVM_SRCS := test_nvm_slot.c ../../Core/Src/nvm_slot.c
 
-# Refactor stage 3: module contract for the extracted geofence/region policy
-# (Core/Src/region_policy.c). h3lite include path for RegionId/REGION_*.
+#H - 01(#281) : durable mission - lifecycle manifest.Pure rules + full I / O path
+#against an in - memory internal - flash fake(flash_if.h stub).
+MANIFEST_SRCS := test_mission_manifest.c ../../Core/Src/mission_manifest.c
+
+#Refactor stage 3 : module contract for the extracted geofence / region policy
+#(Core / Src / region_policy.c).h3lite include path for RegionId / REGION_ *.
 REGION_SRCS := test_region_policy.c ../../Core/Src/region_policy.c
 REGION_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 
-# Refactor stage 4: module contract for the extracted GNSS acquisition policy
-# (Core/Src/gnss_acquire.c) - exhaustive civil-date proof 1970..2100, epoch
-# composition, S-A iteration-budget contract, package-completeness rule.
+#Refactor stage 4 : module contract for the extracted GNSS acquisition policy
+#(Core / Src / gnss_acquire.c) - exhaustive civil - date proof 1970..2100, epoch
+#composition, S - A iteration - budget contract, package - completeness rule.
 GNSS_ACQ_SRCS := test_gnss_acquire.c ../../Core/Src/gnss_acquire.c
 
-# Refactor stage 5: shadow-run of the extracted pure TX FSM (tx_fsm.c)
-# against the characterised, scan-locked replay model (included by the test).
+#Refactor stage 5 : shadow - run of the extracted pure TX FSM(tx_fsm.c)
+#against the characterised, scan - locked replay model(included by the test).
 TXSHADOW_SRCS := test_tx_fsm_shadow.c ../../Core/Src/tx_fsm.c
 
-# SP-01 (#244), 2026-08-13 SP-series review: GNSS UART error recovery - any
-# FE/NE killed the circular DMA because the HAL never consults the
-# DMADisableonRxError bit S-C (#212) relied on. Behavioural against the real
-# atgm336h.c (#included by the test TU) + structural scans of usart_if.c/main.c.
+#SP - 01(#244), 2026 - 08 - 13 SP - series review : GNSS UART error recovery - any
+#FE / NE killed the circular DMA because the HAL never consults the
+#DMADisableonRxError bit S - C(#212) relied on.Behavioural against the real
+#atgm336h.c(#included by the test TU) + structural scans of usart_if.c / main.c.
 SP_SRCS := test_sp_20260813.c
 
-# 2026-08-13 LT series (long-term stability & predictability pass). Behavioural
-# LT-01 (science-timer period model, shape gated by a scan of lora_app.c) and
-# LT-06 (compensation-table monotonicity against the real power_model.c);
-# structural scans for the HAL-/flow-bound findings.
+# 2026 - 08 - 13 LT series(long - term stability & predictability pass).Behavioural
+#LT - 01(science - timer period model, shape gated by a scan of lora_app.c) and
+#LT - 06(compensation - table monotonicity against the real power_model.c);
+#structural scans for the HAL - / flow - bound findings.
 LT_SRCS := test_lt_20260813.c ../../Core/Src/power_model.c
 
-# Sources #included by the test TUs (not linked separately) must still be
-# prerequisites or make will not rebuild when they change.
+#Sources #included by the test TUs(not linked separately) must still be
+#prerequisites or make will not rebuild when they change.
 INCLUDED_SRCS := ../../Core/Src/payload_encode.c ../../Core/Src/atgm336h.c ../../Core/Src/flash_log.c
 
 $(BUILD_DIR)/test_runner$(EXE): $(SRCS) $(INCLUDED_SRCS) | $(BUILD_DIR)
@@ -160,8 +164,8 @@ $(BUILD_DIR)/test_burst$(EXE): $(BURST_SRCS) ../../LoRaWAN/App/lora_app.c ../../
 $(BUILD_DIR)/test_stability$(EXE): $(STAB_SRCS) ../../LoRaWAN/App/lora_app.c ../../Core/Src/stm32_lpm_if.c ../../Core/Src/config.c ../../Core/Src/atgm336h.c ../../Core/Src/sys_sensors.c ../../Core/Src/sys_caps.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(STAB_SRCS) -lm
 
-# -fshort-enums matches the arm-none-eabi ABI default - the target builds
-# LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
+#- fshort - enums matches the arm - none - eabi ABI default - the target builds
+#LoRaMacRegion_t as 1 byte, and multiregion_context.c pins the persisted
 #struct layout with _Static_assert(offsetof(crc16) == 76, sizeof == 80).
 $(BUILD_DIR)/test_multiregion$(EXE): $(MREG_SRCS) ../../Core/Src/multiregion_context.c ../../Core/Inc/multiregion_context.h ../../Core/Inc/region_set.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -fshort-enums $(MREG_ALL_FLAGS) $(INCLUDES) -o $@ $(MREG_SRCS) -lm
@@ -240,6 +244,12 @@ $(BUILD_DIR)/test_nvm$(EXE): $(NVM_SRCS) ../../Core/Inc/nvm_slot.h | $(BUILD_DIR
 
 nvm: $(BUILD_DIR)/test_nvm$(EXE)
 	./$(BUILD_DIR)/test_nvm$(EXE)
+
+$(BUILD_DIR)/test_manifest$(EXE): $(MANIFEST_SRCS) ../../Core/Inc/mission_manifest.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DSONDE_FLIGHT_BUILD $(INCLUDES) -o $@ $(MANIFEST_SRCS) -lm
+
+manifest: $(BUILD_DIR)/test_manifest$(EXE)
+	./$(BUILD_DIR)/test_manifest$(EXE)
 
 $(BUILD_DIR)/test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(REGION_INCLUDES) -o $@ $(REGION_SRCS) -lm
@@ -467,7 +477,7 @@ all: check characterization
 
 # Refactor stage 7: module-contract suites only - the "what is proven about
 # module X" entry point (see R2_TEST_MAP.md). `all` keeps running everything.
-contracts: first-flight pq nvm region gnssacq txshadow arming appadapters
+contracts: first-flight pq nvm manifest region gnssacq txshadow arming appadapters
 
 clean:
 	-$(RMBUILD)

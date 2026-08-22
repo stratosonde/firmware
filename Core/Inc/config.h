@@ -48,8 +48,8 @@ extern "C" {
  *   0x0803D800  page 123 - Tier-2 counters slot A (ping-pong)
  *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
  *   0x0803E800  page 125 - System configuration     (this module)
- *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS)
- *   0x0803F800  page 127 - LoRaWAN NVM slot B (F-016/#54 ping-pong store)
+ *   0x0803F000  page 126 - LoRaWAN NVM context      (LORAWAN_NVM_BASE_ADDRESS, dead code)
+ *   0x0803F800  page 127 - Mission Manifest         (H-01/#281 mission_manifest.c)
  *
  * RULE (mirrors backup_regs.h): any new flash-page user must add its
  * allocation to this map AND the mirror in multiregion_context.c first

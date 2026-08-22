@@ -752,6 +752,34 @@ static void test_c01_flight_door_gated(const char *mstate, const char *mregh) {
 }
 
 /* ========================================================================== */
+/* H-01 (#281) - durable mission manifest consulted in Init, committed at door */
+/* ========================================================================== */
+static void test_h01_manifest_wiring(const char *mstate) {
+  printf("H-01 (#281): manifest consulted in Init, committed at EnterFlight\n");
+  /* Init: MissionManifest_IsFlightStarted consulted before the DR3/bank
+   * decision. */
+  char *init = function_body(mstate, "void MissionState_Init(");
+  CHECK(init != NULL);
+  if (init) {
+    const char *m = strstr(init, "MissionManifest_IsFlightStarted");
+    CHECK_REGRESSION(m != NULL, "H-01-init-manifest");
+    /* Decision order: the manifest latch gates the ASCENT decision before the
+     * DR3 persisted state is applied (manifest first, DR3 as fast cache). */
+    const char *app = strstr(init, "s_state = persisted;");
+    CHECK_REGRESSION(m != NULL && app != NULL && m < app, "H-01-order");
+    free(init);
+  }
+  /* EnterFlight: the durable latch is committed at the door. */
+  char *ef = function_body(mstate, "void MissionState_EnterFlight(");
+  CHECK(ef != NULL);
+  if (ef) {
+    CHECK_REGRESSION(strstr(ef, "MissionManifest_CommitFlightStarted") != NULL,
+                     "H-01-door-commit");
+    free(ef);
+  }
+}
+
+/* ========================================================================== */
 /* M-01 (#289) - deferred ring reconstruction rides the header-flush wire      */
 /* ========================================================================== */
 static void test_m01_recon_hook(const char *app) {
@@ -829,6 +857,8 @@ int main(void) {
   test_h02_config_before_lorawan_init(mainc);
   printf("\n");
   test_m01_recon_hook(app);
+  printf("\n");
+  test_h01_manifest_wiring(mstate);
 
   /* pooled scan buffers: freed at exit (scan_pool_track) */
   /* pooled scan buffers: freed at exit (scan_pool_track) */

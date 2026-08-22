@@ -13,7 +13,8 @@
 #include "SEGGER_RTT.h"
 #include "backup_regs.h"
 #include "main.h"
-#include "mission_logic.h" /* STAB-06/07 (#153/#154): pure detectors */
+#include "mission_logic.h"    /* STAB-06/07 (#153/#154): pure detectors */
+#include "mission_manifest.h" /* H-01 (#281): durable lifecycle record */
 #include "multiregion_context.h"
 #include "sonde_log.h" /* R50 (#47): compile-time log gate */
 
@@ -109,12 +110,34 @@ void MissionState_Init(void) {
    * DDR-0018 preserved for the true ambiguity: bank commissioned but DR3
    * wiped (power loss without VBAT) mid-flight -> ASCENT, never
    * commissioning with its join/LED privileges. */
-  if (bkp_valid) {
-    s_state = persisted;
-  } else if (bank_commissioned) {
+  /* H-01 (#281): the durable manifest is consulted FIRST. Its one-way
+   * FLIGHT_STARTED latch survives a full power loss without VBAT, so a
+   * commissioned unit power-cycled on the ground (storage, transport,
+   * battery service) reboots into COMMISSIONING and the arming/launch door
+   * works as designed. DR3 remains the fast reset cache; the session bank
+   * door anchor (DDR-0002) is the floor for a manifest-less unit. */
+  bool manifest_flight = MissionManifest_IsFlightStarted();
+  if (manifest_flight) {
     s_state = MISSION_ASCENT;
+  } else if (bkp_valid) {
+    s_state = persisted;
   } else {
+    /* H-01 (#281): latch clear + no fast cache -> COMMISSIONING, even with a
+     * commissioned bank. The durable manifest's ABSENCE of FLIGHT_STARTED
+     * means the door never opened; a commissioned unit power-cycled on the
+     * ground (bank written, never armed, DR3 wiped with the backup domain)
+     * must not land in ASCENT. The airborne-VBAT-loss case stays protected:
+     * a real flight committed the latch at the door, so a genuinely airborne
+     * unit reaches here only if the manifest page itself is unreadable -
+     * which the next boot's fresh COMMISSIONING + launch detector re-opens
+     * within one pressure-departure window. */
     s_state = MISSION_COMMISSIONING;
+  }
+  if (manifest_flight && bkp_valid && persisted != MISSION_ASCENT &&
+      persisted != MISSION_FLOAT) {
+    /* The durable record says flight but the (faster) cache disagrees -
+     * trust the manifest, repair DR3 below via Persist(). */
+    SONDE_LOG_STR("MissionState: DR3 stale vs manifest FLIGHT_STARTED - repaired\r\n");
   }
 
   /* F1 (#167): restore the launch reference for a persisted ASCENT, or the
@@ -128,6 +151,12 @@ void MissionState_Init(void) {
     if ((lr & LAUNCH_REF_MASK) == LAUNCH_REF_MAGIC && (lr & 0xFFFFUL) > 0) {
       LaunchDetector_SetRef(&s_launch_det,
                             (float)(lr & 0xFFFFUL) / 10.0f, 0);
+    } else if (MissionManifest_LaunchRefHpaX10() > 0U) {
+      /* H-01 (#281): DR15 died with the backup domain, but the manifest
+       * committed the launch reference at the door - restore it so the
+       * FLOAT min-ascent guard survives a full power loss. */
+      LaunchDetector_SetRef(&s_launch_det,
+                            (float)MissionManifest_LaunchRefHpaX10() / 10.0f, 0);
     } else {
       s_no_launch_ref = true;
       SONDE_LOG_STR("MissionState: ASCENT without launch ref - FLOAT on window guards only\r\n");
@@ -156,6 +185,19 @@ void MissionState_EnterFlight(void) {
   if (s_state == MISSION_COMMISSIONING) {
     s_state = MISSION_ASCENT;
     MissionState_Persist();
+    /* H-01 (#281): commit the durable FLIGHT_STARTED latch - the ONE
+     * sanctioned post-commissioning internal-flash write, at the door-open
+     * instant (operator's hands, ground power). The launch reference is
+     * taken from the detector when set (launch-detection path) and 0 for a
+     * ground arm (a ground-armed unit has no departure reference; the F1
+     * no-ref fallback already tolerates that). DR15 is still written by the
+     * caller (launch path) for the fast cache. */
+    uint32_t ref_x10 = LaunchDetector_HasRef(&s_launch_det)
+                           ? (uint32_t)(LaunchDetector_RefHpa(&s_launch_det) * 10.0f)
+                           : 0U;
+    if (MissionManifest_CommitFlightStarted(ref_x10, 0U) != MANIFEST_OK) {
+      SONDE_LOG_STR("MissionState: WARNING manifest commit failed - flight state not durable\r\n");
+    }
     SONDE_LOG_STR("MissionState: COMMISSIONING -> FLIGHT (ASCENT)\r\n");
   }
 }

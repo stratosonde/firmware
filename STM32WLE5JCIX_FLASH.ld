@@ -53,7 +53,7 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
  *   0x0803E000  page 124 - Tier-2 counters slot B (ping-pong)
  *   0x0803E800  page 125 - System configuration    (CONFIG_FLASH_ADDRESS)
  *   0x0803F000  page 126 - LoRaWAN NVM context     (LORAWAN_NVM_BASE_ADDRESS)
- *   0x0803F800  page 127 - legacy multi-region page (retired, reserved)
+ *   0x0803F800  page 127 - Mission Manifest         (H-01/#281)
  *
  * The FLASH region below is therefore shortened from 256K to 240K so the
  * linker can never place code into these eight pages.
