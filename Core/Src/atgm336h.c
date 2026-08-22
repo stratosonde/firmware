@@ -1,32 +1,32 @@
 /**
-  ******************************************************************************
-  * @file    atgm336h.c
-  * @brief   ATGM336H-5N31 GNSS Module Driver Implementation
-  ******************************************************************************
-  * @attention
-  *
-  * This driver provides interface to the ATGM336H-5N31 GNSS module
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    atgm336h.c
+ * @brief   ATGM336H-5N31 GNSS Module Driver Implementation
+ ******************************************************************************
+ * @attention
+ *
+ * This driver provides interface to the ATGM336H-5N31 GNSS module
+ *
+ ******************************************************************************
+ */
 
 /* Includes ------------------------------------------------------------------*/
 #include "atgm336h.h"
 #include "SEGGER_RTT.h"
-#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
-#include "usart_if.h"
+#include "sonde_log.h" /* R50 (#47): compile-time log gate */
 #include "stm32_lpm.h"
+#include "usart_if.h"
 #include "utilities_def.h"
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
-static GNSS_HandleTypeDef *pHgnss = NULL;  // For DMA ISR callback access
+static GNSS_HandleTypeDef *pHgnss = NULL; // For DMA ISR callback access
 
 /* Private function prototypes -----------------------------------------------*/
 static double GNSS_ConvertToDecimalDegrees(double raw_degrees);
@@ -37,19 +37,17 @@ static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence);
 static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss);
 static bool GNSS_VerifyChecksum(const char *sentence);
-static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss);  /* LT-04 (#276) */
+static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss); /* LT-04 (#276) */
 
 /* Exported functions --------------------------------------------------------*/
 
 /**
-  * @brief  Initialize GNSS module
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL)
-  {
+ * @brief  Initialize GNSS module
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ */
+GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL) {
     return GNSS_ERROR;
   }
 
@@ -61,7 +59,7 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   memset(&hgnss->extended, 0, sizeof(GNSS_ExtendedData_t));
   hgnss->is_initialized = false;
   hgnss->is_powered = false;
-  
+
   /* Initialize DMA circular buffer */
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   hgnss->dma_head = 0;
@@ -70,7 +68,7 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   hgnss->dma_produced_total = 0;
   hgnss->dma_consumed_total = 0;
   hgnss->dma_overrun_count = 0;
-  hgnss->rx_dma_active = false;      /* SP-01 (#244): no stream expected yet */
+  hgnss->rx_dma_active = false; /* SP-01 (#244): no stream expected yet */
   hgnss->uart_error_count = 0;
 
   /* Initialize NMEA sentence processing */
@@ -92,11 +90,11 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
   /* FULL POWER-OFF MODE: PB10=LOW, PB5=LOW (0µA at startup) */
   /* GPS module is completely off - no ephemeris retention */
   /* First fix will be cold-start (~30-60 seconds), but ensures clean UART/DMA startup */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);   // PB10 LOW (no power)
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);     // PB5 LOW (disabled)
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET); // PB10 LOW (no power)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW (disabled)
 
   SONDE_LOG_STR("GNSS_Init: PB10=LOW, PB5=LOW (fully powered off, 0µA at startup)\r\n");
-  
+
   /* NOTE: UART pins (PB6/PB7) left in UART mode (configured by main.c) */
   /* No parasitic power issue since GPS is fully off (PB10=LOW, PB5=LOW) */
   /* UART pins will only be forced to OUTPUT-LOW in GNSS_EnterStandby() */
@@ -108,32 +106,29 @@ GNSS_StatusTypeDef GNSS_Init(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Power on GNSS module (commissioning path)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  * @note   F2 (#168): CANONICAL power-up. GNSS_Init drives PB10/PB5 LOW
-  *         (module fully off), so this function MUST assert them — the old
-  *         "pins stay HIGH permanently" comment was stale and commissioning
-  *         could configure a powered-off receiver.
-  */
-GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL || !hgnss->is_initialized)
-  {
+ * @brief  Power on GNSS module (commissioning path)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ * @note   F2 (#168): CANONICAL power-up. GNSS_Init drives PB10/PB5 LOW
+ *         (module fully off), so this function MUST assert them — the old
+ *         "pins stay HIGH permanently" comment was stale and commissioning
+ *         could configure a powered-off receiver.
+ */
+GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL || !hgnss->is_initialized) {
     return GNSS_ERROR;
   }
 
-  if (hgnss->is_powered)
-  {
+  if (hgnss->is_powered) {
     return GNSS_OK; // Already powered on
   }
 
   /* F2 (#168): assert power + enable BEFORE any UART traffic */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   /* PB10 HIGH */
-  HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_SET);   /* PB5 HIGH */
-  HAL_Delay(100);  /* module power/enable stabilization */
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET); /* PB10 HIGH */
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);   /* PB5 HIGH */
+  HAL_Delay(100);                                                   /* module power/enable stabilization */
   SONDE_LOG_STR("GNSS_PowerOn: PWR/EN asserted, waking GPS via UART...\r\n");
-  
+
   /* Disable STOP mode while GNSS is active */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
 
@@ -144,7 +139,7 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   hgnss->dma_produced_total = 0;
   hgnss->dma_consumed_total = 0;
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
-  
+
   /* Reset NMEA sentence processing */
   hgnss->nmea_length = 0;
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
@@ -156,9 +151,8 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
 
   /* Start DMA circular buffer reception */
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
-  
-  if (dma_status != HAL_OK)
-  {
+
+  if (dma_status != HAL_OK) {
     /* R9 (#194): transactional startup - EVERY failure from STARTING routes
      * through one cleanup that returns all hardware to OFF. Previously this
      * path left the module electrically powered (~25-30 mA) and STOP mode
@@ -176,8 +170,7 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
   hgnss->rx_dma_active = true;
 
   /* Send wake character to exit standby mode */
-  if (HAL_UART_Transmit(hgnss->huart, (uint8_t*)GNSS_WAKE_CHAR, 1, 100) != HAL_OK)
-  {
+  if (HAL_UART_Transmit(hgnss->huart, (uint8_t *)GNSS_WAKE_CHAR, 1, 100) != HAL_OK) {
     /* R9 (#194): same transactional cleanup - DMA was started, so abort it
      * too on the way back to OFF. (LT-04/#276: GNSS_TeardownToOff does both,
      * plus the SP-09/#249 sleep-safe pins.) */
@@ -185,8 +178,8 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
     SONDE_LOG_STR("GNSS_PowerOn: wake TX FAILED - rolled back to OFF\r\n");
     return GNSS_ERROR;
   }
-  HAL_Delay(100);  // GPS takes ~100ms to wake and start NMEA output
-  
+  HAL_Delay(100); // GPS takes ~100ms to wake and start NMEA output
+
   hgnss->is_powered = true;
   SONDE_LOG_STR("GNSS_PowerOn: DMA started, GPS woken from standby\r\n");
 
@@ -194,21 +187,19 @@ GNSS_StatusTypeDef GNSS_PowerOn(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Power off GNSS module (sends standby command, re-enables MCU sleep)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  * @note   Now uses PCAS12 standby command (CASIC protocol) instead of toggling pins
-  */
-GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL || !hgnss->is_initialized)
-  {
+ * @brief  Power off GNSS module (sends standby command, re-enables MCU sleep)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ * @note   Now uses PCAS12 standby command (CASIC protocol) instead of toggling pins
+ */
+GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL || !hgnss->is_initialized) {
     return GNSS_ERROR;
   }
 
   /* OPTIONAL: Send standby command (commented out - using EN/PWR pins instead) */
   /* GNSS_StatusTypeDef cmd_status = GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_STANDBY);
-  
+
   if (cmd_status == GNSS_OK)
   {
     SONDE_LOG_STR("[GPS STANDBY] Standby command sent successfully (PCAS12)\r\n");
@@ -217,7 +208,7 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   {
     SONDE_LOG_STR("[GPS STANDBY] ERROR - Standby command TX failed!\r\n");
   }
-  
+
   HAL_Delay(200); */
 
   /* SP-01 (#244): the stream is no longer expected live BEFORE the abort —
@@ -225,8 +216,7 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   hgnss->rx_dma_active = false;
 
   /* Abort DMA reception */
-  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
-  {
+  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered) {
     HAL_UART_AbortReceive(hgnss->huart);
     SONDE_LOG_STR("GNSS_PowerOff: DMA receive aborted\r\n");
   }
@@ -238,61 +228,63 @@ GNSS_StatusTypeDef GNSS_PowerOff(GNSS_HandleTypeDef *hgnss)
   /* FW-8: this function does NOT touch PB10/PB5 — they keep whatever state
    * the caller established (GNSS_EnterStandby() drives both LOW, 0µA). */
   SONDE_LOG_STR("GNSS_PowerOff: DMA aborted, pins unchanged, MCU can now sleep\r\n");
-  
+
   hgnss->is_powered = false;
 
   return GNSS_OK;
 }
 
 /**
-  * @brief  Configure GNSS module with initialization commands
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  */
+ * @brief  Configure GNSS module with initialization commands
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ */
 /* R3-06 (#220): receiver-side behavioral verification. PCAS writes have no
  * query/ACK, so the only in-band evidence that the NMEA mask took effect is
  * the OUTPUT stream changing: GGA keeps flowing while GSV stops. Streams the
  * DMA buffer for window_ms with a rolling 4-char matcher (split-sentence
  * safe), counting whole "GGA,"/"GSV," sentence IDs. */
 static void GNSS_SampleSentenceMix(GNSS_HandleTypeDef *hgnss, uint32_t window_ms,
-                                   uint32_t *gga_count, uint32_t *gsv_count)
-{
+                                   uint32_t *gga_count, uint32_t *gsv_count) {
   *gga_count = 0;
   *gsv_count = 0;
-  if (hgnss == NULL || hgnss->huart == NULL || hgnss->huart->hdmarx == NULL)
-  {
+  if (hgnss == NULL || hgnss->huart == NULL || hgnss->huart->hdmarx == NULL) {
     return;
   }
 
   uint16_t prev = (uint16_t)((GNSS_DMA_BUFFER_SIZE -
-      __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) % GNSS_DMA_BUFFER_SIZE);
+                              __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) %
+                             GNSS_DMA_BUFFER_SIZE);
   char shift[4];
   uint8_t shift_len = 0;
   uint32_t start = HAL_GetTick();
-  while ((HAL_GetTick() - start) < window_ms)
-  {
+  while ((HAL_GetTick() - start) < window_ms) {
     uint16_t head = (uint16_t)((GNSS_DMA_BUFFER_SIZE -
-        __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) % GNSS_DMA_BUFFER_SIZE);
-    while (prev != head)
-    {
+                                __HAL_DMA_GET_COUNTER(hgnss->huart->hdmarx)) %
+                               GNSS_DMA_BUFFER_SIZE);
+    while (prev != head) {
       char c = (char)hgnss->dma_buffer[prev];
       prev = (uint16_t)((prev + 1U) % GNSS_DMA_BUFFER_SIZE);
-      if (shift_len < 4) { shift[shift_len++] = c; }
-      else { memmove(shift, shift + 1, 3); shift[3] = c; }
-      if (shift_len == 4)
-      {
-        if (memcmp(shift, "GGA,", 4) == 0) { (*gga_count)++; }
-        else if (memcmp(shift, "GSV,", 4) == 0) { (*gsv_count)++; }
+      if (shift_len < 4) {
+        shift[shift_len++] = c;
+      } else {
+        memmove(shift, shift + 1, 3);
+        shift[3] = c;
+      }
+      if (shift_len == 4) {
+        if (memcmp(shift, "GGA,", 4) == 0) {
+          (*gga_count)++;
+        } else if (memcmp(shift, "GSV,", 4) == 0) {
+          (*gsv_count)++;
+        }
       }
     }
     HAL_Delay(20);
   }
 }
 
-GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL || !hgnss->is_powered)
-  {
+GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL || !hgnss->is_powered) {
     return GNSS_ERROR;
   }
 
@@ -305,61 +297,55 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
   /* R26: flight mask is GGA+RMC+VTG with GSV off (bandwidth); the old
    * "GGA+RMC only" log string was never true. */
   SONDE_LOG_STR("Sending: NMEA config (GGA+RMC+VTG, GSV off)...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_NMEA_CONFIG) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_NMEA_CONFIG) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to send NMEA config\r\n");
     cfg_failures++;
   }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  HAL_Delay(10); /* Minimal 10ms delay for GNSS module to process command */
 
   /* Send constellation selection command (GPS+GLONASS) */
   SONDE_LOG_STR("Sending: Constellation select (GPS+GLONASS)...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_CONSTELLATION) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_CONSTELLATION) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to send constellation config\r\n");
     cfg_failures++;
   }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  HAL_Delay(10); /* Minimal 10ms delay for GNSS module to process command */
 
   /* CRITICAL: Send airborne dynamic model command (defeats 18km CoCom limit) */
   SONDE_LOG_STR("Sending: AIRBORNE dynamic model (defeats 18km CoCom limit)...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_AIRBORNE_MODE) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_AIRBORNE_MODE) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to send airborne mode - GPS may lose fix above 18km!\r\n");
     cfg_failures++;
   }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  HAL_Delay(10); /* Minimal 10ms delay for GNSS module to process command */
 
   /* Send update rate configuration (1 Hz) */
   SONDE_LOG_STR("Sending: Update rate (1 Hz)...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_UPDATE_RATE) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_UPDATE_RATE) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to send update rate\r\n");
     cfg_failures++;
   }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
+  HAL_Delay(10); /* Minimal 10ms delay for GNSS module to process command */
 
   /* Send satellite system configuration (GPS + BeiDou + GLONASS) */
   SONDE_LOG_STR("Sending: Satellite systems (GPS+BeiDou+GLONASS)...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SATELLITE_SYS) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SATELLITE_SYS) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to send satellite config\r\n");
     cfg_failures++;
   }
-  HAL_Delay(10);  /* Minimal 10ms delay for GNSS module to process command */
-  
+  HAL_Delay(10); /* Minimal 10ms delay for GNSS module to process command */
+
   /* R24: PCAS11,2 ("fix mode") send DELETED. PCAS11 is one dynamic-model
    * setting — a second write overwrites the airborne model set above and
    * re-enables the 18 km CoCom limit. Airborne must be the LAST PCAS11 write. */
-  
+
   /* Save all configuration to GPS internal flash (PCAS00) */
   SONDE_LOG_STR("Sending: Save configuration to flash...\r\n");
-  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SAVE_CONFIG) != GNSS_OK)
-  {
+  if (GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_SAVE_CONFIG) != GNSS_OK) {
     SONDE_LOG_STR("WARNING: Failed to save configuration\r\n");
     cfg_failures++;
   }
-  HAL_Delay(100);  /* Give GPS time to save to flash */
+  HAL_Delay(100); /* Give GPS time to save to flash */
 
   /* R3-06 (#220): receiver-side verification of the NMEA mask. The PCAS
    * write protocol has no query/ACK, so the only in-band evidence is the
@@ -373,8 +359,7 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
             nmea_verified ? "VERIFIED receiver-side" : "NO receiver-side evidence");
 
   /* F2 (#168): never claim success the receiver did not confirm */
-  if (cfg_failures > 0)
-  {
+  if (cfg_failures > 0) {
     SONDE_LOG("=== GNSS Configuration FAILED (%u command(s) not sent) ===\r\n\r\n",
               cfg_failures);
     return GNSS_ERROR;
@@ -385,13 +370,10 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
    * in-band (no PCAS query): the airborne dynamic model and the flash save -
    * those need the bench commissioning procedure (full power removal, cold
    * restart, controlled acquisition check). */
-  if (nmea_verified)
-  {
+  if (nmea_verified) {
     SONDE_LOG_STR("=== GNSS config transmitted; NMEA mask VERIFIED receiver-side ===\r\n");
     SONDE_LOG_STR("    (airborne model + flash save: transmitted, not receiver-verifiable - bench commissioning check required)\r\n\r\n");
-  }
-  else
-  {
+  } else {
     SONDE_LOG_STR("=== GNSS config transmitted; UNVERIFIED - no receiver-side evidence (see bench commissioning procedure) ===\r\n\r\n");
   }
 
@@ -402,35 +384,31 @@ GNSS_StatusTypeDef GNSS_Configure(GNSS_HandleTypeDef *hgnss)
  * HAL_Delay spin with no IWDG refresh). Don't leave brick functions behind. */
 
 /**
-  * @brief  Process received UART data byte by byte (LEGACY - kept for compatibility)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  data: Received byte
-  * @retval GNSS status
-  * @note   This function is no longer used in DMA mode but kept for legacy support
-  */
-GNSS_StatusTypeDef GNSS_ProcessByte(GNSS_HandleTypeDef *hgnss, uint8_t data)
-{
-  if (hgnss == NULL)
-  {
+ * @brief  Process received UART data byte by byte (LEGACY - kept for compatibility)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  data: Received byte
+ * @retval GNSS status
+ * @note   This function is no longer used in DMA mode but kept for legacy support
+ */
+GNSS_StatusTypeDef GNSS_ProcessByte(GNSS_HandleTypeDef *hgnss, uint8_t data) {
+  if (hgnss == NULL) {
     return GNSS_ERROR;
   }
 
   /* This function is deprecated in favor of DMA circular buffer processing */
   /* See GNSS_ProcessDMABuffer() for the new implementation */
-  
+
   return GNSS_OK;
 }
 
 /**
-  * @brief  Parse NMEA sentence
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: NMEA sentence string
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
-  if (hgnss == NULL || sentence == NULL)
-  {
+ * @brief  Parse NMEA sentence
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  sentence: NMEA sentence string
+ * @retval GNSS status
+ */
+GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentence) {
+  if (hgnss == NULL || sentence == NULL) {
     return GNSS_ERROR;
   }
 
@@ -440,8 +418,7 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   // SONDE_LOG_STR("\r\n");
 
   /* Verify checksum if present */
-  if (!GNSS_VerifyChecksum(sentence))
-  {
+  if (!GNSS_VerifyChecksum(sentence)) {
     SONDE_LOG_STR("[NMEA] Checksum FAILED\r\n");
     return GNSS_INVALID;
   }
@@ -449,8 +426,7 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   /* Parse GGA sentence (position and altitude) */
   /* Support both GPS-only ($GPGGA) and multi-GNSS ($GNGGA) formats */
   if (strncmp(sentence, NMEA_GGA, strlen(NMEA_GGA)) == 0 ||
-      strncmp(sentence, "$GNGGA", 6) == 0)
-  {
+      strncmp(sentence, "$GNGGA", 6) == 0) {
     /* LT-10 (#278): DR-01 (#236) rejects bad sentences - never recompute
      * vertical speed (or advance prev_altitude/prev_timestamp) on a
      * rejected parse; the return value already exists and is correct. */
@@ -462,8 +438,7 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   /* Parse RMC sentence (speed and course) */
   /* Support both GPS-only ($GPRMC) and multi-GNSS ($GNRMC) formats */
   else if (strncmp(sentence, NMEA_RMC, strlen(NMEA_RMC)) == 0 ||
-           strncmp(sentence, "$GNRMC", 6) == 0)
-  {
+           strncmp(sentence, "$GNRMC", 6) == 0) {
     GNSS_ParseRMC(hgnss, sentence);
   }
   /* Parse GSV sentence (satellites in view) */
@@ -471,15 +446,13 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
   else if (strncmp(sentence, NMEA_GSV, strlen(NMEA_GSV)) == 0 ||
            strncmp(sentence, "$GNGSV", 6) == 0 ||
            strncmp(sentence, "$GLGSV", 6) == 0 ||
-           strncmp(sentence, "$BDGSV", 6) == 0)
-  {
+           strncmp(sentence, "$BDGSV", 6) == 0) {
     GNSS_ParseGSV(hgnss, sentence);
   }
   /* Parse VTG sentence (track and ground speed) */
   /* Support GPS ($GPVTG) and multi-GNSS ($GNVTG) formats */
   else if (strncmp(sentence, NMEA_VTG, strlen(NMEA_VTG)) == 0 ||
-           strncmp(sentence, "$GNVTG", 6) == 0)
-  {
+           strncmp(sentence, "$GNVTG", 6) == 0) {
     GNSS_ParseVTG(hgnss, sentence);
   }
 
@@ -487,14 +460,12 @@ GNSS_StatusTypeDef GNSS_ParseNMEA(GNSS_HandleTypeDef *hgnss, const char *sentenc
 }
 
 /**
-  * @brief  Check if fix is valid
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval true if valid fix, false otherwise
-  */
-bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL)
-  {
+ * @brief  Check if fix is valid
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval true if valid fix, false otherwise
+ */
+bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL) {
     return false;
   }
 
@@ -504,10 +475,8 @@ bool GNSS_IsFixValid(GNSS_HandleTypeDef *hgnss)
 /* R2-16 (#120): position trust gate for LastPos_Store. data.valid alone is
  * not enough: RMC 'A' sets it without any lat/lon tokens, and a partial GGA
  * leaves (0,0) standing. */
-bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL)
-  {
+bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL) {
     return false;
   }
 
@@ -519,20 +488,18 @@ bool GNSS_HasPosition(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Check if fix meets quality thresholds for production use
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval true if fix is good quality, false otherwise
-  * @note   Good quality defined as: valid, 3D fix, 4+ satellites, HDOP <= 5.0
-  * @note   A5 (#284/H-08): this is a low-level driver invariant with
-  *         HARDCODED thresholds - NOT the mission fix-acceptance predicate.
-  *         The one authoritative, configured acceptance rule is
-  *         GnssAcquire_FixAccepted() (gnss_acquire.c); lora_app.c routes
-  *         every location-freshness decision through it.
-  */
-bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL)
-  {
+ * @brief  Check if fix meets quality thresholds for production use
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval true if fix is good quality, false otherwise
+ * @note   Good quality defined as: valid, 3D fix, 4+ satellites, HDOP <= 5.0
+ * @note   A5 (#284/H-08): this is a low-level driver invariant with
+ *         HARDCODED thresholds - NOT the mission fix-acceptance predicate.
+ *         The one authoritative, configured acceptance rule is
+ *         GnssAcquire_FixAccepted() (gnss_acquire.c); lora_app.c routes
+ *         every location-freshness decision through it.
+ */
+bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL) {
     return false;
   }
 
@@ -550,30 +517,27 @@ bool GNSS_IsFixGoodQuality(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Validate GPS coordinates are within valid ranges
-  * @param  lat: Latitude in decimal degrees
-  * @param  lon: Longitude in decimal degrees
-  * @retval true if coordinates are valid, false otherwise
-  */
-bool GNSS_ValidateCoordinates(float lat, float lon)
-{
+ * @brief  Validate GPS coordinates are within valid ranges
+ * @param  lat: Latitude in decimal degrees
+ * @param  lon: Longitude in decimal degrees
+ * @retval true if coordinates are valid, false otherwise
+ */
+bool GNSS_ValidateCoordinates(float lat, float lon) {
   /* R32 (#57): range-only. (0,0) is a legitimate Gulf of Guinea fix; a no-fix
    * state is detected by token presence in the parser (have_lat/have_lon) and
    * by the data.valid flag - never by a magic coordinate value. */
-  return (lat >= -90.0f && lat <= 90.0f && 
+  return (lat >= -90.0f && lat <= 90.0f &&
           lon >= -180.0f && lon <= 180.0f);
 }
 
 /**
-  * @brief  Send command to GNSS module
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  cmd: Command string
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
-{
-  if (hgnss == NULL || cmd == NULL || !hgnss->is_powered)
-  {
+ * @brief  Send command to GNSS module
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  cmd: Command string
+ * @retval GNSS status
+ */
+GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd) {
+  if (hgnss == NULL || cmd == NULL || !hgnss->is_powered) {
     return GNSS_ERROR;
   }
 
@@ -584,8 +548,7 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
 
   /* DEBUG: Log hex bytes */
   SONDE_LOG_STR("[GPS CMD] Hex: ");
-  for(size_t i = 0; i < strlen(cmd); i++)
-  {
+  for (size_t i = 0; i < strlen(cmd); i++) {
     char hex_buf[8];
     snprintf(hex_buf, sizeof(hex_buf), "%02X ", (uint8_t)cmd[i]);
     SONDE_LOG_STR(hex_buf);
@@ -596,21 +559,18 @@ GNSS_StatusTypeDef GNSS_SendCommand(GNSS_HandleTypeDef *hgnss, const char *cmd)
   HAL_StatusTypeDef status;
   status = HAL_UART_Transmit(hgnss->huart, (uint8_t *)cmd, strlen(cmd), GNSS_UART_TIMEOUT);
 
-  if (status != HAL_OK)
-  {
+  if (status != HAL_OK) {
     SONDE_LOG_STR("[GPS CMD] UART Transmit FAILED!\r\n");
     return GNSS_ERROR;
   }
-  
+
   SONDE_LOG_STR("[GPS CMD] UART Transmit OK\r\n");
 
   return GNSS_OK;
 }
 
-GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *body)
-{
-  if (hgnss == NULL || body == NULL)
-  {
+GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *body) {
+  if (hgnss == NULL || body == NULL) {
     return GNSS_ERROR;
   }
 
@@ -618,23 +578,20 @@ GNSS_StatusTypeDef GNSS_SendCommandBody(GNSS_HandleTypeDef *hgnss, const char *b
   char cmd[96];
   uint8_t cs = GNSS_CalculateChecksum(body);
   int len = snprintf(cmd, sizeof(cmd), "$%s*%02X\r\n", body, cs);
-  if (len <= 0 || len >= (int)sizeof(cmd))
-  {
-    return GNSS_ERROR;  /* body too long — refuse to truncate a command */
+  if (len <= 0 || len >= (int)sizeof(cmd)) {
+    return GNSS_ERROR; /* body too long — refuse to truncate a command */
   }
 
   return GNSS_SendCommand(hgnss, cmd);
 }
 
 /**
-  * @brief  Process DMA circular buffer data (called from main loop)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL || !hgnss->is_powered)
-  {
+ * @brief  Process DMA circular buffer data (called from main loop)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ */
+GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL || !hgnss->is_powered) {
     return GNSS_ERROR;
   }
 
@@ -657,19 +614,17 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
   uint32_t now = HAL_GetTick();
 
   /* Print GPS summary every 10 seconds */
-  if ((now - last_debug_time > 10000))
-  {
+  if ((now - last_debug_time > 10000)) {
     char summary[200];
 
-    if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID)
-    {
+    if (hgnss->data.valid && hgnss->data.fix_quality != GNSS_FIX_INVALID) {
       /* Valid fix - show full details */
       /* FW-16: integer-only print (float printf support is not linked) */
       int32_t hdop_d = (int32_t)(hgnss->data.hdop * 10.0f);
-      int32_t lat_u  = (int32_t)(hgnss->data.latitude * 1000000.0);
-      int32_t lon_u  = (int32_t)(hgnss->data.longitude * 1000000.0);
-      int32_t alt_d  = (int32_t)(hgnss->data.altitude * 10.0f);
-      int32_t spd_d  = (int32_t)(hgnss->data.speed * 10.0f);
+      int32_t lat_u = (int32_t)(hgnss->data.latitude * 1000000.0);
+      int32_t lon_u = (int32_t)(hgnss->data.longitude * 1000000.0);
+      int32_t alt_d = (int32_t)(hgnss->data.altitude * 10.0f);
+      int32_t spd_d = (int32_t)(hgnss->data.speed * 10.0f);
       snprintf(summary, sizeof(summary),
                "[GPS] FIX | Sats:%d HDOP:%d.%d | Lat:%d.%06d Lon:%d.%06d Alt:%d.%dm | Speed:%d.%dkm/h\r\n",
                hgnss->data.satellites,
@@ -678,9 +633,7 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
                (int)(lon_u / 1000000), (int)((lon_u < 0 ? -lon_u : lon_u) % 1000000),
                (int)(alt_d / 10), (int)((alt_d < 0 ? -alt_d : alt_d) % 10),
                (int)(spd_d / 10), (int)((spd_d < 0 ? -spd_d : spd_d) % 10));
-    }
-    else
-    {
+    } else {
       /* No fix - show basic status */
       /* FW-16: integer-only print (float printf support is not linked) */
       int32_t hdop_d2 = (int32_t)(hgnss->data.hdop * 10.0f);
@@ -718,55 +671,48 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
    * immune to startup bursts by construction; clamping the inverted case
    * (consumer ahead = counter lag, not loss) kills the wrap misfire. */
   uint32_t dma_backlog = (hgnss->dma_produced_total >= hgnss->dma_consumed_total)
-                         ? (hgnss->dma_produced_total - hgnss->dma_consumed_total)
-                         : 0U;
+                             ? (hgnss->dma_produced_total - hgnss->dma_consumed_total)
+                             : 0U;
   /* R2-19 (#123) survives in narrowed form: at EXACTLY one buffer-full the
    * data is not yet destroyed (loss begins at SIZE + 1 written) - but when
    * head == tail the F-011 wrap makes the full buffer positionally
    * unreachable, so the resync is still the only way forward. */
   if (dma_backlog > GNSS_DMA_BUFFER_SIZE ||
-      (dma_backlog == GNSS_DMA_BUFFER_SIZE && hgnss->dma_tail == hgnss->dma_head))
-  {
+      (dma_backlog == GNSS_DMA_BUFFER_SIZE && hgnss->dma_tail == hgnss->dma_head)) {
     hgnss->dma_overrun_count++;
     SONDE_LOG("[GPS DMA] OVERRUN #%lu - producer lapped consumer, resyncing\r\n",
-                      (unsigned long)hgnss->dma_overrun_count);
+              (unsigned long)hgnss->dma_overrun_count);
     hgnss->dma_tail = hgnss->dma_head;
     hgnss->dma_consumed_total = hgnss->dma_produced_total;
-    hgnss->nmea_length = 0;  /* discard any partial sentence */
+    hgnss->nmea_length = 0; /* discard any partial sentence */
   }
 
   /* Process all available bytes between tail and head */
-  while (hgnss->dma_tail != hgnss->dma_head)
-  {
+  while (hgnss->dma_tail != hgnss->dma_head) {
     uint8_t byte = hgnss->dma_buffer[hgnss->dma_tail];
-    
+
     /* Start of NMEA sentence */
-    if (byte == '$')
-    {
+    if (byte == '$') {
       hgnss->nmea_length = 0;
       hgnss->nmea_sentence[hgnss->nmea_length++] = (char)byte;
     }
     /* End of NMEA sentence */
-    else if (byte == '\n' || byte == '\r')
-    {
-      if (hgnss->nmea_length > 0)
-      {
+    else if (byte == '\n' || byte == '\r') {
+      if (hgnss->nmea_length > 0) {
         hgnss->nmea_sentence[hgnss->nmea_length] = '\0';
-        
+
         /* Parse complete NMEA sentence in main loop context (safe) */
         GNSS_ParseNMEA(hgnss, hgnss->nmea_sentence);
-        
+
         hgnss->nmea_length = 0;
       }
     }
     /* Middle of NMEA sentence */
-    else if (hgnss->nmea_length > 0 && hgnss->nmea_length < (GNSS_NMEA_MAX_LENGTH - 1))
-    {
+    else if (hgnss->nmea_length > 0 && hgnss->nmea_length < (GNSS_NMEA_MAX_LENGTH - 1)) {
       hgnss->nmea_sentence[hgnss->nmea_length++] = (char)byte;
     }
     /* Buffer overflow protection */
-    else if (hgnss->nmea_length >= (GNSS_NMEA_MAX_LENGTH - 1))
-    {
+    else if (hgnss->nmea_length >= (GNSS_NMEA_MAX_LENGTH - 1)) {
       hgnss->nmea_length = 0; /* Discard sentence and reset */
     }
 
@@ -779,186 +725,167 @@ GNSS_StatusTypeDef GNSS_ProcessDMABuffer(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Parse GSV NMEA sentence (satellites in view with detailed PRN tracking)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: GSV sentence
-  * @retval 0 on success, -1 on error
-  * @note   GSV format: $GPGSV,<num_msg>,<msg_num>,<sats_in_view>,<prn>,<elev>,<azim>,<snr>,...
-  * @note   Supports GPS ($GPGSV), GLONASS ($GLGSV), BeiDou ($BDGSV)
-  */
-static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
+ * @brief  Parse GSV NMEA sentence (satellites in view with detailed PRN tracking)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  sentence: GSV sentence
+ * @retval 0 on success, -1 on error
+ * @note   GSV format: $GPGSV,<num_msg>,<msg_num>,<sats_in_view>,<prn>,<elev>,<azim>,<snr>,...
+ * @note   Supports GPS ($GPGSV), GLONASS ($GLGSV), BeiDou ($BDGSV)
+ */
+static int GNSS_ParseGSV(GNSS_HandleTypeDef *hgnss, const char *sentence) {
   char token[16];
   int msg_num = 0;
-  
+
   /* Determine constellation type from sentence ID */
   GNSS_SatelliteInfo_t *sat_array = NULL;
   uint8_t *sat_count = NULL;
   uint8_t max_sats = GNSS_MAX_SATS_PER_CONSTELLATION;
-  
-  if (strncmp(sentence, "$GPGSV", 6) == 0)
-  {
+
+  if (strncmp(sentence, "$GPGSV", 6) == 0) {
     sat_array = hgnss->extended.gps_sats;
     sat_count = &hgnss->extended.gps_count;
-  }
-  else if (strncmp(sentence, "$GLGSV", 6) == 0)
-  {
+  } else if (strncmp(sentence, "$GLGSV", 6) == 0) {
     sat_array = hgnss->extended.glonass_sats;
     sat_count = &hgnss->extended.glonass_count;
-  }
-  else if (strncmp(sentence, "$BDGSV", 6) == 0)
-  {
+  } else if (strncmp(sentence, "$BDGSV", 6) == 0) {
     sat_array = hgnss->extended.beidou_sats;
     sat_count = &hgnss->extended.beidou_count;
-  }
-  else
-  {
+  } else {
     /* GNGSV or unknown - update total count only */
-    if (GNSS_GetToken(sentence, 3, token, sizeof(token)))
-    {
+    if (GNSS_GetToken(sentence, 3, token, sizeof(token))) {
       if (strlen(token) > 0)
         hgnss->data.satellites_in_view = atoi(token);
     }
     return 0;
   }
-  
+
   /* Get message number (field 2) - if it's message 1, reset the count */
-  if (GNSS_GetToken(sentence, 2, token, sizeof(token)))
-  {
+  if (GNSS_GetToken(sentence, 2, token, sizeof(token))) {
     if (strlen(token) > 0)
       msg_num = atoi(token);
   }
-  
-  if (msg_num == 1)
-  {
-    *sat_count = 0;  /* Reset count for new GSV sequence */
+
+  if (msg_num == 1) {
+    *sat_count = 0; /* Reset count for new GSV sequence */
   }
-  
+
   /* Field 3 is total satellites in view */
-  if (GNSS_GetToken(sentence, 3, token, sizeof(token)))
-  {
+  if (GNSS_GetToken(sentence, 3, token, sizeof(token))) {
     if (strlen(token) > 0)
       hgnss->data.satellites_in_view = atoi(token);
   }
-  
+
   /* Parse up to 4 satellites per GSV message (fields 4-19) */
-  for (int sat_idx = 0; sat_idx < 4; sat_idx++)
-  {
-    int base_field = 4 + (sat_idx * 4);  /* Each satellite has 4 fields */
-    
+  for (int sat_idx = 0; sat_idx < 4; sat_idx++) {
+    int base_field = 4 + (sat_idx * 4); /* Each satellite has 4 fields */
+
     /* Check if we have room in the array */
     if (*sat_count >= max_sats)
       break;
-    
+
     /* Field: PRN */
     if (!GNSS_GetToken(sentence, base_field, token, sizeof(token)))
       break;
     if (strlen(token) == 0)
-      break;  /* No more satellites in this message */
-      
+      break; /* No more satellites in this message */
+
     uint8_t prn = atoi(token);
     if (prn == 0)
       break;
-    
+
     /* Store satellite info */
     sat_array[*sat_count].prn = prn;
-    
+
     /* Field: Elevation */
     if (GNSS_GetToken(sentence, base_field + 1, token, sizeof(token)) && strlen(token) > 0)
       sat_array[*sat_count].elevation = atoi(token);
     else
       sat_array[*sat_count].elevation = 0;
-    
+
     /* Field: Azimuth */
     if (GNSS_GetToken(sentence, base_field + 2, token, sizeof(token)) && strlen(token) > 0)
       sat_array[*sat_count].azimuth = atoi(token);
     else
       sat_array[*sat_count].azimuth = 0;
-    
+
     /* Field: SNR */
     if (GNSS_GetToken(sentence, base_field + 3, token, sizeof(token)) && strlen(token) > 0)
       sat_array[*sat_count].snr = atoi(token);
     else
       sat_array[*sat_count].snr = 0;
-    
+
     (*sat_count)++;
   }
-  
+
   return 0;
 }
 
 /**
-  * @brief  Parse VTG NMEA sentence (track and ground speed)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: VTG sentence
-  * @retval 0 on success, -1 on error
-  * @note   VTG format: $GPVTG,<track_true>,T,<track_mag>,M,<speed_knots>,N,<speed_kmh>,K,<mode>
-  */
-static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
+ * @brief  Parse VTG NMEA sentence (track and ground speed)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  sentence: VTG sentence
+ * @retval 0 on success, -1 on error
+ * @note   VTG format: $GPVTG,<track_true>,T,<track_mag>,M,<speed_knots>,N,<speed_kmh>,K,<mode>
+ */
+static int GNSS_ParseVTG(GNSS_HandleTypeDef *hgnss, const char *sentence) {
   char token[16];
-  
+
   /* Field 1: Track made good (true north) */
-  if (GNSS_GetToken(sentence, 1, token, sizeof(token)) && strlen(token) > 0)
-  {
+  if (GNSS_GetToken(sentence, 1, token, sizeof(token)) && strlen(token) > 0) {
     hgnss->extended.track_true = atof(token);
   }
-  
+
   /* Field 3: Track made good (magnetic north) */
-  if (GNSS_GetToken(sentence, 3, token, sizeof(token)) && strlen(token) > 0)
-  {
+  if (GNSS_GetToken(sentence, 3, token, sizeof(token)) && strlen(token) > 0) {
     hgnss->extended.track_magnetic = atof(token);
   }
-  
+
   /* Field 7: Ground speed (km/h) - more accurate than RMC */
-  if (GNSS_GetToken(sentence, 7, token, sizeof(token)) && strlen(token) > 0)
-  {
+  if (GNSS_GetToken(sentence, 7, token, sizeof(token)) && strlen(token) > 0) {
     hgnss->extended.ground_speed_kmh = atof(token);
   }
-  
+
   return 0;
 }
 
 /**
-  * @brief  Calculate vertical speed from altitude changes
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval None
-  * @note   Must be called after altitude update (from GGA)
-  */
-static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss)
-{
+ * @brief  Calculate vertical speed from altitude changes
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval None
+ * @note   Must be called after altitude update (from GGA)
+ */
+static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss) {
   if (hgnss == NULL)
     return;
-  
+
   uint32_t current_time = HAL_GetTick();
   float current_altitude = hgnss->data.altitude;
-  
+
   /* Need at least one previous reading to calculate speed */
-  if (hgnss->extended.has_prev_altitude)
-  {
+  if (hgnss->extended.has_prev_altitude) {
     /* Calculate time delta in seconds */
     float time_delta_s = (current_time - hgnss->extended.prev_timestamp) / 1000.0f;
-    
+
     /* Minimum time delta to avoid division by zero */
-    if (time_delta_s > 0.1f)  /* At least 100ms between readings */
+    if (time_delta_s > 0.1f) /* At least 100ms between readings */
     {
       /* Calculate vertical speed in m/s */
       float altitude_change = current_altitude - hgnss->extended.prev_altitude;
       hgnss->extended.vertical_speed_ms = altitude_change / time_delta_s;
-      
+
       /* Calculate 3D speed (pythagorean theorem) */
       /* Convert ground speed from km/h to m/s for calculation */
       float ground_speed_ms = hgnss->extended.ground_speed_kmh / 3.6f;
-      
+
       /* 3D speed = sqrt(horizontal^2 + vertical^2) */
-      float speed_3d_ms = sqrtf((ground_speed_ms * ground_speed_ms) + 
+      float speed_3d_ms = sqrtf((ground_speed_ms * ground_speed_ms) +
                                 (hgnss->extended.vertical_speed_ms * hgnss->extended.vertical_speed_ms));
-      
+
       /* Convert back to km/h */
       hgnss->extended.speed_3d_kmh = speed_3d_ms * 3.6f;
     }
   }
-  
+
   /* Store current values for next calculation */
   hgnss->extended.prev_altitude = current_altitude;
   hgnss->extended.prev_timestamp = current_time;
@@ -966,24 +893,21 @@ static void GNSS_UpdateVerticalSpeed(GNSS_HandleTypeDef *hgnss)
 }
 
 /**
-  * @brief  Calculate NMEA checksum
-  * @param  sentence: NMEA sentence (without $ and checksum)
-  * @retval Calculated checksum
-  */
-uint8_t GNSS_CalculateChecksum(const char *sentence)
-{
+ * @brief  Calculate NMEA checksum
+ * @param  sentence: NMEA sentence (without $ and checksum)
+ * @retval Calculated checksum
+ */
+uint8_t GNSS_CalculateChecksum(const char *sentence) {
   uint8_t checksum = 0;
   const char *p = sentence;
 
   /* Skip the $ character if present */
-  if (*p == '$')
-  {
+  if (*p == '$') {
     p++;
   }
 
   /* Calculate XOR of all characters until * or end */
-  while (*p != '\0' && *p != '*')
-  {
+  while (*p != '\0' && *p != '*') {
     checksum ^= (uint8_t)*p;
     p++;
   }
@@ -994,41 +918,35 @@ uint8_t GNSS_CalculateChecksum(const char *sentence)
 /* Private functions ---------------------------------------------------------*/
 
 /**
-  * @brief  DMA callback access for external ISR handling
-  * @param  huart: UART handle pointer
-  * @retval None
-  * @note   These callbacks are handled in usart_if.c to avoid duplicate definitions
-  *         The ISR will call GNSS_DMA_RxCallback() functions when appropriate
-  */
-void GNSS_DMA_RxHalfCallback(UART_HandleTypeDef *huart)
-{
+ * @brief  DMA callback access for external ISR handling
+ * @param  huart: UART handle pointer
+ * @retval None
+ * @note   These callbacks are handled in usart_if.c to avoid duplicate definitions
+ *         The ISR will call GNSS_DMA_RxCallback() functions when appropriate
+ */
+void GNSS_DMA_RxHalfCallback(UART_HandleTypeDef *huart) {
   /* Called from usart_if.c HAL_UART_RxHalfCpltCallback */
-  if (huart->Instance == USART1 && pHgnss != NULL)
-  {
+  if (huart->Instance == USART1 && pHgnss != NULL) {
     /* Minimal ISR - set data ready + advance absolute producer (F-011, #25) */
     pHgnss->dma_data_ready = true;
     pHgnss->dma_produced_total += GNSS_DMA_BUFFER_SIZE / 2;
   }
 }
 
-void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart)
-{
+void GNSS_DMA_RxCpltCallback(UART_HandleTypeDef *huart) {
   /* Called from usart_if.c HAL_UART_RxCpltCallback */
-  if (huart->Instance == USART1 && pHgnss != NULL)
-  {
+  if (huart->Instance == USART1 && pHgnss != NULL) {
     /* Minimal ISR - set data ready + advance absolute producer (F-011, #25) */
     pHgnss->dma_data_ready = true;
     pHgnss->dma_produced_total += GNSS_DMA_BUFFER_SIZE / 2;
   }
 }
 
-uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss)
-{
+uint32_t GNSS_GetDmaOverrunCount(const GNSS_HandleTypeDef *hgnss) {
   return (hgnss != NULL) ? hgnss->dma_overrun_count : 0;
 }
 
-uint32_t GNSS_GetUartErrorCount(const GNSS_HandleTypeDef *hgnss)
-{
+uint32_t GNSS_GetUartErrorCount(const GNSS_HandleTypeDef *hgnss) {
   return (hgnss != NULL) ? hgnss->uart_error_count : 0;
 }
 
@@ -1050,15 +968,12 @@ uint32_t GNSS_GetUartErrorCount(const GNSS_HandleTypeDef *hgnss)
  * the circular DMA. This is NOT a fresh acquisition: the overrun counter and
  * the cross-sleep vertical-speed reference (DR-10) both survive. A
  * teardown-time error (rx_dma_active already false) is ignored. */
-void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  if (huart == NULL || huart->Instance != USART1 || pHgnss == NULL)
-  {
+void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  if (huart == NULL || huart->Instance != USART1 || pHgnss == NULL) {
     return;
   }
-  if (!pHgnss->rx_dma_active)
-  {
-    return;  /* teardown/dormant: nothing to recover */
+  if (!pHgnss->rx_dma_active) {
+    return; /* teardown/dormant: nothing to recover */
   }
 
   pHgnss->uart_error_count++;
@@ -1073,8 +988,7 @@ void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart)
   pHgnss->dma_consumed_total = 0;
   pHgnss->nmea_length = 0;
 
-  if (HAL_UART_Receive_DMA(huart, pHgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE) != HAL_OK)
-  {
+  if (HAL_UART_Receive_DMA(huart, pHgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE) != HAL_OK) {
     /* Re-arm refused (e.g. HAL lock contention against an interrupted
      * task-level UART op): the stream stays dead for this window. Honest
      * disengage — the GNSS timeout path ends the acquisition and the next
@@ -1084,63 +998,63 @@ void GNSS_UART_ErrorCallback(UART_HandleTypeDef *huart)
 }
 
 /**
-  * @brief  Convert NMEA coordinate format to decimal degrees
-  * @param  raw_degrees: Raw coordinate (DDMM.MMMM format)
-  * @retval Decimal degrees
-  * @note   R34 (#57): double math end-to-end — the archive container resolves
-  *         1e-7 deg (~1 cm); float conversion quantized to ~1 m.
-  */
-static double GNSS_ConvertToDecimalDegrees(double raw_degrees)
-{
+ * @brief  Convert NMEA coordinate format to decimal degrees
+ * @param  raw_degrees: Raw coordinate (DDMM.MMMM format)
+ * @retval Decimal degrees
+ * @note   R34 (#57): double math end-to-end — the archive container resolves
+ *         1e-7 deg (~1 cm); float conversion quantized to ~1 m.
+ */
+static double GNSS_ConvertToDecimalDegrees(double raw_degrees) {
   int degrees = (int)(raw_degrees / 100.0);
   double minutes = raw_degrees - ((double)degrees * 100.0);
   return degrees + (minutes / 60.0);
 }
 
-/** 
-  * @brief  Extract a token from NMEA sentence by index
-  * @param  sentence: The source NMEA sentence
-  * @param  index: The CSV field index (0 = Msg ID, 1 = First Data, etc.)
-  * @param  buffer: Destination buffer
-  * @param  max_len: Max size of destination buffer
-  * @retval true if found, false if not found
-  */
-static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max_len)
-{
+/**
+ * @brief  Extract a token from NMEA sentence by index
+ * @param  sentence: The source NMEA sentence
+ * @param  index: The CSV field index (0 = Msg ID, 1 = First Data, etc.)
+ * @param  buffer: Destination buffer
+ * @param  max_len: Max size of destination buffer
+ * @retval true if found, false if not found
+ */
+static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max_len) {
   const char *start = sentence;
   const char *end;
   int current_idx = 0;
 
   /* Basic validation */
-  if (sentence == NULL || buffer == NULL || max_len <= 0) return false;
+  if (sentence == NULL || buffer == NULL || max_len <= 0)
+    return false;
 
   /* Find start of desired field */
-  while (current_idx < index)
-  {
+  while (current_idx < index) {
     start = strchr(start, ',');
-    if (start == NULL) return false; /* Not enough fields */
-    start++; /* Skip the comma */
+    if (start == NULL)
+      return false; /* Not enough fields */
+    start++;        /* Skip the comma */
     current_idx++;
   }
 
   /* Find end of field (comma or checksum mark '*') */
   end = strchr(start, ',');
-  if (end == NULL)
-  {
+  if (end == NULL) {
     end = strchr(start, '*');
-    if (end == NULL)
-    {
-       /* Handle end of string if no checksum marker */
-       end = start + strlen(start);
-       /* Trim CR/LF if present at end */
-       while (end > start && (*(end-1) == '\r' || *(end-1) == '\n')) end--;
+    if (end == NULL) {
+      /* Handle end of string if no checksum marker */
+      end = start + strlen(start);
+      /* Trim CR/LF if present at end */
+      while (end > start && (*(end - 1) == '\r' || *(end - 1) == '\n'))
+        end--;
     }
   }
 
   /* Copy data */
   int len = (int)(end - start);
-  if (len < 0) len = 0;
-  if (len >= max_len) len = max_len - 1;
+  if (len < 0)
+    len = 0;
+  if (len >= max_len)
+    len = max_len - 1;
 
   memcpy(buffer, start, (size_t)len);
   buffer[len] = '\0';
@@ -1149,17 +1063,16 @@ static bool GNSS_GetToken(const char *sentence, int index, char *buffer, int max
 }
 
 /**
-  * @brief  Parse GGA NMEA sentence
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: GGA sentence
-  * @retval 0 on success, -1 on error
-  */
-static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
+ * @brief  Parse GGA NMEA sentence
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  sentence: GGA sentence
+ * @retval 0 on success, -1 on error
+ */
+static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence) {
   char token[32];
   int field;
-  double lat_raw = 0, lon_raw = 0;   /* R34 (#57): double until the store */
-  bool have_lat = false, have_lon = false;  /* R32 (#57): token PRESENCE, not magnitude */
+  double lat_raw = 0, lon_raw = 0;         /* R34 (#57): double until the store */
+  bool have_lat = false, have_lon = false; /* R32 (#57): token PRESENCE, not magnitude */
   /* F-11 (#186): no N/E default - the hemisphere letter gives the coordinate
    * its meaning; a missing/garbled direction REJECTS the fix below. */
   char lat_dir = '\0', lon_dir = '\0';
@@ -1168,106 +1081,162 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
    * state byte-for-byte unchanged - the caller discards the return value,
    * so a pre-guard write (even one later rejected by F-11 or the range
    * check) would otherwise stand and be consumed as a real position. */
-  uint32_t timestamp = 0;       bool have_timestamp = false;
-  GNSS_FixQuality_t fix_quality = GNSS_FIX_INVALID; bool have_fix_quality = false;
-  uint8_t satellites = 0;       bool have_satellites = false;
-  float hdop = 0.0f;            bool have_hdop = false;
-  float altitude = 0.0f;        bool have_altitude = false;
+  uint32_t timestamp = 0;
+  bool have_timestamp = false;
+  GNSS_FixQuality_t fix_quality = GNSS_FIX_INVALID;
+  bool have_fix_quality = false;
+  uint8_t satellites = 0;
+  bool have_satellites = false;
+  float hdop = 0.0f;
+  bool have_hdop = false;
+  float altitude = 0.0f;
+  bool have_altitude = false;
 
-  for (field = 1; field < 15; field++)
-  {
-    if (!GNSS_GetToken(sentence, field, token, sizeof(token))) break;
+  for (field = 1; field < 15; field++) {
+    if (!GNSS_GetToken(sentence, field, token, sizeof(token)))
+      break;
 
-    switch (field)
-    {
-      case 1: /* UTC time */
-        if (strlen(token) >= 6)
-        {
-          /* F-10 (#185): range-check HHMMSS before storing - a garbled but
-           * checksum-valid time (e.g. 995910 -> hours=99) must never reach
-           * SysTimeSyncFromGnss; it would discipline SysTime by ~4 days.
-           * 60 s permits a leap second. */
-          uint32_t hhmmss = strtoul(token, NULL, 10);
-          uint32_t hh = hhmmss / 10000u, mm = (hhmmss / 100u) % 100u, ss = hhmmss % 100u;
-          if (hh <= 23u && mm <= 59u && ss <= 60u) { timestamp = hhmmss; have_timestamp = true; }
+    switch (field) {
+    case 1: /* UTC time */
+      if (strlen(token) >= 6) {
+        /* F-10 (#185): range-check HHMMSS before storing - a garbled but
+         * checksum-valid time (e.g. 995910 -> hours=99) must never reach
+         * SysTimeSyncFromGnss; it would discipline SysTime by ~4 days.
+         * 60 s permits a leap second. */
+        uint32_t hhmmss = strtoul(token, NULL, 10);
+        uint32_t hh = hhmmss / 10000u, mm = (hhmmss / 100u) % 100u, ss = hhmmss % 100u;
+        if (hh <= 23u && mm <= 59u && ss <= 60u) {
+          timestamp = hhmmss;
+          have_timestamp = true;
         }
-        break;
+      }
+      break;
 
-      case 2: /* Latitude */
-        if (strlen(token) > 0) { lat_raw = atof(token); have_lat = true; }
-        break;
+    case 2: /* Latitude */
+      if (strlen(token) > 0) {
+        lat_raw = atof(token);
+        have_lat = true;
+      }
+      break;
 
-      case 3: /* Latitude direction */
-        if (strlen(token) > 0) lat_dir = token[0];
-        break;
+    case 3: /* Latitude direction */
+      if (strlen(token) > 0)
+        lat_dir = token[0];
+      break;
 
-      case 4: /* Longitude */
-        if (strlen(token) > 0) { lon_raw = atof(token); have_lon = true; }
-        break;
+    case 4: /* Longitude */
+      if (strlen(token) > 0) {
+        lon_raw = atof(token);
+        have_lon = true;
+      }
+      break;
 
-      case 5: /* Longitude direction */
-        if (strlen(token) > 0) lon_dir = token[0];
-        break;
+    case 5: /* Longitude direction */
+      if (strlen(token) > 0)
+        lon_dir = token[0];
+      break;
 
-      case 6: /* Fix quality */
-        if (strlen(token) > 0) { fix_quality = (GNSS_FixQuality_t)atoi(token); have_fix_quality = true; }
-        break;
+    case 6: /* Fix quality */
+      if (strlen(token) > 0) {
+        /* FR-08 (#291): the enum domain, not "any nonzero". A checksum-valid
+         * token carrying '9' still passed GNSS_FIX_INVALID only because the
+         * enum cast happened before the value check. */
+        long q = atol(token);
+        if (q > GNSS_FIX_INVALID && q <= GNSS_FIX_DGPS) {
+          fix_quality = (GNSS_FixQuality_t)q;
+          have_fix_quality = true;
+        }
+      }
+      break;
 
-      case 7: /* Number of satellites */
-        if (strlen(token) > 0) { satellites = (uint8_t)atoi(token); have_satellites = true; }
-        break;
+    case 7: /* Number of satellites */
+      if (strlen(token) > 0) {
+        /* FR-08 (#291): semantic check BEFORE the uint8 cast - '-1' was
+         * wrapping to 255 (garbage count) and negative finite atol passes
+         * on a checksum-valid token. */
+        long s = atol(token);
+        if (s >= 0 && s <= 255) {
+          satellites = (uint8_t)s;
+          have_satellites = true;
+        }
+      }
+      break;
 
-      case 8: /* HDOP */
-        if (strlen(token) > 0) { hdop = (float)atof(token); have_hdop = true; }
-        break;
+    case 8: /* HDOP */
+      if (strlen(token) > 0) {
+        /* FR-08 (#291): negative finite HDOP passes hdop<=5.0 downstream
+         * (fix-quality gate) only because it was never validated here.
+         * A checksum-valid token may carry '-1.0' - reject it. */
+        float h = (float)atof(token);
+        if (h > 0.0f) {
+          hdop = h;
+          have_hdop = true;
+        }
+      }
+      break;
 
-      case 9: /* Altitude */
-        if (strlen(token) > 0) { altitude = (float)atof(token); have_altitude = true; }
-        break;
+    case 9: /* Altitude */
+      if (strlen(token) > 0) {
+        altitude = (float)atof(token);
+        have_altitude = true;
+      }
+      break;
     }
   }
 
   /* Validate coordinates */
-  if (!have_lat || !have_lon) return -1; /* No fix info yet (empty fields) */
+  if (!have_lat || !have_lon)
+    return -1; /* No fix info yet (empty fields) */
 
   /* F-11 (#186): the hemisphere letter is the qualifier that gives the
    * coordinate its sign. A missing or non-{N,S}/{E,W} direction (truncated
    * sentence whose '*' landed after the numeric field still passes checksum)
    * REJECTS the fix - it must never default to N/E. A dropped 'W' otherwise
    * moved a Calgary launch (51N 114W) to +114E with no downstream flag. */
-  if ((lat_dir != 'N' && lat_dir != 'S') || (lon_dir != 'E' && lon_dir != 'W'))
-  {
+  if ((lat_dir != 'N' && lat_dir != 'S') || (lon_dir != 'E' && lon_dir != 'W')) {
     return -1;
   }
 
   /* Convert coordinates to decimal degrees (R32/#57: presence-tracked — a real
    * 0.0 coordinate on the equator / prime meridian is valid data, not absence) */
   double latitude = GNSS_ConvertToDecimalDegrees(lat_raw);
-  if (lat_dir == 'S') latitude = -latitude;
+  if (lat_dir == 'S')
+    latitude = -latitude;
   double longitude = GNSS_ConvertToDecimalDegrees(lon_raw);
-  if (lon_dir == 'W') longitude = -longitude;
+  if (lon_dir == 'W')
+    longitude = -longitude;
 
-  if (!GNSS_ValidateCoordinates((float)latitude, (float)longitude))
-  {
+  if (!GNSS_ValidateCoordinates((float)latitude, (float)longitude)) {
     /* Invalid coordinates */
+    return -1;
+  }
+
+  /* FR-08 (#291): reject a checksum-valid sentence whose semantic guards
+   * rejected even one fix-critical field (fix quality / satellites / HDOP).
+   * A dropped -1 sat count or -1.0 HDOP must never commit a fix. */
+  if (!have_fix_quality || !have_satellites || !have_hdop) {
     return -1;
   }
 
   /* DR-01 (#236): every guard has passed - commit the whole sentence in one
    * block. R2-16 (#120): position_present=true is only ever committed here,
    * from a sentence that carried real lat/lon tokens AND passed validation. */
-  if (have_timestamp)    hgnss->data.timestamp = timestamp;
-  if (have_fix_quality)  hgnss->data.fix_quality = fix_quality;
-  if (have_satellites)   hgnss->data.satellites = satellites;
-  if (have_hdop)         hgnss->data.hdop = hdop;
-  if (have_altitude)     hgnss->data.altitude = altitude;
+  if (have_timestamp)
+    hgnss->data.timestamp = timestamp;
+  if (have_fix_quality)
+    hgnss->data.fix_quality = fix_quality;
+  if (have_satellites)
+    hgnss->data.satellites = satellites;
+  if (have_hdop)
+    hgnss->data.hdop = hdop;
+  if (have_altitude)
+    hgnss->data.altitude = altitude;
   hgnss->data.latitude = latitude;
   hgnss->data.longitude = longitude;
   hgnss->data.position_present = true;
 
   /* Mark data as valid if we have a fix and coordinates are valid */
-  if (hgnss->data.fix_quality != GNSS_FIX_INVALID && hgnss->data.satellites > 0)
-  {
+  if (hgnss->data.fix_quality != GNSS_FIX_INVALID && hgnss->data.satellites > 0) {
     hgnss->data.valid = true;
   }
 
@@ -1275,13 +1244,12 @@ static int GNSS_ParseGGA(GNSS_HandleTypeDef *hgnss, const char *sentence)
 }
 
 /**
-  * @brief  Parse RMC NMEA sentence
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @param  sentence: RMC sentence
-  * @retval 0 on success, -1 on error
-  */
-static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
-{
+ * @brief  Parse RMC NMEA sentence
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @param  sentence: RMC sentence
+ * @retval 0 on success, -1 on error
+ */
+static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence) {
   char token[32];
   int field;
   char status = 'V';
@@ -1292,45 +1260,53 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
   uint32_t rmc_date = 0;
   bool have_time = false, have_date = false;
 
-  for (field = 1; field < 13; field++)
-  {
-    if (!GNSS_GetToken(sentence, field, token, sizeof(token))) break;
+  for (field = 1; field < 13; field++) {
+    if (!GNSS_GetToken(sentence, field, token, sizeof(token)))
+      break;
 
-    switch (field)
-    {
-      case 1: /* UTC time */
-        if (strlen(token) >= 6) { rmc_time = strtoul(token, NULL, 10); have_time = true; }
-        break;
+    switch (field) {
+    case 1: /* UTC time */
+      if (strlen(token) >= 6) {
+        rmc_time = strtoul(token, NULL, 10);
+        have_time = true;
+      }
+      break;
 
-      case 2: /* Status */
-        if (strlen(token) > 0) status = token[0];
-        break;
+    case 2: /* Status */
+      if (strlen(token) > 0)
+        status = token[0];
+      break;
 
-      case 7: /* Speed */
-        if (strlen(token) > 0) hgnss->data.speed = atof(token) * 1.852f;
-        break;
+    case 7: /* Speed */
+      if (strlen(token) > 0)
+        hgnss->data.speed = atof(token) * 1.852f;
+      break;
 
-      case 8: /* Track angle */
-        if (strlen(token) > 0) hgnss->data.course = atof(token);
-        break;
+    case 8: /* Track angle */
+      if (strlen(token) > 0)
+        hgnss->data.course = atof(token);
+      break;
 
-      case 9: /* Date */
-        if (strlen(token) >= 6) { rmc_date = strtoul(token, NULL, 10); have_date = true; }
-        break;
+    case 9: /* Date */
+      if (strlen(token) >= 6) {
+        rmc_date = strtoul(token, NULL, 10);
+        have_date = true;
+      }
+      break;
     }
   }
 
   /* F-10 (#185): only an ACTIVE sentence stores clock inputs, and only if the
    * time is in range (hh <= 23, mm <= 59, ss <= 60 - 60 permits a leap
    * second). A garbled or void sentence leaves the held time/date untouched. */
-  if (status == 'A')
-  {
-    if (have_time)
-    {
+  if (status == 'A') {
+    if (have_time) {
       uint32_t hh = rmc_time / 10000u, mm = (rmc_time / 100u) % 100u, ss = rmc_time % 100u;
-      if (hh <= 23u && mm <= 59u && ss <= 60u) hgnss->data.timestamp = rmc_time;
+      if (hh <= 23u && mm <= 59u && ss <= 60u)
+        hgnss->data.timestamp = rmc_time;
     }
-    if (have_date) hgnss->data.date = rmc_date;
+    if (have_date)
+      hgnss->data.date = rmc_date;
   }
 
   /* R2-30 (#130): the RMC status field is authoritative for fix validity -
@@ -1342,18 +1318,16 @@ static int GNSS_ParseRMC(GNSS_HandleTypeDef *hgnss, const char *sentence)
 }
 
 /**
-  * @brief  Verify NMEA checksum
-  * @param  sentence: NMEA sentence with checksum
-  * @retval true if valid, false otherwise
-  */
-static bool GNSS_VerifyChecksum(const char *sentence)
-{
+ * @brief  Verify NMEA checksum
+ * @param  sentence: NMEA sentence with checksum
+ * @retval true if valid, false otherwise
+ */
+static bool GNSS_VerifyChecksum(const char *sentence) {
   const char *checksum_ptr = strchr(sentence, '*');
 
   /* R33 (#57): no checksum present -> REJECT. Every ATGM336H sentence carries
    * *XX; a missing one means a DMA-truncated/corrupt sentence, not a valid one. */
-  if (checksum_ptr == NULL)
-  {
+  if (checksum_ptr == NULL) {
     return false;
   }
 
@@ -1362,13 +1336,12 @@ static bool GNSS_VerifyChecksum(const char *sentence)
 
   /* Extract checksum from sentence - manual hex parsing for reliability */
   const char *hex_str = checksum_ptr + 1;
-  
+
   /* Need at least 2 hex digits */
-  if (hex_str[0] == '\0' || hex_str[1] == '\0')
-  {
+  if (hex_str[0] == '\0' || hex_str[1] == '\0') {
     return false;
   }
-  
+
   /* Parse first hex digit */
   uint8_t provided = 0;
   char c1 = hex_str[0];
@@ -1380,7 +1353,7 @@ static bool GNSS_VerifyChecksum(const char *sentence)
     provided = (c1 - 'a' + 10) << 4;
   else
     return false; /* Invalid hex character */
-  
+
   /* Parse second hex digit */
   char c2 = hex_str[1];
   if (c2 >= '0' && c2 <= '9')
@@ -1395,22 +1368,20 @@ static bool GNSS_VerifyChecksum(const char *sentence)
   return (calculated == provided);
 }
 /**
-  * @brief  Enter GPS standby mode (FW-8: FULL power-off, 0µA — PCAS12 saves
-  *         ephemeris to GPS internal flash, then BOTH PB10 and PB5 are cut.
-  *         There is no live backup rail; hot-start relies on the saved
-  *         ephemeris in flash, not on retained power. The ~15µA figure in
-  *         older comments described a PB10-HIGH backup mode that is NOT
-  *         what this function does.)
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  */
-GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL)
-  {
+ * @brief  Enter GPS standby mode (FW-8: FULL power-off, 0µA — PCAS12 saves
+ *         ephemeris to GPS internal flash, then BOTH PB10 and PB5 are cut.
+ *         There is no live backup rail; hot-start relies on the saved
+ *         ephemeris in flash, not on retained power. The ~15µA figure in
+ *         older comments described a PB10-HIGH backup mode that is NOT
+ *         what this function does.)
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ */
+GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL) {
     return GNSS_ERROR;
   }
-  
+
   /* CRITICAL: Send PCAS12 standby command FIRST (while UART active).
    * FW-8: PCAS12 is the standby-entry command — it is what makes the module
    * persist ephemeris to its internal flash (PCAS00 is the flash-save command
@@ -1418,36 +1389,31 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
    * the full power cut. */
   GNSS_StatusTypeDef cmd_status = GNSS_SendCommandBody(hgnss, GNSS_CMD_BODY_STANDBY);
 
-  if (cmd_status == GNSS_OK)
-  {
+  if (cmd_status == GNSS_OK) {
     SONDE_LOG_STR("[GPS STANDBY] PCAS12 command sent - GPS saving ephemeris...\r\n");
-  }
-  else
-  {
+  } else {
     SONDE_LOG_STR("[GPS STANDBY] WARNING - PCAS12 TX failed!\r\n");
   }
 
   /* Wait 100ms for the PCAS12-triggered ephemeris save before power cut */
   HAL_Delay(100);
-  
+
   /* Abort DMA first - stop receiving data */
-  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered)
-  {
+  if (hgnss->huart != NULL && hgnss->huart->hdmarx != NULL && hgnss->is_powered) {
     HAL_UART_AbortReceive(hgnss->huart);
     SONDE_LOG_STR("[GPS STANDBY] DMA aborted\r\n");
   }
-  
+
   /* Flush UART hardware FIFO to discard any stale data */
-  if (hgnss->huart != NULL)
-  {
+  if (hgnss->huart != NULL) {
     __HAL_UART_FLUSH_DRREGISTER(hgnss->huart);
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);   // Parity error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);  // Parity error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);  // Framing error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);  // Noise error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF); // Overrun error
     SONDE_LOG_STR("[GPS STANDBY] UART hardware FIFO flushed\r\n");
   }
-  
+
   /* Clear software buffers and reset state */
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
@@ -1456,10 +1422,9 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   memset(hgnss->dma_buffer, 0, sizeof(hgnss->dma_buffer));
   memset(hgnss->nmea_sentence, 0, sizeof(hgnss->nmea_sentence));
   SONDE_LOG_STR("[GPS STANDBY] Software buffers cleared\r\n");
-  
+
   /* Configure UART pins for minimal power (full power-off follows below) */
-  if (hgnss->huart != NULL)
-  {
+  if (hgnss->huart != NULL) {
     /* SP-01 (#244): stream no longer expected live before DeInit tears it
      * down — a late error callback must not re-arm here. */
     hgnss->rx_dma_active = false;
@@ -1477,10 +1442,10 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   /* GPS has saved ephemeris to internal flash (via PCAS12 command) */
   /* Power consumption: 0µA during sleep; hot-start on wake uses the
    * flash-persisted ephemeris — no live backup rail exists. */
-  
+
   /* Cut all power to GPS module */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);  // PB10 LOW (no power)
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);    // PB5 LOW (disabled)
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET); // PB10 LOW (no power)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);   // PB5 LOW (disabled)
 
   SONDE_LOG_STR("[GPS STANDBY] PB10=LOW, PB5=LOW (full power-off, 0µA) - ephemeris saved\r\n");
 
@@ -1489,7 +1454,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
   SONDE_LOG_STR("[GPS STANDBY] MCU STOP mode re-enabled\r\n");
 
   SONDE_LOG_STR("[GPS STANDBY] Complete - GPS fully off (0µA), ephemeris in flash\r\n");
-  
+
   hgnss->is_powered = false;
   return GNSS_OK;
 }
@@ -1505,8 +1470,7 @@ GNSS_StatusTypeDef GNSS_EnterStandby(GNSS_HandleTypeDef *hgnss)
  *                                        NEVER drive this low.
  * NOTE: HAL_UART_MspDeInit de-configures the pins, so sites that call
  * HAL_UART_DeInit must call this AFTER the DeInit. */
-void GNSS_UARTPins_SleepSafe(void)
-{
+void GNSS_UARTPins_SleepSafe(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   GPIO_InitStruct.Pin = GPIO_PIN_6;
@@ -1527,46 +1491,41 @@ void GNSS_UARTPins_SleepSafe(void)
  * dead module. The wake path used to only re-enable STOP mode on failure,
  * leaving PB6 driven into a depowered receiver (the parasitic-drive
  * condition #249 eliminated). */
-static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss)
-{
+static void GNSS_TeardownToOff(GNSS_HandleTypeDef *hgnss) {
   hgnss->rx_dma_active = false;
   if (hgnss->huart != NULL) {
     HAL_UART_AbortReceive(hgnss->huart);
     HAL_UART_DeInit(hgnss->huart);
   }
-  GNSS_UARTPins_SleepSafe();                 /* PB6 OUTPUT-LOW, PB7 ANALOG */
+  GNSS_UARTPins_SleepSafe(); /* PB6 OUTPUT-LOW, PB7 ANALOG */
   HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(hgnss->en_port,  hgnss->en_pin,  GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_RESET);
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_ENABLE);
   hgnss->is_powered = false;
 }
 
 /**
-  * @brief  Wake GPS from standby mode
-  * @param  hgnss: Pointer to GNSS handle structure
-  * @retval GNSS status
-  * @note   IMPROVED SEQUENCE: Initialize UART/DMA BEFORE enabling GPS (eliminates FIFO corruption)
-  */
-GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
-{
-  if (hgnss == NULL || !hgnss->is_initialized)
-  {
+ * @brief  Wake GPS from standby mode
+ * @param  hgnss: Pointer to GNSS handle structure
+ * @retval GNSS status
+ * @note   IMPROVED SEQUENCE: Initialize UART/DMA BEFORE enabling GPS (eliminates FIFO corruption)
+ */
+GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss) {
+  if (hgnss == NULL || !hgnss->is_initialized) {
     return GNSS_ERROR;
   }
-  
+
   /* Disable MCU STOP mode during GPS operation */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_GNSS_Id), UTIL_LPM_DISABLE);
   SONDE_LOG_STR("[GPS WAKE] MCU STOP mode disabled\r\n");
-  
+
   /* STEP 1: Initialize UART peripheral FIRST (before GPS transmits) */
-  if (hgnss->huart != NULL)
-  {
+  if (hgnss->huart != NULL) {
     /* Reinitialize UART peripheral - restores PB6/PB7 to UART function */
     /* R3-06 (#220): check the init result - a failed UART restore must not
      * continue blindly (the DMA would start on a dead peripheral). Roll back
      * the LPM lock exactly like the DMA-failure path below. */
-    if (HAL_UART_Init(hgnss->huart) != HAL_OK)
-    {
+    if (HAL_UART_Init(hgnss->huart) != HAL_OK) {
       SONDE_LOG_STR("[GPS WAKE] ERROR - UART reinit failed\r\n");
       /* LT-04 (#276): full teardown, not just the LPM lock - PB6 must not sit
        * AF-HIGH into a depowered module (the SP-09/#249 condition). */
@@ -1574,17 +1533,17 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
       return GNSS_ERROR;
     }
     SONDE_LOG_STR("[GPS WAKE] UART reinitialized\r\n");
-    
+
     /* CRITICAL: Flush UART hardware FIFO to ensure clean start */
     /* This prevents reading any stale/corrupt data from previous cycle */
     __HAL_UART_FLUSH_DRREGISTER(hgnss->huart);
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);   // Parity error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);   // Framing error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);   // Noise error
-    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF);  // Overrun error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_PEF);  // Parity error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_FEF);  // Framing error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_NEF);  // Noise error
+    __HAL_UART_CLEAR_FLAG(hgnss->huart, UART_CLEAR_OREF); // Overrun error
     SONDE_LOG_STR("[GPS WAKE] UART hardware FIFO flushed\r\n");
   }
-  
+
   /* STEP 2: Clear software buffers (and the F-011 absolute counters) */
   hgnss->dma_head = 0;
   hgnss->dma_tail = 0;
@@ -1597,11 +1556,10 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
   /* DR-10: drop the cross-sleep vertical-speed reference too (see GNSS_PowerOn). */
   hgnss->extended.has_prev_altitude = false;
   SONDE_LOG_STR("[GPS WAKE] Software buffers cleared\r\n");
-  
+
   /* STEP 3: Start DMA reception (UART is ready and listening) */
   HAL_StatusTypeDef dma_status = HAL_UART_Receive_DMA(hgnss->huart, hgnss->dma_buffer, GNSS_DMA_BUFFER_SIZE);
-  if (dma_status != HAL_OK)
-  {
+  if (dma_status != HAL_OK) {
     SONDE_LOG_STR("[GPS WAKE] ERROR - DMA start failed\r\n");
     /* BUG 2.4 FIX + LT-04 (#276): re-enable STOP mode AND return the pins to
      * the SP-09 (#249) sleep-safe state - PB6 AF push-pull idles HIGH and
@@ -1615,15 +1573,15 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
    * module is enabled (next step), so an early glitched first character can
    * still recover via the error callback instead of killing the whole window. */
   hgnss->rx_dma_active = true;
-  
+
   /* STEP 4: Ensure PB10 is HIGH (main power) - may have been affected by sleep mode */
-  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET);   // PB10 HIGH (main power)
+  HAL_GPIO_WritePin(hgnss->pwr_port, hgnss->pwr_pin, GPIO_PIN_SET); // PB10 HIGH (main power)
   SONDE_LOG_STR("[GPS WAKE] PB10 HIGH - main power confirmed\r\n");
-  
+
   /* STEP 5: Enable GPS via PB5 - UART/DMA infrastructure is ready to capture from first byte */
-  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET);     // PB5 HIGH (enable)
+  HAL_GPIO_WritePin(hgnss->en_port, hgnss->en_pin, GPIO_PIN_SET); // PB5 HIGH (enable)
   SONDE_LOG_STR("[GPS WAKE] PB5 HIGH - GPS enabled\r\n");
-  
+
 #ifndef SONDE_FLIGHT_BUILD
   /* R2-15 (#119): this debug block must not exist in flight builds — the
    * buffers, snprintf calls, and float/int conversions execute even though
@@ -1648,10 +1606,10 @@ GNSS_StatusTypeDef GNSS_WakeFromStandby(GNSS_HandleTypeDef *hgnss)
     SONDE_LOG_STR("[GPS WAKE DEBUG] UART no errors\r\n");
   }
 #endif /* SONDE_FLIGHT_BUILD */
-  
+
   /* No delay needed - 40 second polling loop will wait for GPS boot and satellite acquisition */
   hgnss->is_powered = true;
   SONDE_LOG_STR("[GPS WAKE] Complete - UART/DMA ready for GPS transmission\r\n");
-  
+
   return GNSS_OK;
 }
