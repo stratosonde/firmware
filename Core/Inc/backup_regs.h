@@ -20,7 +20,7 @@
  *
  * RULE: any new backup-register user must add its allocation here first.
  *
- * DURABILITY POLICY (H-01/#281, docs/decisions/0017-mission-manifest.md): the
+ * DURABILITY POLICY (H-01/#281, docs/decisions/0035-mission-manifest.md): the
  * RTC backup registers are a RESET CACHE, never the durable truth. Facts that
  * must survive a full power loss without a trusted VBAT rail live in internal
  * flash (Tier-1/Tier-2 credentials, the Mission Manifest lifecycle record) or

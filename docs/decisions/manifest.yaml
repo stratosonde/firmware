@@ -37,6 +37,7 @@ records:
   - { id: DDR-0025, file: 0025-firmware-servicing-bootloader-non-ota-update-policy.md, title: Firmware Servicing, Bootloader, and Non-OTA Update Policy, status: Draft }
   - { id: DDR-0026, file: 0026-verification-traceability-flight-readiness-evidence.md, title: Verification, Traceability, Hardware-in-the-Loop CI, and Flight-Readiness Evidence, status: Draft }
   - { id: DDR-0027, file: 0027-long-lived-wire-protocol-compatibility.md, title: Long-Lived Wire Protocol Compatibility, status: Draft }
+  - { id: DDR-0035, file: 0035-mission-manifest.md, title: Mission Manifest — Durable Mission-Lifecycle Record in Internal Flash, status: Accepted }
 
 # Retired aliases from the pre-2026-08-09 V2 numbering (README table era).
 # Alias references in older prose still resolve, but FAIL the gate; new text

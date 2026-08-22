@@ -1,4 +1,4 @@
-# 0017 — Mission Manifest: durable mission-lifecycle record in internal flash
+# DDR-0035 — Mission Manifest: durable mission-lifecycle record in internal flash
 
 **Status:** accepted (2026-08-22) · **Issues:** #281 (H-01), #78 (A-003) · **Cross-links:** DDR-0002, DDR-0018, #270 (C-01), #256 (SP-06), #287 (H-11)
 
