@@ -730,15 +730,24 @@ static void test_c01_flight_door_gated(const char *mstate, const char *mregh) {
   CHECK_REGRESSION(strstr(mregh, "#define MULTIREGION_VERSION 5") != NULL,
                    "C-01-version-5");
 
-  /* H-11 (#287): GNSS-accepted latch is the third door gate. Verified in
-   * mission_state.c: no fix yet -> door stays shut; first fix -> opens. */
-  char *ms_body = function_body(mstate, "void MissionState_Update(");
-  CHECK(ms_body != NULL);
-  if (ms_body) {
-    const char *g = strstr(ms_body, "MissionState_GnssAccepted");
-    const char *d = strstr(ms_body, "MissionState_EnterFlight();");
+  /* H-11 (#287): GNSS-accepted latch is the third door gate. */
+  char *ms_body_h11 = function_body(mstate, "void MissionState_Update(");
+  CHECK(ms_body_h11 != NULL);
+  if (ms_body_h11) {
+    const char *g = strstr(ms_body_h11, "MissionState_GnssAccepted");
+    const char *d = strstr(ms_body_h11, "MissionState_EnterFlight();");
     CHECK_REGRESSION(g != NULL && d != NULL && g < d, "H-11-gnss-gate");
-    free(ms_body);
+    free(ms_body_h11);
+  }
+
+  /* SP-06 (#256): launch-detector input is a 3-sample mean inside the
+   * mission_state.c wrapper, so a single spike cannot false-arm. */
+  char *ms_body2 = function_body(mstate, "void MissionState_Update(");
+  CHECK(ms_body2 != NULL);
+  if (ms_body2) {
+    const char *w = strstr(ms_body2, "window[");
+    CHECK_REGRESSION(w != NULL, "SP-06-window");
+    free(ms_body2);
   }
 }
 

@@ -161,6 +161,24 @@ void MissionState_EnterFlight(void) {
 }
 
 void MissionState_Update(float pressure_hpa, bool pressure_valid, uint32_t now_s) {
+  /* SP-06 (#256, P-COMM-013): average the launch-detector input over the last
+   * 3 samples so a single gust or data glitch cannot false-arm, yet 3 samples
+   * = 60 s at the 20 s commissioning chunk = fast enough for ascent entry. */
+  static float window[3];
+  static uint8_t wc = 0, wn = 0;
+  float avg = pressure_hpa;
+  if (pressure_valid) {
+    window[wc] = pressure_hpa;
+    wc = (uint8_t)((wc + 1U) % 3U);
+    if (wn < 3U)
+      wn++;
+    float acc = 0.0f;
+    for (uint8_t i = 0; i < wn; i++)
+      acc += window[i];
+    avg = acc / (float)wn;
+  }
+  pressure_hpa = avg;
+
   /* BR-LIFE-007 / MISSION-01b (#142) + STAB-06 (#153): autonomous launch
    * detection in COMMISSIONING, bounded reference window (mission_logic.c):
    * a high-pressure weather system older than MISSION_LAUNCH_REF_WINDOW_S
