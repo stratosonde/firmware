@@ -11,6 +11,7 @@
 ./Core/Src/main.o
 ./Core/Src/mission_state.o
 ./Core/Src/mission_logic.o
+./Core/Src/mission_manifest.o
 ./Core/Src/ms5607.o
 ./Core/Src/reset_cause.o
 ./Core/Src/multiregion_context.o
