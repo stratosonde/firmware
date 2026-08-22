@@ -752,8 +752,16 @@ static void test_c01_flight_door_gated(const char *mstate, const char *mregh) {
 }
 
 /* ========================================================================== */
-/* H-02 - Config_Init must run before MX_LoRaWAN_Init                          */
+/* M-01 (#289) - deferred ring reconstruction rides the header-flush wire      */
 /* ========================================================================== */
+static void test_m01_recon_hook(const char *app) {
+  printf("M-01 (#289): lora_app.c wires FlashLog_ReconstructStep per wake\n");
+  /* The deferred scan is bounded-per-call, so it rides the same wire as the
+   * flush (lora_app.c's flush_header_sync site) - one chunk per completed
+   * cycle/park, no boot blocking. */
+  CHECK_REGRESSION(strstr(app, "FlashLog_ReconstructStep(&hflashlog)") != NULL,
+                   "M-01-recon-hook");
+}
 
 static void test_h02_config_before_lorawan_init(const char *mainc) {
   printf("H-02: Config_Init must run before MX_LoRaWAN_Init\n");
@@ -819,6 +827,8 @@ int main(void) {
   test_c01_flight_door_gated(mstate, mregh);
   printf("\n");
   test_h02_config_before_lorawan_init(mainc);
+  printf("\n");
+  test_m01_recon_hook(app);
 
   /* pooled scan buffers: freed at exit (scan_pool_track) */
   /* pooled scan buffers: freed at exit (scan_pool_track) */

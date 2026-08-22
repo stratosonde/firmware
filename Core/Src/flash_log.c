@@ -486,7 +486,12 @@ static FlashLog_StatusTypeDef FlashLog_WriteHeader(FlashLog_HandleTypeDef *hlog)
    * resurrect an older watermark → duplicate retransmission). */
   header.sequence = hlog->header_generation;
   header.oldest_addr = hlog->oldest_addr;
-  header.flags = 0;
+  /* M-01 (#289): a checkpoint written while the deferred ring scan is still
+   * pending carries the flag so a reset mid-recon re-enters the bounded scan
+   * (RAM cursor restarts at 0 - idempotent, never a boot prerequisite). */
+  header.flags = (hlog->reconstruct_pending != 0U)
+                     ? FLASH_LOG_HEADER_FLAG_RECON_PENDING
+                     : 0U;
   header.last_transmitted_seq = hlog->tx_high_water; /* v5 semantics */
   header.reserved[0] = hlog->recovery_frontier;      /* v5: walker */
   header.reserved[1] = hlog->pending_frontier;       /* BEH-05: drain edge */
@@ -637,15 +642,21 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     hlog->active_header = 1;
     from_v4 = (header_b.version == FLASH_LOG_HEADER_VERSION_LEGACY_FIFO);
   } else {
-    /* No valid headers - R3-07 (#221): do NOT immediately treat the
-     * archive as disposable. The data ring may still hold thousands of
-     * valid CRC-protected records; reconstruct the state from them. Only
-     * a demonstrably blank ring falls through to a fresh init. */
+    /* No valid headers - R3-07 (#221), deferred per M-01 (#289): the whole
+     * -ring scan is NOT a boot prerequisite. Probe a bounded window
+     * (FLASH_LOG_RECON_PROBE_SLOTS): enough to distinguish a real ring from
+     * blank flash (erase-ahead slack only ever clears <PROBE slots of the
+     * head). Valid data -> provisional frontier from the window + defer the
+     * full scan to FlashLog_ReconstructStep() on later energy-eligible
+     * wakes. Demonstrably blank -> fresh init (same as pre-M-01). */
+    uint32_t probe_n = (hlog->max_records < FLASH_LOG_RECON_PROBE_SLOTS)
+                           ? hlog->max_records
+                           : FLASH_LOG_RECON_PROBE_SLOTS;
     FlashLog_Record_t probe;
     uint32_t valid = 0;
     uint32_t max_seq = 0, min_seq = 0;
     uint32_t max_slot = 0, min_slot = 0;
-    for (uint32_t slot = 0; slot < hlog->max_records; slot++) {
+    for (uint32_t slot = 0; slot < probe_n; slot++) {
       uint32_t addr = FLASH_LOG_DATA_START + slot * FLASH_LOG_RECORD_SIZE;
       if (W25Q_Read(hw25q, addr, (uint8_t *)&probe, sizeof(probe)) != W25Q_OK) {
         return FLASH_LOG_ERROR_FLASH;
@@ -665,12 +676,9 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
     }
 
     if (valid > 0) {
-      /* Reconstruct a plausible frontier: identity continues ABOVE the
-       * maximum sequence seen (never reused); the write address resumes
-       * after the newest record's slot (wrap-aware). Both watermarks
-       * restart at 0: the whole recovered ring becomes pending-live and
-       * re-drains once (the backend dedupes by sequence) - recovering
-       * possibly-unsent science beats the risk of silently dropping it. */
+      /* Provisional frontier exactly like pre-M-01 but BOUNDED: identity
+       * continues above the window max, both watermarks restart at 0 (the
+       * recovered window re-drains once, deduped by the backend). */
       hlog->record_count = max_seq + 1U;
       hlog->write_addr = FLASH_LOG_DATA_START +
                          (((max_slot + 1U) % hlog->max_records) * FLASH_LOG_RECORD_SIZE);
@@ -678,15 +686,25 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
       hlog->tx_high_water = 0;
       hlog->recovery_frontier = 0;
       hlog->active_header = 0;
-      SONDE_LOG_STR("FLASH LOG: both headers invalid - RECONSTRUCTED from data ring\r\n");
 
-      /* Persist the reconstructed header (a reset mid-write simply
-       * triggers reconstruction again - idempotent). */
-      W25Q_EraseSector(hw25q, HEADER_A_ADDR);
-      W25Q_EraseSector(hw25q, HEADER_B_ADDR);
-      status = FlashLog_WriteHeader(hlog);
-      if (status != FLASH_LOG_OK) {
-        return status;
+      if (probe_n < hlog->max_records) {
+        /* M-01: defer the rest of the ring; completion reconciles and
+         * persists (see FlashLog_ReconstructStep). */
+        hlog->reconstruct_pending = 1;
+        hlog->reconstruct_cursor = probe_n;
+        hlog->recon_max_seq = max_seq;
+        hlog->recon_max_slot = max_slot;
+        SONDE_LOG_STR("FLASH LOG: both headers invalid - RECONSTRUCTION DEFERRED (M-01)\r\n");
+      } else {
+        /* Tiny geometry (bench part): scan completed inside the probe bound;
+         * persist immediately as before. */
+        W25Q_EraseSector(hw25q, HEADER_A_ADDR);
+        W25Q_EraseSector(hw25q, HEADER_B_ADDR);
+        status = FlashLog_WriteHeader(hlog);
+        if (status != FLASH_LOG_OK) {
+          return status;
+        }
+        SONDE_LOG_STR("FLASH LOG: both headers invalid - RECONSTRUCTED from data ring\r\n");
       }
     } else {
       /* Demonstrably blank - initialize fresh */
@@ -717,6 +735,20 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
   }
 
   hlog->next_sequence = hlog->record_count;
+
+  /* M-01 (#289): a persisted RECON_PENDING flag resumes the deferred scan:
+   * the RAM cursor restarts at 0 (bounded chunks re-walk the ring - at most
+   * max_records/STEP_SLOTS calls - an idempotent, convergent rescan). */
+  if (valid_a || valid_b) {
+    const FlashLog_Header_t *sel =
+        (hlog->active_header == 0U) ? &header_a : &header_b;
+    if ((sel->flags & FLASH_LOG_HEADER_FLAG_RECON_PENDING) != 0U) {
+      hlog->reconstruct_pending = 1;
+      hlog->reconstruct_cursor = 0;
+      hlog->recon_max_seq = (hlog->record_count > 0U) ? hlog->record_count - 1U : 0U;
+      hlog->recon_max_slot = 0;
+    }
+  }
 
   /* R3-04 (#218): v4 -> v5 migration. The legacy rising FIFO commit
    * watermark has no usable direction under one-pass semantics; restart
@@ -755,6 +787,69 @@ FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTy
 
   hlog->initialized = true;
 
+  return FLASH_LOG_OK;
+}
+
+/* M-01 (#289): advance the deferred ring reconstruction by one bounded chunk
+ * (FLASH_LOG_RECON_STEP_SLOTS). Rides the energy-eligible wake, never the boot
+ * path. Completion: the frontier is reconciled monotonically UPWARD (identity
+ * is never reused; F-007) and the reconstructed header is persisted with the
+ * RECON_PENDING flag cleared. A persisted checkpoint carries the flag so a
+ * reset mid-recon simply re-enters here (idempotent rescan, RAM cursor 0). */
+FlashLog_StatusTypeDef FlashLog_ReconstructStep(FlashLog_HandleTypeDef *hlog) {
+  if (hlog == NULL || !hlog->initialized) {
+    return FLASH_LOG_ERROR_PARAM;
+  }
+  if (!hlog->reconstruct_pending) {
+    return FLASH_LOG_OK; /* nothing pending */
+  }
+
+  uint32_t end = hlog->reconstruct_cursor + FLASH_LOG_RECON_STEP_SLOTS;
+  if (end > hlog->max_records) {
+    end = hlog->max_records;
+  }
+  for (uint32_t slot = hlog->reconstruct_cursor; slot < end; slot++) {
+    uint32_t addr = FLASH_LOG_DATA_START + slot * FLASH_LOG_RECORD_SIZE;
+    FlashLog_Record_t probe;
+    if (W25Q_Read(hlog->hw25q, addr, (uint8_t *)&probe, sizeof(probe)) != W25Q_OK) {
+      return FLASH_LOG_ERROR_FLASH;
+    }
+    if (!FlashLog_VerifyRecord(&probe)) {
+      continue; /* blank, torn, or corrupt slot - not rescan-blocking (R3-07) */
+    }
+    if (probe.sequence > hlog->recon_max_seq) {
+      hlog->recon_max_seq = probe.sequence;
+      hlog->recon_max_slot = slot;
+    }
+  }
+  hlog->reconstruct_cursor = end;
+  if (hlog->reconstruct_cursor < hlog->max_records) {
+    return FLASH_LOG_OK; /* chunk done; still pending */
+  }
+
+  /* Completion: reconcile ONLY upward - the boot probe's frontier may lag
+   * behind the ring's true newest slot (or behind new records written during
+   * the scan); the pending/drain edges (0..next) absorb the widening. */
+  if (hlog->recon_max_seq >= hlog->record_count) {
+    hlog->record_count = hlog->recon_max_seq + 1U;
+    hlog->next_sequence = hlog->record_count;
+    hlog->pending_frontier = hlog->next_sequence;
+    hlog->drain_top = hlog->next_sequence;
+  }
+
+  /* Persist the reconstructed header: both header sectors get the complete
+   * frontier with the flag cleared, ending the deferred episode. */
+  W25Q_EraseSector(hlog->hw25q, HEADER_A_ADDR);
+  W25Q_EraseSector(hlog->hw25q, HEADER_B_ADDR);
+  hlog->reconstruct_pending = 0;
+  FlashLog_StatusTypeDef st = FlashLog_WriteHeader(hlog);
+  if (st != FLASH_LOG_OK) {
+    /* Stay pending so a later step retries the persist (never wedges: the
+     * frontier is already correct in RAM for this boot). */
+    hlog->reconstruct_pending = 1;
+    return st;
+  }
+  SONDE_LOG_STR("FLASH LOG: deferred reconstruction COMPLETE (M-01)\r\n");
   return FLASH_LOG_OK;
 }
 

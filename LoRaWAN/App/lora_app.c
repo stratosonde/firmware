@@ -1932,6 +1932,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
      * persisted watermark. No-op when nothing was committed. */
     FlashLog_FlushHeaderSync(&hflashlog);
   }
+  /* M-01 (#289): deferred ring reconstruction rides the same bounded
+   * energy-eligible wire as the header flush - one chunk (128 slots)
+   * per completed cycle/park; no-op unless the pending flag is set. */
+  FlashLog_ReconstructStep(&hflashlog);
 
   if (fsm_out.retire_batch) {
     /* R21 (#51) + FR-09 (#92): nothing convertible. Retire the FULL

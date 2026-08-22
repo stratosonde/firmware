@@ -52,6 +52,15 @@ extern "C" {
 /** @brief Header magic number */
 #define FLASH_LOG_HEADER_MAGIC 0xF1A5DEAD
 
+/* M-01 (#289): header.flags bit — deferred ring reconstruction was still
+ * pending at this checkpoint (a reset mid-recon re-enters the bounded scan). */
+#define FLASH_LOG_HEADER_FLAG_RECON_PENDING 0x00000001U
+
+/* M-01 (#289): bounded boot probe on double-header-loss (slots), and the
+ * bounded per-call deferred scan chunk (slots). */
+#define FLASH_LOG_RECON_PROBE_SLOTS 256U
+#define FLASH_LOG_RECON_STEP_SLOTS 128U
+
 /** @brief Header version (increment if structure changes)
  *  v3 (T4): headers moved to separate sectors 0/1, data starts at sector 2.
  *  v4 (D5/#35): record layout — altitude_gps int32, altitude_bar deleted,
@@ -174,8 +183,8 @@ typedef struct __attribute__((packed)) {
  * @brief Flash log handle structure
  */
 typedef struct {
-  W25Q_HandleTypeDef *hw25q;  /**< Pointer to W25Q flash handle */
-  bool initialized;           /**< Initialization flag */
+  W25Q_HandleTypeDef *hw25q; /**< Pointer to W25Q flash handle */
+  bool initialized;          /**< Initialization flag */
   /* Runtime flash geometry (W25Q80 bench fallback vs W25Q16 flight part):
    * resolved from the W25Q handle in FlashLog_Init. The FLASH_LOG_DATA_END /
    * FLASH_LOG_MAX_RECORDS macros remain the 2MB-device COMPILE-TIME values
@@ -205,6 +214,14 @@ typedef struct {
   uint8_t active_header;      /**< Active header slot (0 or 1) */
   uint8_t sync_deferred;      /**< Finding #8: MarkRecoverySent skips SyncHeader while set (bulk burst) */
   uint8_t header_dirty;       /**< Finding #8: watermark advanced past the last persisted header */
+  /* M-01 (#289): on double-header-loss the full ring scan is DEFERRED off
+   * the boot path (see FlashLog_ReconstructStep). RAM-only; a reset restarts
+   * the cursor (idempotent; the reconstruct_pending header flag bit survives
+   * so the rescan is re-entered). */
+  uint8_t reconstruct_pending; /**< Deferred ring scan requested */
+  uint32_t reconstruct_cursor; /**< Next ring slot the deferred scan resumes at */
+  uint32_t recon_max_seq;      /**< Absolute max sequence seen so far in the deferred scan */
+  uint32_t recon_max_slot;     /**< Slot of recon_max_seq */
 } FlashLog_HandleTypeDef;
 
 /* Exported functions --------------------------------------------------------*/
@@ -217,6 +234,19 @@ typedef struct {
  * @note   Recovers state from flash headers if present
  */
 FlashLog_StatusTypeDef FlashLog_Init(FlashLog_HandleTypeDef *hlog, W25Q_HandleTypeDef *hw25q);
+
+/**
+ * @brief  M-01 (#289): advance a deferred ring reconstruction by one bounded
+ *         chunk (FLASH_LOG_RECON_STEP_SLOTS). Call from an energy-eligible
+ *         wake (rides the header-flush wire in lora_app.c).
+ * @note   Whole-ring recovery is never a boot prerequisite; completion
+ *         reconciles the frontier monotonically upward and persists the
+ *         header. Completion is observed via hlog->reconstruct_pending == 0.
+ * @param  hlog: Pointer to flash log handle
+ * @retval FLASH_LOG_OK (no-op when nothing pending / chunk done / completion
+ *         persisted), FLASH_LOG_ERROR_PARAM, FLASH_LOG_ERROR_FLASH
+ */
+FlashLog_StatusTypeDef FlashLog_ReconstructStep(FlashLog_HandleTypeDef *hlog);
 
 /**
  * @brief  De-initialize the flash logging system
