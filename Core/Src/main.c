@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2024 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -22,29 +22,29 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdlib.h>
-#include "stm32wlxx_hal_pwr.h"
-#include "SEGGER_RTT.h"
-#include "sonde_log.h"  /* R50 (#47): compile-time log gate */
-#include "atgm336h.h"
-#include "sys_sensors.h"
-#include "sht31.h"
-#include "ms5607.h"
+#include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h" // For SUBGRF TCXO control
+#include "../../Utilities/lpm/tiny_lpm/stm32_lpm.h"
 #include "LmHandler.h"
 #include "LmHandlerTypes.h"
-#include "../../Utilities/lpm/tiny_lpm/stm32_lpm.h"
-#include "h3lite.h"
-#include "multiregion_h3.h"
-#include "w25q16jv.h"
-#include "flash_log.h"
-#include "payload_format.h"
+#include "SEGGER_RTT.h"
+#include "atgm336h.h"
+#include "backup_regs.h" /* F-003 (#203): mission backup-register snapshot list */
 #include "config.h"
-#include "reset_cause.h"
-#include "backup_regs.h"  /* F-003 (#203): mission backup-register snapshot list */
-#include "sys_caps.h"     /* F-014 (#207): capability marks */
-#include "timer_if.h"  /* RV-09 (#165): TIMER_IF_Init in the deferred failover */
+#include "flash_log.h"
+#include "h3lite.h"
 #include "mission_state.h"
-#include "../../Middlewares/Third_Party/SubGHz_Phy/stm32_radio_driver/radio_driver.h"  // For SUBGRF TCXO control
+#include "ms5607.h"
+#include "multiregion_h3.h"
+#include "payload_format.h"
+#include "reset_cause.h"
+#include "sht31.h"
+#include "sonde_log.h" /* R50 (#47): compile-time log gate */
+#include "stm32wlxx_hal_pwr.h"
+#include "sys_caps.h" /* F-014 (#207): capability marks */
+#include "sys_sensors.h"
+#include "timer_if.h" /* RV-09 (#165): TIMER_IF_Init in the deferred failover */
+#include "w25q16jv.h"
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,12 +58,12 @@
  * (stm32wlxx_it.c; 0 = NMI — MAGIC|0 reads back as the bare magic, harmless
  * given the mask check), 6 = deadman (lora_app.c); 16+ = boot-time fatal
  * errors. */
-#define FAULT_CODE_CLOCK_CONFIG    16U
-#define FAULT_CODE_PAYLOAD_FORMAT  17U
-#define FAULT_CODE_FLASH_INIT      18U  /* R29 (#36): W25Q/archive unusable */
-#define FAULT_CODE_WATCHDOG_INIT   19U  /* F6 (#171): IWDG init failed - no supervision */
-#define FAULT_CODE_RTC_INIT        20U  /* F6 (#171): RTC init failed - no timebase */
-#define FAULT_CODE_RTC_STALLED     21U  /* F4 (#170): RTC stalled on LSI post-failover */
+#define FAULT_CODE_CLOCK_CONFIG 16U
+#define FAULT_CODE_PAYLOAD_FORMAT 17U
+#define FAULT_CODE_FLASH_INIT 18U    /* R29 (#36): W25Q/archive unusable */
+#define FAULT_CODE_WATCHDOG_INIT 19U /* F6 (#171): IWDG init failed - no supervision */
+#define FAULT_CODE_RTC_INIT 20U      /* F6 (#171): RTC init failed - no timebase */
+#define FAULT_CODE_RTC_STALLED 21U   /* F4 (#170): RTC stalled on LSI post-failover */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -106,9 +106,9 @@ static void MX_GPIO_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_IWDG_Init(void);
-static void LSE_FailoverToLSI(void);   /* F-14 (#70) */
-static void RTC_LivenessCheck(void);   /* F-14 (#70) */
-static bool LSE_StartWithDriveEscalation(void);  /* 2026-08-19: drive-ramp LSE start */
+static void LSE_FailoverToLSI(void);            /* F-14 (#70) */
+static void RTC_LivenessCheck(void);            /* F-14 (#70) */
+static bool LSE_StartWithDriveEscalation(void); /* 2026-08-19: drive-ramp LSE start */
 /* RV-09 (#165): the CSS interrupt only flags; the failover runs in the main
  * loop. RCC reconfiguration + RTC re-init inside an ISR races any main-loop
  * RTC access. */
@@ -128,8 +128,7 @@ void leds_boot_seq(void);
  * and it deinited I2C/ADC/UART. A function with side effects like that must
  * not sit one uncomment away from the boot path (same rule as F23). */
 
-void leds_boot_seq(void)
-{
+void leds_boot_seq(void) {
   /* R09/DDR-0002: dark in flight — the boot blink is a bench/commissioning
    * signal only; a flight unit rebooting at altitude stays dark. */
   if (!MissionState_IsCommissioning()) {
@@ -148,17 +147,16 @@ void leds_boot_seq(void)
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
 
   /* USER CODE BEGIN 1 */
   /* Configure RTT Terminal 0 for all debug output */
   /* Everything goes to Terminal 0 for simple viewer compatibility */
   /* Increased buffer size and non-blocking mode to prevent watchdog hangs */
-  static char rtt_buffer[4096];  // 4KB buffer (up from default 1KB)
+  static char rtt_buffer[4096]; // 4KB buffer (up from default 1KB)
   SEGGER_RTT_ConfigUpBuffer(0, "Terminal", rtt_buffer, sizeof(rtt_buffer), SEGGER_RTT_MODE_NO_BLOCK_SKIP);
   /* F12 (#173): the build marker must be genuinely REFERENCED - the link is
    * -ffunction-sections -fdata-sections -Wl,--gc-sections, and an
@@ -220,8 +218,8 @@ int main(void)
 
   /* NOTE: IWDG watchdog armed above, before SystemClock_Config (FW-5 / FR-01) */
   SONDE_LOG_STR("IWDG watchdog armed (32.76s timeout)\r\n");
-  
-  /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init 
+
+  /* CRITICAL: Initialize DMA and I2C2 BEFORE LoRaWAN_Init
    * LoRaWAN_Init -> SystemApp_Init -> EnvSensors_Init (needs I2C2)
    * vcom_Init (inside SystemApp_Init) needs DMA for UART */
   MX_DMA_Init();
@@ -256,35 +254,35 @@ int main(void)
     SONDE_LOG_STR("Continuing with hardcoded defaults...\r\n");
   }
 
-  MX_LoRaWAN_Init();  /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
+  MX_LoRaWAN_Init(); /* Note: MissionState_Init() runs inside, after MultiRegion_Init */
   MX_SPI2_Init();
   /* MX_I2C2_Init(); - Already called in SysInit above */
   /* MX_IWDG_Init(); - FW-5/FR-01: moved up, immediately after HAL_Init() */
   /* USER CODE BEGIN 2 */
   /* Explicitly initialize RTT BEFORE J-Link connects to ensure control block is findable */
 
-  
   leds_boot_seq();
-  
+
   SONDE_LOG_STR("Boot sequence complete, initializing H3Lite...\r\n");
-  
+
   // Initialize h3lite for region detection
   if (!h3liteInit()) {
     SONDE_LOG_STR("ERROR: H3Lite initialization failed!\r\n");
-    Error_Handler();  /* F-001: recoverable — returns */
+    Error_Handler(); /* F-001: recoverable — returns */
     /* F-001 residual: no success print on this path — failure stays honest. */
   } else {
     SONDE_LOG_STR("H3Lite initialized successfully\r\n");
   }
-  
+
   // Initialize external flash (W25Q16JV) for logging
   /* First-flight policy: retry the device locally, then breadcrumb and reset.
    * A science mission without durable records is not a valid degraded mode. */
   SONDE_LOG_STR("Initializing external flash (W25Q16JV)...\r\n");
   W25Q_StatusTypeDef w25q_status = W25Q_ERROR;
   for (int flash_attempt = 0; flash_attempt < 3; flash_attempt++) {
-    w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9);  // Use software CS on PB9
-    if (w25q_status == W25Q_OK) break;
+    w25q_status = W25Q_Init(&hw25q, &hspi2, GPIOB, GPIO_PIN_9); // Use software CS on PB9
+    if (w25q_status == W25Q_OK)
+      break;
     SONDE_LOG("W25Q16JV init attempt %d failed (status %d)\r\n", flash_attempt + 1, w25q_status);
     HAL_Delay(100);
   }
@@ -297,11 +295,11 @@ int main(void)
     }
   } else {
     /* Keep the capability failure visible in the final pre-reset diagnostics. */
-    SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
+    SysCaps_MarkFailed(SYS_CAP_FLASH); /* F-014 (#207) */
     SONDE_LOG("ERROR: W25Q16JV init failed after 3 attempts (status %d) — resetting to retry\r\n", w25q_status);
     Error_Handler_Fatal(FAULT_CODE_FLASH_INIT);
   }
-  
+
   // Initialize flash logging system
   /* F-001 residual: don't init the log on a dead W25Q handle — a "success"
    * here would be a false success print. Failure stays honest (DDR-0003);
@@ -315,9 +313,9 @@ int main(void)
       uint32_t total_capacity, used_records, free_records;
       FlashLog_GetStats(&hflashlog, &total_capacity, &used_records, &free_records);
       SONDE_LOG("Flash logging initialized: %lu/%lu records used (%lu free)\r\n",
-                        used_records, total_capacity, free_records);
+                used_records, total_capacity, free_records);
     } else {
-      SysCaps_MarkFailed(SYS_CAP_FLASH);  /* F-014 (#207) */
+      SysCaps_MarkFailed(SYS_CAP_FLASH); /* F-014 (#207) */
       SONDE_LOG("ERROR: Flash logging initialization failed (status: %d) — resetting to retry\r\n", flashlog_status);
       /* Fatal path records the fault and resets; a later boot retries normal
        * initialization. */
@@ -327,7 +325,7 @@ int main(void)
   /* F-014 (#207): boot-visible capability summary (0 = all available). */
   SONDE_LOG("Boot capabilities: failed-mask=0x%02X (bit0 flash, bit1 GNSS, bit2 sensors, bit3 radio)\r\n",
             (unsigned)SysCaps_Raw());
-  
+
   // Validate payload format sizes at compile time
   SONDE_LOG_STR("Validating payload format sizes...\r\n");
   if (!PayloadFormat_ValidateSizes()) {
@@ -336,7 +334,7 @@ int main(void)
     SONDE_LOG_STR("ERROR: Payload format size validation failed!\r\n");
     Error_Handler_Fatal(FAULT_CODE_PAYLOAD_FORMAT);
   }
-  
+
   /* #77: H3Lite bench profiler deleted (never enabled in flight; git history
    * retains it if a bench re-run is ever needed). */
 
@@ -351,9 +349,8 @@ int main(void)
   SONDE_LOG_STR("\r\n===== STARTING LORAWAN OPERATION =====\r\n");
   SONDE_LOG_STR("Main loop: Continuous LoRaWAN servicing\r\n");
   SONDE_LOG_STR("Join will happen in background via TxTimer\r\n\r\n");
-  
-  while (1)
-  {
+
+  while (1) {
     /* USER CODE END WHILE */
     MX_LoRaWAN_Process();
 
@@ -370,7 +367,7 @@ int main(void)
       LSE_FailoverToLSI();
     }
 
-    RTC_LivenessCheck();  /* F-14 (#70): frozen time must not look alive */
+    RTC_LivenessCheck(); /* F-14 (#70): frozen time must not look alive */
 
     /* Refresh watchdog to prevent reset (must be called within 32.76 seconds) */
     HAL_IWDG_Refresh(&hiwdg);
@@ -480,11 +477,10 @@ static bool LSE_StartWithDriveEscalation(void) {
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
@@ -494,13 +490,12 @@ void SystemClock_Config(void)
   bool lse_started = LSE_StartWithDriveEscalation();
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_LSE
-                              |RCC_OSCILLATORTYPE_MSI;
+   */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_LSE | RCC_OSCILLATORTYPE_MSI;
   RCC_OscInitStruct.LSEState = lse_started ? RCC_LSE_ON : RCC_LSE_OFF;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
@@ -508,15 +503,13 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSIDiv = RCC_LSI_DIV1;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     /* F3 FIX (DDR-0009): a dead/frozen LSE crystal must not be a reboot loop.
      * Fail over to LSI for the RTC clock and keep flying — timers drift by
      * ~1% instead of the mission ending. The event is observable via the
      * low-power/fault telemetry path at next uplink. */
     RCC_OscInitStruct.LSEState = RCC_LSE_OFF;
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-    {
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
       /* F-001: neither LSE nor LSI can be started — no clock tree at all.
        * Continuing is meaningless; breadcrumb + reset. */
       Error_Handler_Fatal(FAULT_CODE_CLOCK_CONFIG);
@@ -529,9 +522,7 @@ void SystemClock_Config(void)
     HAL_RCCEx_PeriphCLKConfig(&rtcClk);
     g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
     SONDE_LOG_STR("WARNING: LSE failed - RTC on LSI (~1% drift)\r\n");
-  }
-  else if (!lse_started)
-  {
+  } else if (!lse_started) {
     /* LSE never started at any drive level: the same LSI switch the
      * F3/R08 fallback performs, minus the OscConfig retry (LSE off). */
     RCC_PeriphCLKInitTypeDef rtcClk = {0};
@@ -543,18 +534,15 @@ void SystemClock_Config(void)
   }
 
   /** Configure the SYSCLKSource, HCLK, PCLK1 and PCLK2 clocks dividers
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK3|RCC_CLOCKTYPE_HCLK
-                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
-                              |RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK3 | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.AHBCLK3Divider = RCC_SYSCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
     /* F-001: CPU/bus clocks not running at the configured rates — fatal. */
     Error_Handler_Fatal(FAULT_CODE_CLOCK_CONFIG);
   }
@@ -564,8 +552,7 @@ void SystemClock_Config(void)
    * cold) freezes the RTC and every LoRaMac timer while the main loop keeps
    * petting the IWDG — alive-looking but time-frozen. Arm the CSS so hardware
    * detects the failure and vectors to HAL_RCCEx_LSECSS_Callback() below. */
-  if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE)
-  {
+  if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE) {
     HAL_RCCEx_EnableLSECSS_IT();
   }
 }
@@ -588,15 +575,13 @@ void SystemClock_Config(void)
  * legitimately restarts on the new clock source and the F-002 (#201)
  * re-init restamps them. The IWDG (LSI-clocked) and the boot-time fallback
  * remain the backstops for anything this path gets wrong. */
-static void LSE_FailoverToLSI(void)
-{
+static void LSE_FailoverToLSI(void) {
   /* Mission-owned backup registers preserved across the domain reset. */
   static const uint32_t kMissionBkupRegs[] = {
-    BKP_REG_MISSION_STATE, BKP_REG_RESET_CAUSE_FAULT, BKP_REG_DEADMAN,
-    BKP_REG_BOOT_ATTEMPTS, BKP_REG_LASTPOS_VALID, BKP_REG_LASTPOS_LAT,
-    BKP_REG_LASTPOS_LON, BKP_REG_LASTPOS_ALT, BKP_REG_LASTPOS_EPOCH,
-    BKP_REG_TS_WRAP, BKP_REG_GPS_LOSS_EPOCH, BKP_REG_LAUNCH_REF
-  };
+      BKP_REG_MISSION_STATE, BKP_REG_RESET_CAUSE_FAULT, BKP_REG_DEADMAN,
+      BKP_REG_BOOT_ATTEMPTS, BKP_REG_LASTPOS_VALID, BKP_REG_LASTPOS_LAT,
+      BKP_REG_LASTPOS_LON, BKP_REG_LASTPOS_ALT, BKP_REG_LASTPOS_EPOCH,
+      BKP_REG_TS_WRAP, BKP_REG_GPS_LOSS_EPOCH, BKP_REG_LAUNCH_REF};
   uint32_t bkup_snapshot[sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])];
   for (uint32_t i = 0; i < (sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])); i++) {
     bkup_snapshot[i] = HAL_RTCEx_BKUPRead(&hrtc, kMissionBkupRegs[i]);
@@ -613,9 +598,9 @@ static void LSE_FailoverToLSI(void)
     g_rtc_clock_source = RCC_RTCCLKSOURCE_LSI;
   } else {
     SONDE_LOG_STR("ERROR: LSI switch FAILED - RTC source unchanged\r\n");
-    return;   /* stay on the (failing) LSE; liveness will retry/escalate */
+    return; /* stay on the (failing) LSE; liveness will retry/escalate */
   }
-  MX_RTC_Init();  /* backup domain was reset by the source change — re-init */
+  MX_RTC_Init(); /* backup domain was reset by the source change — re-init */
   /* F-003 (#203): repersist the mission record destroyed by the domain
    * reset, BEFORE anything else can consume its absence. */
   for (uint32_t i = 0; i < (sizeof(kMissionBkupRegs) / sizeof(kMissionBkupRegs[0])); i++) {
@@ -635,8 +620,7 @@ static void LSE_FailoverToLSI(void)
 
 /* F-14 (#70): LSE CSS interrupt callback (fires from TAMP_STAMP_LSECSS_SSRU_IRQn).
  * RV-09 (#165): ISR context — flag only, the main loop executes the failover. */
-void HAL_RCCEx_LSECSS_Callback(void)
-{
+void HAL_RCCEx_LSECSS_Callback(void) {
   s_lse_fail_pending = true;
 }
 
@@ -659,38 +643,33 @@ void HAL_RCCEx_LSECSS_Callback(void)
  * sleep the RTC appears to run FAST, never slow — this can only under-trigger,
  * never false-fire. A healthy SSR changes within ~1 ms; an identical value
  * across 3 full seconds of MSI time is a genuine stall. */
-static void RTC_LivenessCheck(void)
-{
+static void RTC_LivenessCheck(void) {
   static uint32_t last_check_ms = 0;
   static uint32_t last_ssr = 0;
-  static uint8_t  stall_count = 0;
+  static uint8_t stall_count = 0;
 
   /* F4 (#170): the SSR stall check is source-agnostic — it must keep running
    * after a failover to LSI. Only the CSS arm is LSE-specific (that stays in
    * the boot path). A failover that produced a dead RTC must not also remove
    * the supervision that can see it. */
 
-  uint32_t now_ms = uwTick;                    /* MSI-clocked, RTC-independent */
-  if ((now_ms - last_check_ms) < 1000U) return;  /* check ~1/s */
+  uint32_t now_ms = uwTick; /* MSI-clocked, RTC-independent */
+  if ((now_ms - last_check_ms) < 1000U)
+    return; /* check ~1/s */
   last_check_ms = now_ms;
 
-  uint32_t ssr = READ_REG(RTC->SSR);           /* binary-mode down-counter */
+  uint32_t ssr = READ_REG(RTC->SSR); /* binary-mode down-counter */
 
-  if (ssr != last_ssr)
-  {
+  if (ssr != last_ssr) {
     last_ssr = ssr;
     stall_count = 0;
-  }
-  else if (++stall_count >= 3U)  /* no RTC advance across ~3 s of MSI time */
+  } else if (++stall_count >= 3U) /* no RTC advance across ~3 s of MSI time */
   {
     stall_count = 0;
-    if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE)
-    {
+    if (g_rtc_clock_source == RCC_RTCCLKSOURCE_LSE) {
       SONDE_LOG_STR("ERROR: RTC stalled with LSE selected - forcing LSI failover\r\n");
       LSE_FailoverToLSI();
-    }
-    else
-    {
+    } else {
       /* F4 (#170): RTC stalled on LSI - the failover option is already
        * consumed; breadcrumb + reset so the boot path re-initializes
        * cleanly instead of running timeless. */
@@ -701,12 +680,11 @@ static void RTC_LivenessCheck(void)
 }
 
 /**
-  * @brief ADC Initialization Function
-  * @param None
-  * @retval None
-  */
-void MX_ADC_Init(void)
-{
+ * @brief ADC Initialization Function
+ * @param None
+ * @retval None
+ */
+void MX_ADC_Init(void) {
 
   /* USER CODE BEGIN ADC_Init 0 */
 
@@ -717,7 +695,7 @@ void MX_ADC_Init(void)
   /* USER CODE END ADC_Init 1 */
 
   /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
+   */
   hadc.Instance = ADC;
   hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc.Init.Resolution = ADC_RESOLUTION_12B;
@@ -737,23 +715,20 @@ void MX_ADC_Init(void)
   hadc.Init.SamplingTimeCommon2 = ADC_SAMPLETIME_160CYCLES_5;
   hadc.Init.OversamplingMode = DISABLE;
   hadc.Init.TriggerFrequencyMode = ADC_TRIGGER_FREQ_HIGH;
-  if (HAL_ADC_Init(&hadc) != HAL_OK)
-  {
+  if (HAL_ADC_Init(&hadc) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN ADC_Init 2 */
 
   /* USER CODE END ADC_Init 2 */
-
 }
 
 /**
-  * @brief I2C2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C2_Init(void)
-{
+ * @brief I2C2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_I2C2_Init(void) {
 
   /* USER CODE BEGIN I2C2_Init 0 */
 
@@ -771,8 +746,7 @@ static void MX_I2C2_Init(void)
   hi2c2.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
   hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
-  {
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
     /* SP-17 (#255): degrade-and-say-so (DDR-0009, F-014 #207) - the boot
      * capability mask must show sensors gone, or the flight log pretends a
      * healthy I2C2. Error_Handler() continues. */
@@ -782,18 +756,16 @@ static void MX_I2C2_Init(void)
   }
 
   /** Configure Analogue filter
-  */
-  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigAnalogFilter(&hi2c2, I2C_ANALOGFILTER_ENABLE) != HAL_OK) {
     SysCaps_MarkFailed(SYS_CAP_SENSORS);
     SONDE_LOG_STR("I2C2: analog filter config failed - SYS_CAP_SENSORS marked failed\r\n");
     Error_Handler();
   }
 
   /** Configure Digital filter
-  */
-  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK)
-  {
+   */
+  if (HAL_I2CEx_ConfigDigitalFilter(&hi2c2, 0) != HAL_OK) {
     SysCaps_MarkFailed(SYS_CAP_SENSORS);
     SONDE_LOG_STR("I2C2: digital filter config failed - SYS_CAP_SENSORS marked failed\r\n");
     Error_Handler();
@@ -801,16 +773,14 @@ static void MX_I2C2_Init(void)
   /* USER CODE BEGIN I2C2_Init 2 */
 
   /* USER CODE END I2C2_Init 2 */
-
 }
 
 /**
-  * @brief IWDG Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_IWDG_Init(void)
-{
+ * @brief IWDG Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_IWDG_Init(void) {
 
   /* USER CODE BEGIN IWDG_Init 0 */
 
@@ -820,11 +790,10 @@ static void MX_IWDG_Init(void)
 
   /* USER CODE END IWDG_Init 1 */
   hiwdg.Instance = IWDG;
-  hiwdg.Init.Prescaler = IWDG_PRESCALER_256;  /* Maximum prescaler for longest timeout */
+  hiwdg.Init.Prescaler = IWDG_PRESCALER_256; /* Maximum prescaler for longest timeout */
   hiwdg.Init.Window = 4095;
-  hiwdg.Init.Reload = 4095;  /* Maximum reload value */
-  if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
-  {
+  hiwdg.Init.Reload = 4095; /* Maximum reload value */
+  if (HAL_IWDG_Init(&hiwdg) != HAL_OK) {
     /* F6 (#171): the watchdog is mission-critical supervision — continuing
      * without it means every other recovery mechanism assumes a backstop
      * that does not exist. Fatal, not degrade-and-continue. */
@@ -833,16 +802,14 @@ static void MX_IWDG_Init(void)
   /* USER CODE BEGIN IWDG_Init 2 */
 
   /* USER CODE END IWDG_Init 2 */
-
 }
 
 /**
-  * @brief RTC Initialization Function
-  * @param None
-  * @retval None
-  */
-void MX_RTC_Init(void)
-{
+ * @brief RTC Initialization Function
+ * @param None
+ * @retval None
+ */
+void MX_RTC_Init(void) {
 
   /* USER CODE BEGIN RTC_Init 0 */
 
@@ -855,7 +822,7 @@ void MX_RTC_Init(void)
   /* USER CODE END RTC_Init 1 */
 
   /** Initialize RTC Only
-  */
+   */
   hrtc.Instance = RTC;
   hrtc.Init.AsynchPrediv = RTC_PREDIV_A;
   hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
@@ -864,8 +831,7 @@ void MX_RTC_Init(void)
   hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
   hrtc.Init.OutPutPullUp = RTC_OUTPUT_PULLUP_NONE;
   hrtc.Init.BinMode = RTC_BINARY_ONLY;
-  if (HAL_RTC_Init(&hrtc) != HAL_OK)
-  {
+  if (HAL_RTC_Init(&hrtc) != HAL_OK) {
     /* F6 (#171): the RTC is the mission timebase — continuing with a zombie
      * one makes every timer/timeout/silence calculation meaningless. Fatal. */
     Error_Handler_Fatal(FAULT_CODE_RTC_INIT);
@@ -876,37 +842,32 @@ void MX_RTC_Init(void)
   /* USER CODE END Check_RTC_BKUP */
 
   /** Initialize RTC and set the Time and Date
-  */
-  if (HAL_RTCEx_SetSSRU_IT(&hrtc) != HAL_OK)
-  {
+   */
+  if (HAL_RTCEx_SetSSRU_IT(&hrtc) != HAL_OK) {
     Error_Handler_Fatal(FAULT_CODE_RTC_INIT);
   }
 
-
   /** Enable the Alarm A
-  */
+   */
   sAlarm.BinaryAutoClr = RTC_ALARMSUBSECONDBIN_AUTOCLR_NO;
   sAlarm.AlarmTime.SubSeconds = 0x0;
   sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
   sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDBINMASK_NONE;
   sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, 0) != HAL_OK)
-  {
+  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, 0) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */
-
 }
 
 /**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI2_Init(void)
-{
+ * @brief SPI2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SPI2_Init(void) {
 
   /* USER CODE BEGIN SPI2_Init 0 */
 
@@ -924,7 +885,7 @@ static void MX_SPI2_Init(void)
   hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi2.Init.NSS = SPI_NSS_SOFT;  /* Software NSS for W25Q16JV compatibility */
+  hspi2.Init.NSS = SPI_NSS_SOFT; /* Software NSS for W25Q16JV compatibility */
   hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
   hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
@@ -932,23 +893,20 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CRCPolynomial = 7;
   hspi2.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
   /* NSSPMode removed - not applicable with software NSS */
-  if (HAL_SPI_Init(&hspi2) != HAL_OK)
-  {
+  if (HAL_SPI_Init(&hspi2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SPI2_Init 2 */
 
   /* USER CODE END SPI2_Init 2 */
-
 }
 
 /**
-  * @brief SUBGHZ Initialization Function
-  * @param None
-  * @retval None
-  */
-void MX_SUBGHZ_Init(void)
-{
+ * @brief SUBGHZ Initialization Function
+ * @param None
+ * @retval None
+ */
+void MX_SUBGHZ_Init(void) {
 
   /* USER CODE BEGIN SUBGHZ_Init 0 */
 
@@ -958,23 +916,20 @@ void MX_SUBGHZ_Init(void)
 
   /* USER CODE END SUBGHZ_Init 1 */
   hsubghz.Init.BaudratePrescaler = SUBGHZSPI_BAUDRATEPRESCALER_8;
-  if (HAL_SUBGHZ_Init(&hsubghz) != HAL_OK)
-  {
+  if (HAL_SUBGHZ_Init(&hsubghz) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SUBGHZ_Init 2 */
 
   /* USER CODE END SUBGHZ_Init 2 */
-
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-void MX_USART1_UART_Init(void)
-{
+ * @brief USART1 Initialization Function
+ * @param None
+ * @retval None
+ */
+void MX_USART1_UART_Init(void) {
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -1015,37 +970,30 @@ void MX_USART1_UART_Init(void)
    * NOTE: this block is CubeMX-generated. Mirrored in
    * Radio_Sonde_E5_HF_EU.ioc (USART1 Advanced Parameters); the S-C
    * regression scan catches a silent .ioc revert. */
-  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXOVERRUNDISABLE_INIT
-                                     | UART_ADVFEATURE_DMADISABLEONERROR_INIT;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXOVERRUNDISABLE_INIT | UART_ADVFEATURE_DMADISABLEONERROR_INIT;
   huart1.AdvancedInit.OverrunDisable = UART_ADVFEATURE_OVERRUN_DISABLE;
   huart1.AdvancedInit.DMADisableonRxError = UART_ADVFEATURE_DMA_ENABLEONRXERROR;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
-  {
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
-  {
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK)
-  {
+  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
-  * Enable DMA controller clock
-  */
-void MX_DMA_Init(void)
-{
+ * Enable DMA controller clock
+ */
+void MX_DMA_Init(void) {
 
   /* DMA controller clock enable */
   __HAL_RCC_DMAMUX1_CLK_ENABLE();
@@ -1055,16 +1003,14 @@ void MX_DMA_Init(void)
   /* DMA1_Channel2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
   /* USER CODE END MX_GPIO_Init_1 */
@@ -1081,10 +1027,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);  /* CS HIGH = deselected */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); /* CS HIGH = deselected */
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0 | RF_CTRL1_Pin | RF_CTRL2_Pin, GPIO_PIN_RESET);
 
   /* F-012 (#210): GPIO OWNERSHIP TABLE - every pin has exactly ONE owner.
    *   PB6/PB7  USART1 (GNSS NMEA)      -> USART MSP (stm32wlxx_hal_msp.c)
@@ -1102,7 +1048,7 @@ static void MX_GPIO_Init(void)
    * StopJoin OTAA->ABP flip would be dangerous if ever wired. */
 
   /*Configure GPIO pins : PA0 RF_CTRL1_Pin RF_CTRL2_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|RF_CTRL1_Pin|RF_CTRL2_Pin;
+  GPIO_InitStruct.Pin = GPIO_PIN_0 | RF_CTRL1_Pin | RF_CTRL2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1118,7 +1064,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
+
   /* Configure PB3 as analog input for solar voltage measurement (ADC_CHANNEL_2) */
   GPIO_InitStruct.Pin = GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
@@ -1132,11 +1078,10 @@ static void MX_GPIO_Init(void)
 /* USER CODE END 4 */
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* Degrade-and-continue: log the error, never halt (DDR-0009).
    * At 40 km altitude, a hang is permanent death.
@@ -1154,8 +1099,7 @@ void Error_Handler(void)
  * architecture a chance; a hang or a zombie does not.
  * Codes: 0-4 = CPU fault handlers (stm32wlxx_it.c; 0 = NMI), 6 = deadman
  * (lora_app.c), 16+ = boot-time fatal errors below. */
-void Error_Handler_Fatal(uint16_t code)
-{
+void Error_Handler_Fatal(uint16_t code) {
   HAL_PWR_EnableBkUpAccess();
   __HAL_RCC_RTCAPB_CLK_ENABLE();
 
@@ -1170,14 +1114,13 @@ void Error_Handler_Fatal(uint16_t code)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */

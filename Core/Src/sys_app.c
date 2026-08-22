@@ -1,36 +1,36 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    sys_app.c
-  * @author  MCD Application Team
-  * @brief   Initializes HW and SW system entities (not related to the radio)
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2024 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file    sys_app.c
+ * @author  MCD Application Team
+ * @brief   Initializes HW and SW system entities (not related to the radio)
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2024 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
-#include <stdio.h>
-#include "platform.h"
 #include "sys_app.h"
 #include "adc_if.h"
+#include "platform.h"
+#include "stm32_lpm.h"
 #include "stm32_seq.h"
 #include "stm32_systime.h"
-#include "stm32_lpm.h"
-#include "timer_if.h"
-#include "utilities_def.h"
+#include "sys_caps.h" /* F-014 (#207) */
 #include "sys_debug.h"
 #include "sys_sensors.h"
-#include "sys_caps.h"  /* F-014 (#207) */
+#include "timer_if.h"
+#include "utilities_def.h"
+#include <stdio.h>
 
 /* USER CODE BEGIN Includes */
 
@@ -47,12 +47,12 @@
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
-#define MAX_TS_SIZE (int) 16
+#define MAX_TS_SIZE (int)16
 
 /**
-  * Defines the maximum battery level
-  */
-#define LORAWAN_MAX_BAT   254
+ * Defines the maximum battery level
+ */
+#define LORAWAN_MAX_BAT 254
 
 /* USER CODE BEGIN PD */
 
@@ -72,15 +72,15 @@ static uint8_t SYS_TimerInitialisedFlag = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 /**
-  * @brief Returns sec and msec based on the systime in use
-  * @param buff to update with timestamp
-  * @param size of updated buffer
-  */
+ * @brief Returns sec and msec based on the systime in use
+ * @param buff to update with timestamp
+ * @param size of updated buffer
+ */
 static void TimestampNow(uint8_t *buff, uint16_t *size);
 
 /**
-  * @brief  it calls UTIL_ADV_TRACE_VSNPRINTF
-  */
+ * @brief  it calls UTIL_ADV_TRACE_VSNPRINTF
+ */
 static void tiny_snprintf_like(char *buf, uint32_t maxsize, const char *strFormat, ...);
 
 /* USER CODE BEGIN PFP */
@@ -88,8 +88,7 @@ static void tiny_snprintf_like(char *buf, uint32_t maxsize, const char *strForma
 /* USER CODE END PFP */
 
 /* Exported functions ---------------------------------------------------------*/
-void SystemApp_Init(void)
-{
+void SystemApp_Init(void) {
   /* USER CODE BEGIN SystemApp_Init_1 */
 
   /* USER CODE END SystemApp_Init_1 */
@@ -119,8 +118,7 @@ void SystemApp_Init(void)
   /*Initialize the Sensors */
   /* F-014 (#207): the return was ignored - a failed sensor init left the
    * subsystem "half initialized" with no capability state. Mark it. */
-  if (EnvSensors_Init() != 0)
-  {
+  if (EnvSensors_Init() != 0) {
     SysCaps_MarkFailed(SYS_CAP_SENSORS);
   }
 
@@ -129,10 +127,10 @@ void SystemApp_Init(void)
   /* Disable Stand-by mode */
   UTIL_LPM_SetOffMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
 
-#if defined (LOW_POWER_DISABLE) && (LOW_POWER_DISABLE == 1)
+#if defined(LOW_POWER_DISABLE) && (LOW_POWER_DISABLE == 1)
   /* Disable Stop Mode */
   UTIL_LPM_SetStopMode((1 << CFG_LPM_APPLI_Id), UTIL_LPM_DISABLE);
-#elif !defined (LOW_POWER_DISABLE)
+#elif !defined(LOW_POWER_DISABLE)
 #error LOW_POWER_DISABLE not defined
 #endif /* LOW_POWER_DISABLE */
 
@@ -142,10 +140,9 @@ void SystemApp_Init(void)
 }
 
 /**
-  * @brief redefines __weak function in stm32_seq.c such to enter low power
-  */
-void UTIL_SEQ_Idle(void)
-{
+ * @brief redefines __weak function in stm32_seq.c such to enter low power
+ */
+void UTIL_SEQ_Idle(void) {
   /* USER CODE BEGIN UTIL_SEQ_Idle_1 */
 
   /* USER CODE END UTIL_SEQ_Idle_1 */
@@ -155,8 +152,7 @@ void UTIL_SEQ_Idle(void)
   /* USER CODE END UTIL_SEQ_Idle_2 */
 }
 
-uint8_t GetBatteryLevel(void)
-{
+uint8_t GetBatteryLevel(void) {
   uint8_t batteryLevel = 0;
   uint16_t batteryLevelmV;
 
@@ -165,19 +161,14 @@ uint8_t GetBatteryLevel(void)
   /* USER CODE END GetBatteryLevel_0 */
 
   /* Use actual battery voltage from PB4 (not VDDA) */
-  batteryLevelmV = SYS_GetBatteryVoltage();  /* Reads actual battery through voltage divider */
+  batteryLevelmV = SYS_GetBatteryVoltage(); /* Reads actual battery through voltage divider */
 
   /* Convert battery level from mV to linear scale: 1 (very low) to 254 (fully charged) */
-  if (batteryLevelmV > VDD_BAT)
-  {
+  if (batteryLevelmV > VDD_BAT) {
     batteryLevel = LORAWAN_MAX_BAT;
-  }
-  else if (batteryLevelmV < VDD_MIN)
-  {
+  } else if (batteryLevelmV < VDD_MIN) {
     batteryLevel = 0;
-  }
-  else
-  {
+  } else {
     batteryLevel = (((uint32_t)(batteryLevelmV - VDD_MIN) * LORAWAN_MAX_BAT) / (VDD_BAT - VDD_MIN));
   }
 
@@ -185,14 +176,13 @@ uint8_t GetBatteryLevel(void)
 
   /* USER CODE END GetBatteryLevel_2 */
 
-  return batteryLevel;  /* 1 (very low) to 254 (fully charged) */
+  return batteryLevel; /* 1 (very low) to 254 (fully charged) */
 }
 
-int16_t GetTemperatureLevel(void)
-{
+int16_t GetTemperatureLevel(void) {
   int16_t temperatureLevel = 0;
 
-  sensor_t sensor_data = {0};  /* #35: zero-init */
+  sensor_t sensor_data = {0}; /* #35: zero-init */
 
   EnvSensors_Read(&sensor_data);
   temperatureLevel = (int16_t)(sensor_data.temperature);
@@ -202,14 +192,13 @@ int16_t GetTemperatureLevel(void)
   return temperatureLevel;
 }
 
-void GetUniqueId(uint8_t *id)
-{
+void GetUniqueId(uint8_t *id) {
   /* USER CODE BEGIN GetUniqueId_1 */
 
   /* USER CODE END GetUniqueId_1 */
   uint32_t val = 0;
   val = LL_FLASH_GetUDN();
-  if (val == 0xFFFFFFFF)  /* Normally this should not happen */
+  if (val == 0xFFFFFFFF) /* Normally this should not happen */
   {
     uint32_t ID_1_3_val = HAL_GetUIDw0() + HAL_GetUIDw2();
     uint32_t ID_2_val = HAL_GetUIDw1();
@@ -222,8 +211,7 @@ void GetUniqueId(uint8_t *id)
     id[2] = (ID_2_val) >> 16;
     id[1] = (ID_2_val) >> 8;
     id[0] = (ID_2_val);
-  }
-  else  /* Typical use case */
+  } else /* Typical use case */
   {
     id[7] = val & 0xFF;
     id[6] = (val >> 8) & 0xFF;
@@ -242,15 +230,13 @@ void GetUniqueId(uint8_t *id)
   /* USER CODE END GetUniqueId_2 */
 }
 
-void GetDevAddr(uint32_t *devAddr)
-{
+void GetDevAddr(uint32_t *devAddr) {
   /* USER CODE BEGIN GetDevAddr_1 */
 
   /* USER CODE END GetDevAddr_1 */
 
   *devAddr = LL_FLASH_GetUDN();
-  if (*devAddr == 0xFFFFFFFF)
-  {
+  if (*devAddr == 0xFFFFFFFF) {
     *devAddr = ((HAL_GetUIDw0()) ^ (HAL_GetUIDw1()) ^ (HAL_GetUIDw2()));
   }
 
@@ -265,8 +251,7 @@ void GetDevAddr(uint32_t *devAddr)
 
 /* Private functions ---------------------------------------------------------*/
 
-static void TimestampNow(uint8_t *buff, uint16_t *size)
-{
+static void TimestampNow(uint8_t *buff, uint16_t *size) {
   /* USER CODE BEGIN TimestampNow_1 */
 
   /* USER CODE END TimestampNow_1 */
@@ -279,8 +264,7 @@ static void TimestampNow(uint8_t *buff, uint16_t *size)
 }
 
 /* Disable StopMode when traces need to be printed */
-void UTIL_ADV_TRACE_PreSendHook(void)
-{
+void UTIL_ADV_TRACE_PreSendHook(void) {
   /* USER CODE BEGIN UTIL_ADV_TRACE_PreSendHook_1 */
 
   /* USER CODE END UTIL_ADV_TRACE_PreSendHook_1 */
@@ -290,8 +274,7 @@ void UTIL_ADV_TRACE_PreSendHook(void)
   /* USER CODE END UTIL_ADV_TRACE_PreSendHook_2 */
 }
 /* Re-enable StopMode when traces have been printed */
-void UTIL_ADV_TRACE_PostSendHook(void)
-{
+void UTIL_ADV_TRACE_PostSendHook(void) {
   /* USER CODE BEGIN UTIL_LPM_SetStopMode_1 */
 
   /* USER CODE END UTIL_LPM_SetStopMode_1 */
@@ -301,8 +284,7 @@ void UTIL_ADV_TRACE_PostSendHook(void)
   /* USER CODE END UTIL_LPM_SetStopMode_2 */
 }
 
-static void tiny_snprintf_like(char *buf, uint32_t maxsize, const char *strFormat, ...)
-{
+static void tiny_snprintf_like(char *buf, uint32_t maxsize, const char *strFormat, ...) {
   /* USER CODE BEGIN tiny_snprintf_like_1 */
 
   /* USER CODE END tiny_snprintf_like_1 */
@@ -322,17 +304,15 @@ static void tiny_snprintf_like(char *buf, uint32_t maxsize, const char *strForma
 /* HAL overload functions ---------------------------------------------------------*/
 
 /**
-  * @note This function overwrites the __weak one from HAL
-  */
-uint32_t HAL_GetTick(void)
-{
+ * @note This function overwrites the __weak one from HAL
+ */
+uint32_t HAL_GetTick(void) {
   uint32_t ret = 0;
   /* TIMER_IF can be based on other counter the SysTick e.g. RTC */
   /* USER CODE BEGIN HAL_GetTick_1 */
 
   /* USER CODE END HAL_GetTick_1 */
-  if (SYS_TimerInitialisedFlag == 0)
-  {
+  if (SYS_TimerInitialisedFlag == 0) {
     /* TIMER_IF_GetTimerValue should be used only once UTIL_TIMER_Init() is initialized */
     /* If HAL_Delay or a TIMEOUT countdown is necessary during initialization phase */
     /* please use temporarily another timebase source (SysTick or TIMx), which implies also */
@@ -354,9 +334,7 @@ uint32_t HAL_GetTick(void)
      * Unsigned (now - start) >= timeout arithmetic absorbs that safely. */
     ret = uwTick;
     /* USER CODE END HAL_GetTick_EarlyCall */
-  }
-  else
-  {
+  } else {
     /* R3-08 (#112): TIMER_IF_GetTimerValue() returns RTC ticks at 1024 Hz,
      * NOT milliseconds - every consumer treating HAL_GetTick as ms (GNSS
      * acquisition timeouts, TTF, generic HAL timeouts, the R3-01 science
@@ -383,20 +361,19 @@ uint32_t HAL_GetTick(void)
 }
 
 /**
-  * @note This function overwrites the __weak one from HAL
-  */
-void HAL_Delay(__IO uint32_t Delay)
-{
+ * @note This function overwrites the __weak one from HAL
+ */
+void HAL_Delay(__IO uint32_t Delay) {
   /* TIMER_IF can be based on other counter the SysTick e.g. RTC */
   /* USER CODE BEGIN HAL_Delay_1 */
   /* F-001/F-007 (#202): TIMER_IF_DelayMs spins on the RTC timer value, which
    * is frozen before TIMER_IF init - a pre-init HAL_Delay would hang just
    * like the old constant-0 GetTick. Busy-wait on the SysTick ms counter
    * (wrap-safe unsigned subtraction) until the RTC timebase is live. */
-  if (SYS_TimerInitialisedFlag == 0)
-  {
+  if (SYS_TimerInitialisedFlag == 0) {
     uint32_t start = uwTick;
-    while ((uint32_t)(uwTick - start) < Delay) { }
+    while ((uint32_t)(uwTick - start) < Delay) {
+    }
     return;
   }
   /* USER CODE END HAL_Delay_1 */
