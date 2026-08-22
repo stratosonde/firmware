@@ -408,6 +408,7 @@ static bool LSE_StartWithDriveEscalation(void) {
   static const uint32_t kDrives[] = {RCC_LSEDRIVE_LOW, RCC_LSEDRIVE_MEDIUMLOW,
                                      RCC_LSEDRIVE_MEDIUMHIGH, RCC_LSEDRIVE_HIGH};
   static const char *const kNames[] = {"LOW", "MEDLOW", "MEDHIGH", "HIGH"};
+  (void)kNames; /* FR-19: every use below is a gated SONDE_LOG */
 
   /* Diag: is the backup domain accepting writes at all? (TAMP writes were
    * already seen failing today - same domain. bit0 LSEON, bit1 LSERDY,

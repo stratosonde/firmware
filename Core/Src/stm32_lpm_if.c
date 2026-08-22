@@ -280,6 +280,7 @@ void PWR_EnterStopMode(void) {
    * spurious wake - confirm the chip mode the stack left the radio in. */
   {
     RadioPhyStatus_t rstat = SUBGRF_GetStatus();
+    (void)rstat; /* FR-19: every use below is a gated SONDE_LOG */
     SONDE_LOG("LPE: enter sleep sr2=0x%04lX chipmode=%d cmdstat=%d\r\n",
               (unsigned long)(PWR->SR2 & 0xFFFFUL),
               (int)rstat.Fields.ChipMode, (int)rstat.Fields.CmdStatus);
@@ -377,6 +378,7 @@ void PWR_EnterStopMode(void) {
      * pending; WUTF-in-SR is mirrored by the WUTR-then-SR sequence the HAL
      * uses, so this cannot touch a volatile RTC register directly. */
     uint32_t wutr = HAL_RTCEx_GetWakeUpTimer(&hrtc);
+    (void)wutr; /* FR-19: every use below is a gated SONDE_LOG */
     SONDE_LOG("LPC: other t=%lu I=%08lX S=%08lX\r\n",
               (unsigned long)TIMER_IF_GetTimerValue(),
               (unsigned long)SCB->ICSR, (unsigned long)SysTick->CTRL);
