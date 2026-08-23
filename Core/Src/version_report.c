@@ -12,9 +12,10 @@
 static uint16_t Crc16(const uint8_t *data, uint32_t length) {
   uint16_t crc = 0xFFFFU;
   for (uint32_t i = 0; i < length; i++) {
-    crc ^= (uint16_t)(data[i] << 8);
+    crc = (uint16_t)(crc ^ (uint16_t)(data[i] << 8));
     for (uint8_t j = 0; j < 8U; j++) {
-      crc = (crc & 0x8000U) ? (uint16_t)((crc << 1U) ^ 0x1021U) : (uint16_t)(crc << 1U);
+      crc = (uint16_t)((crc & 0x8000U) ? (((uint32_t)crc << 1U) ^ 0x1021U)
+                                       : ((uint32_t)crc << 1U));
     }
   }
   return crc;
