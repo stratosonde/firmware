@@ -200,6 +200,38 @@ print(f"Altitude: {altitude:.1f} m")  # Should be ~1078m (Calgary elevation)
 
 ---
 
+---
+
+## PORT 20: Version Report (PRODUCTION)
+
+### Description
+
+Firmware and wire-format announce frame (A-005/STAB-11/F-09 — #79/#158/#266).
+Because firmware cannot be updated in flight, the wire-schema discriminator is the
+**known firmware version**, announced explicitly once at commissioning and once at
+first-flight admission — not deployment folklore. The backend maps firmware
+version to the expected wire layout for every subsequent frame.
+
+### Packet Structure (12 bytes, little-endian)
+
+| Offset | Field | Type | Size | Description |
+|---|---|---|---|---|
+| 0 | magic | u8 | 1 | `0x56` 'V' |
+| 1 | fw major | u8 | 1 | firmware semantic version |
+| 2 | fw minor | u8 | 1 | |
+| 3 | fw patch | u8 | 1 | |
+| 4 | format version | u8 | 1 | heartbeat wire version (e.g. 2) |
+| 5 | stage | u8 | 1 | bit0 = commissioning, bit1 = flight admission |
+| 6–9 | mission minutes | u32 LE | 4 | `Payload_TimestampMinutesNow()` basis |
+| 10–11 | CRC16 | u16 LE | 2 | CRC-16CCITT over bytes 0–9 |
+
+Announced on `LORAWAN_VERSION_PORT` (20) via the packet queue, unconfirmed —
+acknowledge-or-lose is the same as any diagnostic frame; the next commissioning
+wake or flight start re-announces if the queue was full.
+
+---
+
+
 ## PORT 11: Core Science Archive (PRODUCTION)
 
 ### Description

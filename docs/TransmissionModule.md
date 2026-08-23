@@ -104,6 +104,7 @@ bulk callback path when admission passed.
 |------|---------|--------|
 | 10 | Heartbeat v2, 11 B, little-endian (D9) — compact telemetry + status byte; LinkCheckReq rides in FOpts | current |
 | 11 | Core science archive, **v6** (`0x06`): `seq u32 LE + 34 B` records (adds `sensor_quality` + `veto_reason`), n ≤ 6, packed to the runtime payload budget (`LoRaMacQueryTxPossible`) | current; v1-v5 historical decode only |
+| 20 | Version report (A-005/#79): 12 B LE — magic 'V', fw major/minor/patch, heartbeat format version, stage flag, mission minutes, CRC16. Announced once at commissioning and once at first-flight admission. | current |
 | 2, 3 | CayenneLPP debug, GNSS detail | compiled out of flight builds (`ENABLE_DEBUG_LPP=0`) |
 
 ## Error Handling

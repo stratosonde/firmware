@@ -119,6 +119,9 @@ NVM_SRCS := test_nvm_slot.c ../../Core/Src/nvm_slot.c
 #against an in - memory internal - flash fake(flash_if.h stub).
 MANIFEST_SRCS := test_mission_manifest.c ../../Core/Src/mission_manifest.c
 
+# A-005/STAB-11/F-09 (#79/#158/#266): version-report frame encoder.
+VERSION_SRCS := test_version_report.c ../../Core/Src/version_report.c
+
 #Refactor stage 3 : module contract for the extracted geofence / region policy
 #(Core / Src / region_policy.c).h3lite include path for RegionId / REGION_ *.
 REGION_SRCS := test_region_policy.c ../../Core/Src/region_policy.c
@@ -250,6 +253,12 @@ $(BUILD_DIR)/test_manifest$(EXE): $(MANIFEST_SRCS) ../../Core/Inc/mission_manife
 
 manifest: $(BUILD_DIR)/test_manifest$(EXE)
 	./$(BUILD_DIR)/test_manifest$(EXE)
+
+$(BUILD_DIR)/test_version_report$(EXE): $(VERSION_SRCS) ../../Core/Inc/version_report.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(VERSION_SRCS) -lm
+
+version_report: $(BUILD_DIR)/test_version_report$(EXE)
+	./$(BUILD_DIR)/test_version_report$(EXE)
 
 $(BUILD_DIR)/test_region$(EXE): $(REGION_SRCS) ../../Core/Inc/region_policy.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(REGION_INCLUDES) -o $@ $(REGION_SRCS) -lm
@@ -477,7 +486,7 @@ all: check characterization
 
 # Refactor stage 7: module-contract suites only - the "what is proven about
 # module X" entry point (see R2_TEST_MAP.md). `all` keeps running everything.
-contracts: first-flight pq nvm manifest region gnssacq txshadow arming appadapters
+contracts: first-flight pq nvm manifest version_report region gnssacq txshadow arming appadapters
 
 clean:
 	-$(RMBUILD)

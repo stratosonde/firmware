@@ -30,8 +30,9 @@ extern "C" {
 /* LoRaWAN port assignments for different packet types */
 #define LORAWAN_LPP_PORT 2         // CayenneLPP (development/debug)
 #define LORAWAN_GNSS_DETAIL_PORT 3 // GNSS satellite detail (development/debug)
-#define LORAWAN_COMPACT_PORT 10    // 10-byte compact binary (SF10 probe) - PRODUCTION
-#define LORAWAN_BULK_PORT 11       // 198-byte bulk binary (SF7 bulk) - PRODUCTION
+#define LORAWAN_COMPACT_PORT 10    // 11-byte compact binary (SF10 probe) - PRODUCTION
+#define LORAWAN_BULK_PORT 11       // variable bulk binary (SF7 bulk) - PRODUCTION
+#define LORAWAN_VERSION_PORT 20    // version report frame (A-005/#79) - PRODUCTION
 
 /* Compile-time control flags for debug packet formats */
 #ifndef ENABLE_DEBUG_LPP

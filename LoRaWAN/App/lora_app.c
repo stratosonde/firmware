@@ -68,8 +68,9 @@
 #include "string.h"        /* memset — R31 full GNSS invalidation (#57) */
 #include "sys_caps.h"      /* F-01 (#245): SYS_CAP_RADIO degrade marking */
 #include "timer_if.h"
-#include "transmit_plan.h" /* R47 (#44): DecideTransmitPlan */
-#include "tx_fsm.h"        /* refactor stage 5: TX state machine decision core extracted to Core/Src/tx_fsm.c */
+#include "transmit_plan.h"  /* R47 (#44): DecideTransmitPlan */
+#include "tx_fsm.h"         /* refactor stage 5: TX state machine decision core extracted to Core/Src/tx_fsm.c */
+#include "version_report.h" /* A-005/STAB-11/F-09 (#79/#158/#266): version-report frame */
 /* USER CODE END Includes */
 
 /* External variables ---------------------------------------------------------*/
@@ -1649,11 +1650,46 @@ static void ArchiveSample(sensor_t *sensor_data,
 static uint8_t s_comm_live_buf[BULK_V6_OVERHEAD + BULK_V6_RECORD_WIRE];
 static uint16_t s_comm_live_len = 0;
 
+/* A-005/STAB-11/F-09 (#79/#158/#266): version-report announce. The heartbeat
+ * schema is discriminated by the known firmware version (not updatable in
+ * flight), so the device announces it once at commissioning and once at
+ * first-flight admission on the dedicated LORAWAN_VERSION_PORT; the backend
+ * maps version -> expected wire layout for every subsequent frame. */
+static bool s_version_announced_comm = false;
+static bool s_version_announced_flight = false;
+
+static void AnnounceVersionReport(VersionReport_StageTypeDef stage) {
+  uint8_t frame[VERSION_REPORT_LEN];
+  if (!VersionReport_Build(frame, HEARTBEAT_FORMAT_VERSION, stage,
+                           Payload_TimestampMinutesNow())) {
+    SONDE_LOG_STR("VER-ANN: build failed\r\n");
+    return;
+  }
+  if (PacketQueue_Push(&g_packet_queue, frame, VERSION_REPORT_LEN,
+                       LORAWAN_VERSION_PORT)) {
+    SONDE_LOG("VER-ANN: %s announce queued (fw %u.%u.%u fmt %u)\r\n",
+              stage == VERSION_STAGE_COMMISSIONING ? "commissioning" : "flight",
+              (unsigned)SONDE_FW_MAJOR, (unsigned)SONDE_FW_MINOR,
+              (unsigned)SONDE_FW_PATCH, (unsigned)HEARTBEAT_FORMAT_VERSION);
+    /* Mark only on enqueue success; a full queue retries next cycle. */
+    if (stage == VERSION_STAGE_COMMISSIONING) {
+      s_version_announced_comm = true;
+    } else {
+      s_version_announced_flight = true;
+    }
+  }
+}
+
 static void CommissioningTelemetryCycle(const sensor_t *sensor_data_pre,
                                         uint32_t gps_timeout_ms,
                                         int16_t slope_mv_per_hour,
                                         OperatingMode_t current_mode) {
   sensor_t sd = *sensor_data_pre;
+
+  /* A-005/STAB-11/F-09 (#79/#158/#266): announce fw version once. */
+  if (!s_version_announced_comm) {
+    AnnounceVersionReport(VERSION_STAGE_COMMISSIONING);
+  }
 
   /* GNSS + post-acquisition re-sample (the flight LT-03/#271 pattern, minus
    * the archive write): environment and position describe the same moment.
@@ -1808,6 +1844,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
   /* ========== ADAPTIVE TRANSMISSION STRATEGY ========== */
   // Step 1: Always send 10-byte compact packet at SF10 with LinkCheckReq
   // This provides maximum range and evaluates link quality for bulk transfer
+
+  /* A-005/STAB-11/F-09 (#79/#158/#266): announce fw version once at flight. */
+  if (!s_version_announced_flight) {
+    AnnounceVersionReport(VERSION_STAGE_FLIGHT);
+  }
 
   /* Refactor stage 5: every transition (LT-07 stale forcing, the C2/SP-15
    * stale-state reset, the T1/F-5 RF-silence park, the probe/bulk dispatch)

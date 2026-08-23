@@ -8,10 +8,10 @@
 ./Core/Src/first_flight_policy.o
 ./Core/Src/gnss_acquire.o
 ./Core/Src/tx_fsm.o
+./Core/Src/version_report.o
 ./Core/Src/main.o
 ./Core/Src/mission_state.o
 ./Core/Src/mission_logic.o
-./Core/Src/mission_manifest.o
 ./Core/Src/ms5607.o
 ./Core/Src/reset_cause.o
 ./Core/Src/multiregion_context.o
