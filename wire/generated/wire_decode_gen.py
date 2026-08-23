@@ -77,6 +77,7 @@ def _decode_archive_record_v6(b):
     r['sensor_quality'] = b[30]
     r['veto_reason'] = b[31]
     crc_got = struct.unpack_from('<H', b, 32)[0]
+    r['crc16'] = crc_got
     r['crc16_valid'] = (_crc16_modbus(b[:32]) == crc_got)
     return r
 

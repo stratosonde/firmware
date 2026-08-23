@@ -366,7 +366,26 @@ ddrmanifest:
 arminventory:
 	$(PYTHON) ../../tools/check_arm_source_inventory.py
 
-.PHONY: test flight findings burst stability multiregion multiregion-subset baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters contracts check characterization integration structural release-gate
+# Wire-schema gates (single source of truth: wire/wire_schema.json). `wire`
+# validates the schema and runs the golden vectors through the generated
+# decoder; `wiregen` regenerates the derived artifacts (Core/Inc/wire_format_gen.h
+# + wire/generated/wire_decode_gen.py) after a schema edit, and `wirecheck` proves
+# the committed artifacts are in sync with the schema (fails if you edited the
+# schema but forgot to regenerate).
+wire:
+	$(PYTHON) ../../wire/tools/validate_schema.py
+	$(PYTHON) ../../wire/tools/check_schema_vectors.py
+
+wiregen:
+	$(PYTHON) ../../wire/tools/gen_c_wire.py
+	$(PYTHON) ../../wire/tools/gen_python_wire.py
+
+wirecheck: wiregen
+	$(PYTHON) ../../wire/tools/validate_schema.py
+	$(PYTHON) ../../wire/tools/check_schema_vectors.py
+	git diff --exit-code ../../Core/Inc/wire_format_gen.h ../../wire/generated/wire_decode_gen.py
+
+.PHONY: test flight findings burst stability multiregion multiregion-subset baseline all clean review0812 deep config dr sp0813 lt0813 lt0813-gate ddrmanifest arminventory wire wiregen wirecheck pwr geo pwr-gate geo-gate first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters contracts check characterization integration structural release-gate
 test: $(BUILD_DIR)/test_runner$(EXE)
 	./$(BUILD_DIR)/test_runner$(EXE)
 
@@ -470,7 +489,7 @@ sanitize: $(SAN_EXES)
 #                  build/artifact legs arrive with the Phase-6 CI restructure
 # all              check + characterization (the CI gate, STAB-09/#156)
 # ---------------------------------------------------------------------------
-check: test flight findings burst stability multiregion multiregion-subset timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory
+check: test flight findings burst stability multiregion multiregion-subset timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory wire
 
 characterization: lt0813-gate geo-gate pwr-gate
 	@echo "characterization: 5 documented open failures awaited - LT-06 x2 (#248), PWR-02 x3 (#297)"
