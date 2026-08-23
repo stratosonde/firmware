@@ -46,6 +46,48 @@ SysTime_t SysTimeGet(void) {
  * HAL/UART surfaces are stubbed in tests/host/stubs. */
 #include "../../Core/Src/atgm336h.c"
 
+/* ========================================================================== */
+/* Wire-schema drift gate (Phase 2). wire/wire_schema.json is the single source
+ * of truth for the wire layouts; wire/tools/gen_c_wire.py derives the WIRE_*
+ * constants below from it. These _Static_asserts prove the generated constants
+ * still match the REAL encoder headers — so editing a wire layout in C without
+ * regenerating from the schema fails this build, and editing the schema without
+ * regenerating the header fails too. Authority: firmware. */
+#include "version_report.h"
+#include "wire_format_gen.h"
+
+/* heartbeat (port 10) */
+_Static_assert(sizeof(CompactTelemetryPacket_t) == WIRE_HEARTBEAT_LEN,
+               "wire-schema drift: heartbeat length");
+_Static_assert(HEARTBEAT_FORMAT_VERSION == WIRE_HEARTBEAT_VERSION,
+               "wire-schema drift: heartbeat format version");
+_Static_assert(offsetof(CompactTelemetryPacket_t, timestamp_min) == WIRE_HB_OFF_TIMESTAMP, "wire-schema drift: hb ts off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, latitude_100m) == WIRE_HB_OFF_LAT, "wire-schema drift: hb lat off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, longitude_100m) == WIRE_HB_OFF_LON, "wire-schema drift: hb lon off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, temperature_2deg) == WIRE_HB_OFF_TEMP, "wire-schema drift: hb temp off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, press_hum) == WIRE_HB_OFF_PRESSHUM, "wire-schema drift: hb presshum off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, battery_volt_50mv) == WIRE_HB_OFF_BATT, "wire-schema drift: hb batt off");
+_Static_assert(offsetof(CompactTelemetryPacket_t, status) == WIRE_HB_OFF_STATUS, "wire-schema drift: hb status off");
+_Static_assert(PRESS_HUM_PRESS_MASK == ((1u << WIRE_HB_PRESS_BITS) - 1u), "wire-schema drift: press mask");
+_Static_assert(PRESS_HUM_PRESS_INVALID == WIRE_HB_PRESS_INVALID, "wire-schema drift: press invalid");
+_Static_assert(PRESS_HUM_HUM_SHIFT == WIRE_HB_HUM_LSB, "wire-schema drift: hum shift");
+_Static_assert(PRESS_HUM_HUM_INVALID == WIRE_HB_HUM_INVALID, "wire-schema drift: hum invalid");
+
+/* archive record v6 (port 11) */
+_Static_assert(sizeof(HighResTelemetryRecord_t) == WIRE_ARCHIVE_RECORD_LEN,
+               "wire-schema drift: archive record length");
+_Static_assert(offsetof(HighResTelemetryRecord_t, sensor_quality) == WIRE_REC_OFF_SQ, "wire-schema drift: rec sq off");
+_Static_assert(offsetof(HighResTelemetryRecord_t, veto_reason) == WIRE_REC_OFF_VETO, "wire-schema drift: rec veto off");
+_Static_assert(offsetof(HighResTelemetryRecord_t, crc16) == WIRE_REC_OFF_CRC16, "wire-schema drift: rec crc off");
+
+/* bulk envelope v6 (port 11) */
+_Static_assert(sizeof(HighResTelemetryRecord_t) + 4u == WIRE_BULK_RECORD_STRIDE,
+               "wire-schema drift: bulk record stride");
+
+/* version report (port 20) */
+_Static_assert(VERSION_REPORT_LEN == WIRE_VERSION_LEN, "wire-schema drift: version len");
+_Static_assert(VERSION_REPORT_MAGIC == WIRE_VERSION_MAGIC, "wire-schema drift: version magic");
+
 static int g_failures = 0;
 static int g_checks = 0;
 static int g_expected_failures = 0;

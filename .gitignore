@@ -62,3 +62,6 @@ docs/temp/
 # F-009 (#209): flight build artifacts
 dist/
 
+
+__pycache__/
+*.pyc
