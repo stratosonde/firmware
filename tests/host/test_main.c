@@ -205,6 +205,13 @@ static void test_compact_packet(void) {
     for (size_t i = 0; i < sizeof(pkt); i++)
       printf(" %02X", ((const uint8_t *)&pkt)[i]);
     printf("\n");
+
+    /* WIRE ROBUSTNESS: SerializeCompactLE must emit the identical bytes the
+     * raw-struct TX path used to ship, on this (little-endian) target. This is
+     * the guarantee that the explicit serializer is a pure no-op on the wire. */
+    uint8_t wire[sizeof(pkt)];
+    CHECK(SerializeCompactLE(wire, &pkt) == sizeof(pkt));
+    CHECK(memcmp(wire, &pkt, sizeof(pkt)) == 0);
   }
 
   /* D4 (#33): wrap detection — a decreasing 16-bit minute count sets the

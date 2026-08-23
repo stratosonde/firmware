@@ -119,7 +119,7 @@ typedef struct __attribute__((packed)) {
   uint16_t timestamp_min;    // Minutes since mission epoch (2 bytes) - 45.5 day wrap, see STATUS_TS_WRAP
   int16_t latitude_100m;     // Latitude scaled to full int16 range (2 bytes)
   int16_t longitude_100m;    // Longitude scaled to full int16 range (2 bytes)
-  int8_t temperature_2deg;   // Temperature / 2°C offset +64 (1 byte) - -64°C to +63°C
+  uint8_t temperature_2deg;  // Temperature / 2°C offset +64 (1 byte) - unsigned 0-255 -> -64°C to +63.5°C
   uint16_t press_hum;        // Packed pressure (bits 0-10, 1 hPa) + humidity (bits 11-15, 5%)
   uint8_t battery_volt_50mv; // Battery voltage / 50mV (1 byte) - 0-12.75V
   uint8_t status;            // Status byte v2 (1 byte) - stale bits + time markers + mission state
@@ -132,8 +132,8 @@ typedef struct __attribute__((packed)) {
  */
 typedef struct __attribute__((packed)) {
   uint32_t timestamp;       // Full precision timestamp (4 bytes)
-  int32_t latitude;         // Full GPS precision (4 bytes) - 1e-7 degree resolution
-  int32_t longitude;        // Full GPS precision (4 bytes) - 1e-7 degree resolution
+  int32_t latitude;         // sensor_t binary format: deg = raw * 90 / 8388607  (4 bytes)
+  int32_t longitude;        // sensor_t binary format: deg = raw * 180 / 8388607 (4 bytes)
   uint16_t altitude;        // Meters (2 bytes) - 0-65535m
   int16_t temperature;      // 0.1°C resolution (2 bytes) - -3276.8 to +3276.7°C
   uint16_t humidity;        // 0.1% resolution (2 bytes) - 0-655.35%
@@ -141,10 +141,10 @@ typedef struct __attribute__((packed)) {
   uint16_t battery_voltage; // mV (2 bytes) - 0-65.535V
   uint16_t solar_voltage;   // mV (2 bytes) - 0-65.535V
   int16_t voltage_slope;    // mV/hour (2 bytes) - ±32.767 V/hour
-  uint8_t satellites;       // GPS satellite count (1 byte)
+  uint8_t satellites;       // GPS satellite count (1 byte) - AUTHORITATIVE (flags b1-b4 is a redundant copy)
   uint8_t hdop;             // GPS HDOP * 10 (1 byte) - 0-25.5 HDOP
-  uint8_t power_mode;       // Operating mode enum (1 byte)
-  uint8_t flags;            // Status flags (1 byte): b0 gps_fix_valid, b1-b4 sats, b5-b7 power mode
+  uint8_t power_mode;       // Operating mode enum (1 byte) - AUTHORITATIVE (flags b5-b7 is a redundant copy)
+  uint8_t flags;            // Redundant copy of sats (b1-b4) + power mode (b5-b7); b0 gps_fix_valid. Prefer fields above.
   uint8_t sensor_quality;   // STAB-04 (#151): b0 press_stale, b1 temp_stale, b2 hum_stale,
                             // b3 gnss_stale, b4 batt_stale, b5-b7 reserved
   uint8_t veto_reason;      // STAB-04 (#151): TransmitVeto_t at write time (0 = none)
@@ -229,6 +229,16 @@ bool EncodeCompactBinaryPacket(CompactTelemetryPacket_t *packet,
                                uint16_t timestamp_min,
                                int16_t voltage_slope,
                                OperatingMode_t power_mode);
+
+/**
+ * @brief Serialize the 11-byte compact heartbeat as explicit little-endian bytes
+ *        (WIRE ROBUSTNESS - replaces shipping the raw packed struct, whose
+ *        endianness was MCU-native; output byte-identical on little-endian).
+ * @param out: buffer of at least 11 bytes
+ * @param p:   source compact packet
+ * @retval number of bytes written (always 11)
+ */
+uint16_t SerializeCompactLE(uint8_t *out, const CompactTelemetryPacket_t *p);
 
 /**
  * @brief Encode high-resolution telemetry record for flash storage

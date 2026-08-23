@@ -8,7 +8,11 @@
 #include "version_report.h"
 #include <stddef.h> /* NULL */
 
-/* CRC-16CCITT (poly 0x1021, init 0xFFFF) - same as payload_encode.c. */
+/* CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, non-reflected). NOTE: this is
+ * a DIFFERENT variant from payload_encode.c's CalculateCRC16, which is
+ * CRC-16/MODBUS (poly 0xA001, reflected, init 0xFFFF) - three CRC conventions
+ * exist across the wire formats (record CRC16 = MODBUS, version frame CRC16 =
+ * CCITT-FALSE, packet trailer CRC32 = ISO-HDLC); see LoRaWANApplicationProtocol.md. */
 static uint16_t Crc16(const uint8_t *data, uint32_t length) {
   uint16_t crc = 0xFFFFU;
   for (uint32_t i = 0; i < length; i++) {

@@ -1741,8 +1741,10 @@ static void CommissioningTelemetryCycle(const sensor_t *sensor_data_pre,
   LmHandlerSetTxDatarate(DatarateFromSF(10));
   LmHandlerAppData_t probeData;
   probeData.Port = LORAWAN_COMPACT_PORT;
-  probeData.BufferSize = sizeof(compact_packet);
-  probeData.Buffer = (uint8_t *)&compact_packet;
+  /* WIRE ROBUSTNESS: serialize explicitly (LE), not the raw packed struct. */
+  static uint8_t s_probe_wire[sizeof(CompactTelemetryPacket_t)];
+  probeData.BufferSize = SerializeCompactLE(s_probe_wire, &compact_packet);
+  probeData.Buffer = s_probe_wire;
   LmHandlerErrorStatus_t send_status =
       LmHandlerSend(&probeData, LORAMAC_HANDLER_CONFIRMED_MSG, 0);
   if (send_status != LORAMAC_HANDLER_SUCCESS) {
@@ -2041,8 +2043,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
       // Prepare packet data BEFORE requesting LinkCheck
       LmHandlerAppData_t compactData;
       compactData.Port = LORAWAN_COMPACT_PORT; // Port 10
-      compactData.BufferSize = sizeof(CompactTelemetryPacket_t);
-      compactData.Buffer = (uint8_t *)&compact_packet;
+      /* WIRE ROBUSTNESS: serialize explicitly (LE), not the raw packed struct. */
+      static uint8_t s_compact_wire[sizeof(CompactTelemetryPacket_t)];
+      compactData.BufferSize = SerializeCompactLE(s_compact_wire, &compact_packet);
+      compactData.Buffer = s_compact_wire;
 
       /* DDR-0005 (#34): the opportunity-probe heartbeat is a CONFIRMED uplink.
        * No archive opportunity opens without its network ACK (evaluated in

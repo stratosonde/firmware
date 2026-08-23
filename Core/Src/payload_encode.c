@@ -44,7 +44,7 @@
 uint16_t Payload_TimestampMinutesNow(void);
 static int16_t ConvertLatitudeToCompact(int32_t binary_latitude);
 static int16_t ConvertLongitudeToCompact(int32_t binary_longitude);
-static int8_t ConvertTemperatureToCompact(float temperature_c);
+static uint8_t ConvertTemperatureToCompact(float temperature_c);
 static uint16_t PackPressureHumidity(float pressure_mbar, float humidity_percent);
 static uint8_t ConvertBatteryVoltageToCompact(float voltage_volts);
 static uint8_t PackStatusFlags(bool gps_valid, uint8_t satellites, OperatingMode_t power_mode);
@@ -292,6 +292,30 @@ static void PutU32LE(uint8_t *p, uint32_t v) {
   p[1] = (uint8_t)(v >> 8);
   p[2] = (uint8_t)(v >> 16);
   p[3] = (uint8_t)(v >> 24);
+}
+
+/**
+ * @brief Serialize the 11-byte compact heartbeat as explicit little-endian bytes.
+ *        WIRE ROBUSTNESS: the TX path previously shipped the raw packed struct
+ *        (probeData.Buffer = (uint8_t*)&compact_packet), so Port 10's on-wire
+ *        endianness was the MCU's native byte order - LE only because the
+ *        STM32WLE5 is little-endian. Port 11 was already explicitly LE-serialized
+ *        (PutU16LE/PutU32LE); this gives the heartbeat the same explicit, portable
+ *        serialization (LoRaWANApplicationProtocol.md §3 / D9). Output is
+ *        byte-identical on a little-endian target (no wire change).
+ * @param  out: buffer of at least 11 bytes
+ * @param  p:   source compact packet
+ * @retval number of bytes written (always 11)
+ */
+uint16_t SerializeCompactLE(uint8_t *out, const CompactTelemetryPacket_t *p) {
+  PutU16LE(out + 0, p->timestamp_min);
+  PutU16LE(out + 2, (uint16_t)p->latitude_100m);
+  PutU16LE(out + 4, (uint16_t)p->longitude_100m);
+  out[6] = p->temperature_2deg;
+  PutU16LE(out + 7, p->press_hum);
+  out[9] = p->battery_volt_50mv;
+  out[10] = p->status;
+  return 11;
 }
 
 /**
@@ -544,7 +568,7 @@ static int16_t ConvertLongitudeToCompact(int32_t binary_longitude) {
 /**
  * @brief Convert temperature to compact format with 2°C resolution
  */
-static int8_t ConvertTemperatureToCompact(float temperature_c) {
+static uint8_t ConvertTemperatureToCompact(float temperature_c) {
   /* SP-14 (#251): NaN has no defined comparison, and float->int casts on
    * out-of-range values are UB (observed toolchain-lottery: host x86 and
    * ARM disagree). No wire sentinel exists for temperature - range-bottom
@@ -556,13 +580,17 @@ static int8_t ConvertTemperatureToCompact(float temperature_c) {
   // Scale by 2°C resolution and add offset to handle negative values
   int16_t scaled = (int16_t)(temperature_c / TEMPERATURE_SCALE_FACTOR) + TEMPERATURE_OFFSET;
 
-  // Clamp to int8_t range (0-255) = -64°C to +63°C after offset removal
+  /* Clamp to the wire byte range (unsigned 0-255 = -64°C to +63.5°C after
+   * offset removal). The field is uint8_t (payload_format.h): declaring the
+   * old int8_t let values >127 reinterpret as negative in the struct; both
+   * sides reinterpreted the same byte so it round-tripped, but the signed
+   * type was a lie. */
   if (scaled > 255)
     scaled = 255;
   if (scaled < 0)
     scaled = 0;
 
-  return (int8_t)scaled;
+  return (uint8_t)scaled;
 }
 
 /**
