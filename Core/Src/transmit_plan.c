@@ -65,6 +65,23 @@ static uint32_t ApplyOperatingMode(OperatingMode_t mode, bool *gps_enabled,
   return interval_ms;
 }
 
+uint32_t OutageBackoff_Interval(uint32_t base_ms, uint32_t no_ack_s) {
+  /* 1h/4h/12h rungs -> x2/x4/x8, capped at the shared max interval. */
+  uint32_t mult = 1U;
+  if (no_ack_s >= 43200U) { /* 12 h */
+    mult = 8U;
+  } else if (no_ack_s >= 14400U) { /* 4 h */
+    mult = 4U;
+  } else if (no_ack_s >= 3600U) { /* 1 h */
+    mult = 2U;
+  }
+  uint32_t scaled = base_ms * mult;
+  if (scaled > CONFIG_MAX_TX_INTERVAL_MS || scaled < base_ms /* overflow */) {
+    scaled = CONFIG_MAX_TX_INTERVAL_MS;
+  }
+  return scaled;
+}
+
 TransmitPlan_t DecideTransmitPlan(VoltageSlope_t *slope_state,
                                   uint16_t battery_mv_raw,
                                   float temperature_c,

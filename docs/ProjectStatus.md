@@ -1,7 +1,7 @@
 # Stratosonde Firmware — Project Status
 
 **The one page that answers "what is done and what is not."**
-Last updated: 2026-08-15 (second pass, after the 2026-08-14 flight-readiness reviews) — **the FR wave fixed all 8 confirmed code findings (#282, #283, #290, #292–#296; red-first host gates, ARM +368 B flash / +2048 B bss → text 198,992 B); the second review (GEO/PWR/MAC) triaged to trackers #297 (PWR-02, bench-gated P0), #298, #299, h3lite#1, with dispositions recorded on #257/#258/#248; two new EXPECT_UNFIXED-gated host suites (`test_pwr`, `test_geo`) pin the bench/data-dependent findings. CI green.** Prior pass: 2026-08-15 sweep @ `4014d33` (#269–#278 fixed, #279–#289 tracked); before that 2026-08-07 refactor batch + doc sweep (#75/#73/#74/#77, #40).
+Last updated: 2026-08-23 (post version-report wave: #266/#158/#79 version-report frame, #281 H-01 mission manifest + #78 A-003 unified persistence closed; #147/#265/#268 closed; #145/#133 decision-closed) — **the FR wave fixed all 8 confirmed code findings (#282, #283, #290, #292–#296; red-first host gates, ARM +368 B flash / +2048 B bss → text 198,992 B); the second review (GEO/PWR/MAC) triaged to trackers #297 (PWR-02, bench-gated P0), #298, #299, h3lite#1, with dispositions recorded on #257/#258/#248; two new EXPECT_UNFIXED-gated host suites (`test_pwr`, `test_geo`) pin the bench/data-dependent findings. CI green.** Prior pass: 2026-08-15 sweep @ `4014d33` (#269–#278 fixed, #279–#289 tracked); before that 2026-08-07 refactor batch + doc sweep (#75/#73/#74/#77, #40).
 
 ## Status model
 
@@ -65,16 +65,20 @@ Everything below is code-complete and CI-verified; where hardware matters it is 
 | **#286** (code, high) | H-10: fresh-outage recovery must be newest-first |
 | **#287** (code, high) | H-11: commissioned home_region + reset-stable Band-0 age anchor |
 | **#288** (code, high, **partial**) | H-12: FULL/SLEEP admission + complete-package science **implemented** (commit A `61647a2`, stage 6 gates); durable energy trend remains **open** (bench evidence, Phase B1) |
-| **#279, #281, #289** (code, normal) + **#280** (normal, **partial**) | LT-09 solar flag (batches with #266) · M-02 config threshold consumption — GPS acceptance thresholds consumed by A5 (`af86c2c`); other thresholds open · H-01 durable pre-flight state (design) · M-01 deferred ring reconstruction |
+| **#279** (code, normal) | LT-09 solar staleness bit — deferred (would have batched with #266; the #266/#158/#79 version-report frame landed instead; if a stale bit is needed it rides the next wire bump with golden-vector discipline, DDR-0027) |
+| ~~**#281**~~ (closed 2026-08-22) | H-01 durable lifecycle — Mission Manifest (DDR-0035, page 127); also closed **#78** (A-003) |
+| ~~**#289**~~ (closed) | M-01 deferred ring reconstruction |
+| ~~**#266/#158/#79**~~ (closed 2026-08-22) | version-report FPort 20 announce frame (wire discriminator by fw version) |
 | **#298, #299** (code, post-flight) | MAC-01 clamp network-commanded ChannelsNbTrans + DR floor · GEO-05 BR-RF-007/008 mission-configurable ring-search bound |
 | **#261, #262** (infra) | HIL lane + release evidence (M-03) — gates the readiness checklist |
-| **#268** (infra) | First-party `-Wall -Wextra` cleanliness + CI warning gate |
-| **#266** (protocol) | Next wire-format bump — batches #279's solar bit; relates #78/#79 |
-| **#78, #79** (code, deferred) | A-003 unify two-slot persistence · A-005 on-wire version for the heartbeat |
+| ~~**#268**~~ (closed 2026-08-22) | warning-free via -Werror + cppcheck gates |
 | **#56** (partial) | NK GeoJSON → `RESTRICTED.geojson` regeneration (firmware + generator halves done) |
-| **#264** (docs) | M-04 requirements/status consistency — partially addressed by the 2026-08-15 doc passes (this page + requirements/* annotated) |
+| ~~**#264**~~ (closed 2026-08-22) | M-04 status-consistency — sweep counts/text reconciled (this pass) |
 | **#41** | Post-flight: Qwiic expansion decisions + implementation |
 | **#43, #60, #61** | Post-flight: AS923 sub-group runtime-settability · MS5607 + SHT31 characterization |
+| **#129/#131, #267** (code) | Probe backoff ladder (outage-degradation): 30 min / 2 h / silent(GPS-loss veto) rungs; host-testable in transmit_plan.c |
+| **#133** (decision) | 1 hPa resolution sufficient for first flight; next-wire-bump ride-along if science needs finer (discriminator now exists, DDR-0035) |
+| **#145** (hardware decision) | PB13 arming GPIO wired (PRETEST-DEC-01): pressure-detection remains the autonomous path, button as the deliberate gesture — decision fixed by #301/#279 resolution scope |
 
 ## Ordering hazards (don't unmask bugs while fixing neighbors)
 

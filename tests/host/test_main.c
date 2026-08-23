@@ -1106,6 +1106,19 @@ static void test_r2_19_dma_overrun_blind_spot(void) {
   CHECK_EQ_I(g.dma_overrun_count, 1);
 }
 
+/* F-10 (#267) + #129/#131 - outage backoff ladder rungs + cap ------------ */
+static void test_outage_backoff_ladder(void) {
+  /* x1 below 1 h, x2 at 1 h, x4 at 4 h, x8 at 12 h; cap at CONFIG_MAX. */
+  CHECK_EQ_I(300000UL, OutageBackoff_Interval(300000UL, 3599U));
+  CHECK_EQ_I(600000UL, OutageBackoff_Interval(300000UL, 3600U));
+  CHECK_EQ_I(360000UL, OutageBackoff_Interval(180000UL, 7200U));
+  CHECK_EQ_I(1200000UL, OutageBackoff_Interval(300000UL, 14400U));
+  CHECK_EQ_I(2400000UL, OutageBackoff_Interval(300000UL, 43200U));
+  /* Cap and overflow safe: 1 h base, huge no_ack -> still bounded. */
+  CHECK_EQ_I((long)CONFIG_MAX_TX_INTERVAL_MS,
+             (long)OutageBackoff_Interval(3600000UL, 0xFFFFFFFFU));
+}
+
 int main(void) {
   test_crc_vectors();
   test_compact_packet();
@@ -1124,6 +1137,7 @@ int main(void) {
   test_r2_19_dma_overrun_blind_spot();
   test_mission_logic();
   test_ts_wrap_restore();
+  test_outage_backoff_ladder();
 
   printf("\n%d checks, %d failures", g_checks, g_failures);
   if (g_expected_failures > 0) {

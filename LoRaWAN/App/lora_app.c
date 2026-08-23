@@ -1658,6 +1658,10 @@ static uint16_t s_comm_live_len = 0;
 static bool s_version_announced_comm = false;
 static bool s_version_announced_flight = false;
 
+/* F-10 (#267) + #129/#131: last confirmed-ACK SysTime second (0 = none yet;
+ * the ladder treats that as x1 so a fresh unit never starts degraded). */
+static uint32_t s_last_ack_s = 0;
+
 static void AnnounceVersionReport(VersionReport_StageTypeDef stage) {
   uint8_t frame[VERSION_REPORT_LEN];
   if (!VersionReport_Build(frame, HEARTBEAT_FORMAT_VERSION, stage,
@@ -2343,6 +2347,15 @@ static void SendTxData(void) {
     }
   }
 
+  /* F-10 (#267) + #129/#131: obligation backoff ladder scales the resulting
+   * cadence as continuous no-ACK time grows; the executable probe cost falls.
+   * 1h/4h/12h -> x2/x4/x8, x1 again after any confirmed ACK. Centralized with
+   * the plan so the ladder rides the same decide seam and remains testable. */
+  {
+    uint32_t no_ack_s = (s_last_ack_s == 0) ? 0 : (now_timestamp > s_last_ack_s ? now_timestamp - s_last_ack_s : 0);
+    plan.tx_interval_ms = OutageBackoff_Interval(plan.tx_interval_ms, no_ack_s);
+  }
+
   /* A full first-flight observation always budgets GNSS.  Keep the selected
    * cadence/mode for diagnostics and scheduling, but never let a reduced,
    * recovery, or survival preference create a GNSS-less science wake. */
@@ -2932,6 +2945,10 @@ static void OnTxData(LmHandlerTxParams_t *params) {
     TxFsmConfirmInput_t fsm_in = AppAdapters_BuildTxConfirm(&snap);
     TxFsmEventOutput_t fsm_out;
     TxFsm_OnTxConfirm(&g_tx_fsm, &fsm_in, &fsm_out);
+    /* F-10 (#267): any confirmed ACK resets the ladder (x1 on next wake). */
+    if (fsm_in.status_ok && fsm_in.ack_received) {
+      s_last_ack_s = SysTimeGet().Seconds;
+    }
     if (fsm_out.defer_header_sync) {
       SONDE_LOG_STR("Archive opportunity OPEN — first archive probe\r\n");
       /* Finding #8: defer header persistence for the whole burst — one
