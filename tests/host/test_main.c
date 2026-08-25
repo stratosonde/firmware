@@ -599,14 +599,18 @@ const SystemConfig_t *Config_Get(void) { return NULL; }
 #include "mission_logic.h"
 
 static void test_decide_transmit_plan(void) {
-  VoltageSlope_t vs;
+  /* PWR-SIMPLIFY: fixed cadence from config (Config_Get stubbed to NULL ->
+   * hardcoded defaults), mode pinned NORMAL, GPS always budgeted, the veto
+   * is the only conditional branch. Slope/mode/hysteresis tests excised
+   * with the ladder. */
 
   /* Healthy battery, warm, joined, flight -> full go, GPS on */
-  memset(&vs, 0, sizeof(vs));
-  TransmitPlan_t p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, true, false, false);
+  TransmitPlan_t p = DecideTransmitPlan(5200, 22.0f, false, true, false);
   CHECK_EQ_I(p.veto, VETO_NONE);
   CHECK(p.gps_enabled);
   CHECK_EQ_I(p.gps_timeout_ms, 60000);
+  CHECK_EQ_I(p.tx_interval_ms, 300000); /* NULL-config default target */
+  CHECK_EQ_I(p.power_mode, MODE_NORMAL);
   CHECK_EQ_I(p.battery_mv_normalized, 5224); /* 22C: +24mV interpolation */
 
   /* RV-08 (#164, DDR-0021 conformance): temperature no longer gates GPS.
@@ -614,87 +618,34 @@ static void test_decide_transmit_plan(void) {
    * GPS-loss silence composed into a 6 h dark sawtooth for the whole float.
    * (Historical window; the silence budget is 24 h since 2026-08-13 per
    *  DDR-0015 BR-STALE-017. The lockout removal is unaffected.) */
-  memset(&vs, 0, sizeof(vs));
-  p = DecideTransmitPlan(&vs, 5200, -60.0f, false, 1000, true, false, false);
+  p = DecideTransmitPlan(5200, -60.0f, false, true, false);
   CHECK_REGRESSION(p.veto == VETO_NONE, "RV-08");
   CHECK_REGRESSION(p.gps_enabled, "RV-08");
 
-  /* Stale temperature still skips normalization (R2-10) but does not veto */
-  memset(&vs, 0, sizeof(vs));
-  p = DecideTransmitPlan(&vs, 5200, 20.0f, true, 1000, true, false, false);
+  /* Stale temperature still skips normalization (R10) but does not veto */
+  p = DecideTransmitPlan(5200, 20.0f, true, true, false);
   CHECK_REGRESSION(p.veto == VETO_NONE, "RV-08-stale");
   CHECK_EQ_I(p.battery_mv_normalized, 5200); /* raw, uncompensated */
 
-  /* RV-02 (#161): a rejected (0 mV) battery read must not become the slope
-   * baseline - the next real reading must not report runaway charging. */
-  {
-    VoltageSlope_t vs3;
-    memset(&vs3, 0, sizeof(vs3));
-    TransmitPlan_t a = DecideTransmitPlan(&vs3, 0, 25.0f, false, 1000, true, false, true);
-    CHECK_EQ_I(a.power_mode, MODE_SURVIVAL); /* raw floor still fires (R10) */
-    TransmitPlan_t b = DecideTransmitPlan(&vs3, 5200, 25.0f, false, 1700, true, false, false);
-    CHECK_REGRESSION(abs(b.voltage_slope_mv_per_hour) < 3000, "RV-02");
-    CHECK_REGRESSION(b.power_mode != MODE_NORMAL, "RV-02");
-  }
-
-  /* RV-03 (#161): 6 h of frozen (cached) battery reads must not read as a
-   * healthy stable battery - stale measurement caps the mode at REDUCED. */
-  {
-    VoltageSlope_t vs4;
-    memset(&vs4, 0, sizeof(vs4));
-    TransmitPlan_t q = DecideTransmitPlan(&vs4, 4800, 25.0f, false, 1000, true, false, false);
-    CHECK_EQ_I(q.voltage_slope_mv_per_hour, 0);
-    for (uint32_t t = 1700; t <= 1000 + 6 * 3600; t += 700) {
-      q = DecideTransmitPlan(&vs4, 4800, 25.0f, false, t, true, false, true);
-    }
-    CHECK_REGRESSION(q.power_mode != MODE_CONSERVATIVE &&
-                         q.power_mode != MODE_NORMAL,
-                     "RV-03");
-  }
-
-  /* F8 (#172): power-mode hysteresis - one noisy sample (10 mV over the
-   * ~600 s slope window = 60 mV/h, larger than every mode threshold) must
-   * not flap the mode toward higher power. Downgrades stay immediate. */
-  {
-    VoltageSlope_t vs5;
-    memset(&vs5, 0, sizeof(vs5));
-    TransmitPlan_t r;
-    r = DecideTransmitPlan(&vs5, 5200, 25.0f, false, 1000, true, false, false);
-    CHECK(r.power_mode == MODE_CONSERVATIVE); /* baseline, slope 0 */
-    /* +20 mV over 700 s: slope ~+103 mV/h -> proposes NORMAL */
-    r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 1700, true, false, false);
-    CHECK_REGRESSION(r.power_mode == MODE_CONSERVATIVE, "F8-noise1");
-    /* still +51 mV/h at 1400 s: second proposal, still not committed */
-    r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 2400, true, false, false);
-    CHECK_REGRESSION(r.power_mode == MODE_CONSERVATIVE, "F8-noise2");
-    /* third consecutive upgrade proposal commits */
-    r = DecideTransmitPlan(&vs5, 5220, 25.0f, false, 3100, true, false, false);
-    CHECK(r.power_mode == MODE_NORMAL);
-    /* downgrade applies immediately (energy protection never waits) */
-    r = DecideTransmitPlan(&vs5, 4800, 25.0f, false, 3800, true, false, false);
-    CHECK_REGRESSION(r.power_mode != MODE_NORMAL, "F8-down-immediate");
-  }
-
-  /* Planner retains the survival cadence at 4200 mV. The first-flight
-   * admission gate rejects this voltage before the planner is called; the
-   * plan itself must not encode a reusable GNSS-less degradation mode. */
-  memset(&vs, 0, sizeof(vs));
-  p = DecideTransmitPlan(&vs, 4200, 25.0f, false, 1000, true, false, false);
-  CHECK_EQ_I(p.power_mode, MODE_SURVIVAL);
+  /* A pack BELOW the 3800 mV Gate-B floor is never admitted upstream
+   * (FirstFlightWakeAdmitted), so the planner carries no degradation mode:
+   * even a hypothetical below-floor call returns the full cycle. */
+  p = DecideTransmitPlan(3700, 25.0f, false, true, false);
+  CHECK_EQ_I(p.power_mode, MODE_NORMAL);
   CHECK(p.gps_enabled);
   CHECK(p.gps_timeout_ms > 0U);
-  CHECK_EQ_I(p.tx_interval_ms, 3600000);
+  CHECK_EQ_I(p.tx_interval_ms, 300000);
 
   /* FLIGHT + no session -> RF silence veto (DDR-0018); commissioning exempt */
-  memset(&vs, 0, sizeof(vs));
-  p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, false, false);
+  p = DecideTransmitPlan(5200, 22.0f, false, false, false);
   CHECK_EQ_I(p.veto, VETO_RF_SILENCE);
-  memset(&vs, 0, sizeof(vs));
-  p = DecideTransmitPlan(&vs, 5200, 22.0f, false, 1000, false, true, false);
+  p = DecideTransmitPlan(5200, 22.0f, false, false, true);
   CHECK_EQ_I(p.veto, VETO_NONE);
 }
 
 static void test_power_model(void) {
+  /* PWR-SIMPLIFY: the ladder (slope, predictions, SelectMode) is excised;
+   * only the SoC normalization table and mode names remain testable here. */
   /* NormalizeBatteryVoltage */
   CHECK_EQ_I(NormalizeBatteryVoltage(5000, 25.0f), 5000);  /* no comp at 25C */
   CHECK_EQ_I(NormalizeBatteryVoltage(3330, -65.0f), 5500); /* table point */
@@ -702,161 +653,16 @@ static void test_power_model(void) {
   CHECK_EQ_I(NormalizeBatteryVoltage(2800, -80.0f), 5500); /* below table: max comp */
   CHECK_EQ_I(NormalizeBatteryVoltage(5000, -5.0f), 5275);  /* halfway 0C/-10C */
 
-  /* CalculateVoltageSlope */
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-  CHECK_EQ_I(CalculateVoltageSlope(&vs, 5000, 1000), 0);    /* first sample */
-  CHECK_EQ_I(CalculateVoltageSlope(&vs, 5010, 1300), 0);    /* dt<600: last slope */
-  CHECK_EQ_I(CalculateVoltageSlope(&vs, 5036, 4600), 36);   /* +36mV over 3600s */
-  CHECK_EQ_I(CalculateVoltageSlope(&vs, 5020, 1500), 36);   /* dt<600: repeat last */
-  CHECK_EQ_I(CalculateVoltageSlope(&vs, 4900, 4600), -100); /* F-01 (#62): discharging must be negative (-100mV over 3600s from baseline 5000@1000) */
-
-  /* Finding #6 (2026-08-10 review): the battery ADC has no plausibility
-   * gate, so one failed conversion (returns 0 mV) can poison the slope
-   * baseline. On recovery the true delta exceeds 5462 mV and the int16_t
-   * cast wraps: +6400 mV over 600 s = +38400 mV/h comes back as -27136 —
-   * a RECOVERING battery reads as catastrophic discharge. The slope must
-   * saturate, never wrap. EXPECTED-FAIL-BEFORE-FIX. */
-  {
-    VoltageSlope_t vs3;
-    memset(&vs3, 0, sizeof(vs3));
-    CHECK_EQ_I(CalculateVoltageSlope(&vs3, 0, 1000), 0);       /* poisoned baseline latches */
-    int16_t wrapped = CalculateVoltageSlope(&vs3, 6400, 1600); /* dt=600s */
-    CHECK_REGRESSION(wrapped >= 0, "FINDING-6");
-    printf("   finding #6: slope after 0->6400mV over 600s = %d mV/h (want >= 0)\n",
-           (int)wrapped);
-  }
-
-  /* STAB-08 (#155): direction-aware prediction API. The old
-   * PredictTimeToVoltage had logically dead boundary tests (delta>0 &&
-   * current>=target can never hold) and folded "already past" into the same
-   * 0xFFFF as "stable/never". Exhaustive table: current {<,=,>} target x
-   * slope {<,0,>}, both directions. */
-  {
-    uint16_t hrs = 0xAAAA;
-    /* LOWER threshold (e.g. 4500 mV critical) */
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4400, -100, 4500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4500, -100, 4500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4400, 0, 4500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4400, 100, 4500, &hrs), PRED_AT_OR_PAST); /* rising but still below */
-    CHECK_EQ_I(PredictTimeToLowerThreshold(5000, -100, 4500, &hrs), PRED_REACHABLE);
-    CHECK_EQ_I(hrs, 5);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(5000, 0, 4500, &hrs), PRED_STABLE);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(5000, 100, 4500, &hrs), PRED_MOVING_AWAY);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4500, 0, 4500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToLowerThreshold(4500, 100, 4500, &hrs), PRED_AT_OR_PAST);
-    /* saturation: clamps to 9999, never wraps */
-    CHECK_EQ_I(PredictTimeToLowerThreshold(65535, -1, 0, &hrs), PRED_REACHABLE);
-    CHECK_EQ_I(hrs, 9999);
-    /* UPPER threshold (e.g. 5500 mV full) */
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5600, 100, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5500, 100, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5600, 0, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5600, -100, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5000, 100, 5500, &hrs), PRED_REACHABLE);
-    CHECK_EQ_I(hrs, 5);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5000, 0, 5500, &hrs), PRED_STABLE);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5000, -100, 5500, &hrs), PRED_MOVING_AWAY);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5500, 0, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(5500, -100, 5500, &hrs), PRED_AT_OR_PAST);
-    CHECK_EQ_I(PredictTimeToUpperThreshold(0, 1, 65535, &hrs), PRED_REACHABLE);
-    CHECK_EQ_I(hrs, 9999); /* saturation, upper direction */
-  }
-
-  /* SelectModeFromPredictions — floor MUST win over positive slope (BUG 1.5) */
-  CHECK_EQ_I(SelectModeFromPredictions(50, 4200, 0xFFFF, 4200), MODE_SURVIVAL);
-  CHECK_EQ_I(SelectModeFromPredictions(25, 5000, 0xFFFF, 5000), MODE_NORMAL);
-  CHECK_EQ_I(SelectModeFromPredictions(5, 5000, 0xFFFF, 5000), MODE_CONSERVATIVE);
-  CHECK_EQ_I(SelectModeFromPredictions(0, 5000, 0xFFFF, 5000), MODE_CONSERVATIVE);
-  CHECK_EQ_I(SelectModeFromPredictions(-10, 5000, 0xFFFF, 5000), MODE_REDUCED);
-  CHECK_EQ_I(SelectModeFromPredictions(-20, 5000, 10, 5000), MODE_RECOVERY);
-  CHECK_EQ_I(SelectModeFromPredictions(-40, 5000, 3, 5000), MODE_SURVIVAL);
-
-  /* R10 (#37): compensation must NOT defeat the floor. Raw 4200 mV at -66C
-   * normalizes to 6900 mV — the old normalized-floor path would NOT pick
-   * SURVIVAL. The floor reads raw. */
-  CHECK_EQ_I(SelectModeFromPredictions(50, 6900, 0xFFFF, 4200), MODE_SURVIVAL);
-  /* R10: stale temperature -> no normalization (decide-level regression) */
-  {
-    VoltageSlope_t vs2;
-    memset(&vs2, 0, sizeof(vs2));
-    TransmitPlan_t p2 = DecideTransmitPlan(&vs2, 4200, -66.0f, true, 1000, true, false, false);
-    CHECK_EQ_I(p2.battery_mv_normalized, 4200); /* raw, uncompensated */
-    CHECK_EQ_I(p2.power_mode, MODE_SURVIVAL);
-  }
-
   CHECK(strcmp(GetModeName(MODE_SURVIVAL), "SURVIVAL") == 0);
+  CHECK(strcmp(GetModeName(MODE_NORMAL), "NORMAL") == 0);
   CHECK(strcmp(GetModeName((OperatingMode_t)99), "UNKNOWN") == 0);
 }
 
-/* ========================================================================== */
-/* R2 findings (2026-08-09 pre-flight review) — EXPECTED-FAIL-BEFORE-FIX      */
-/* ========================================================================== */
-
-static void test_r2_10_slope_temperature_contamination(void) {
-  /* R2-10 (#114): the slope is computed on the temperature-NORMALIZED
-   * voltage. NormalizeBatteryVoltage ADDS compensation as temperature falls
-   * (steeply below -55C: +430 mV at -55C, +2170 mV at -65C), so cooling at
-   * constant charge state produces a RISING normalized voltage — the slope
-   * reads cooling as charging. Sweep temperature at CONSTANT raw voltage:
-   * the slope must stay flat. */
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-  TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4500, -55.0f, false, 3600, true, false, false);
-  TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4500, -65.0f, false, 7200, true, false, false);
-  (void)p1;
-  /* Normalized voltage jumped ~4930 -> ~6670 mV purely from temperature. */
-  CHECK_REGRESSION(abs(p2.voltage_slope_mv_per_hour) <= 20, "R2-10");
-  /* And the mode must not flip to GPS-on NORMAL because it got COLDER. */
-  CHECK_REGRESSION(p2.power_mode != MODE_NORMAL, "R2-10");
-}
-
-static void test_r2_11_no_history_default_uses_raw_voltage(void) {
-  /* R2-11 (#115): slope state is RAM-only — after every reset there is no
-   * history and SelectModeFromPredictions falls through every branch to
-   * MODE_CONSERVATIVE (10-min cadence) even with a marginal
-   * battery. The no-history default must derive from RAW voltage, not
-   * fall through. (The slope baseline is RAM-only — DR12-15 persistence was
-   * never implemented; finding #9 corrected the overstated comment.) */
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-  TransmitPlan_t p = DecideTransmitPlan(&vs, 4400, 25.0f, false, 3600, true, false, false);
-  CHECK_EQ_I(p.voltage_slope_mv_per_hour, 0); /* guard: truly no history */
-  CHECK_REGRESSION(p.power_mode != MODE_CONSERVATIVE, "R2-11");
-  CHECK_REGRESSION(p.gps_enabled && p.gps_timeout_ms > 0U, "R2-11");
-}
-
-static void test_r2_17_already_critical_never_reports_stable(void) {
-  /* R2-17 (#121): at/below the 4500 mV critical threshold while
-   * discharging, both PredictTimeToVoltage calls return 0xFFFF, so
-   * DecideTransmitPlan emits time_to_target_h == 0 — which the log path
-   * (lora_app.c) and Cayenne ch 12 render as "Stable". 0 must be reserved
-   * for genuinely stable; already-critical must be distinguishable
-   * (any non-zero encoding is acceptable). */
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-  TransmitPlan_t p1 = DecideTransmitPlan(&vs, 4600, 25.0f, false, 3600, true, false, false);
-  (void)p1;
-  TransmitPlan_t p2 = DecideTransmitPlan(&vs, 4400, 25.0f, false, 7200, true, false, false);
-  CHECK_EQ_I(p2.voltage_slope_mv_per_hour, -200); /* guard: discharging */
-  CHECK(p2.power_mode != MODE_NORMAL);            /* guard: not charging */
-  CHECK_REGRESSION(p2.time_to_target_h != 0, "R2-17");
-
-  /* STAB-08 (#155): RISING but still below critical. Old code: delta=50,
-   * slope=+150 -> hours = 50/150 = 0 -> time_to_target_h = -0 = 0 -> the
-   * log path and Cayenne ch 12 render a below-critical battery "Stable".
-   * PRED_AT_OR_PAST must map to -1 (critical now), never 0. */
-  {
-    VoltageSlope_t vs2;
-    memset(&vs2, 0, sizeof(vs2));
-    TransmitPlan_t q1 = DecideTransmitPlan(&vs2, 4300, 25.0f, false, 3600, true, false, false);
-    (void)q1;
-    TransmitPlan_t q2 = DecideTransmitPlan(&vs2, 4450, 25.0f, false, 7200, true, false, false);
-    CHECK(q2.voltage_slope_mv_per_hour > 0); /* guard: charging */
-    CHECK(q2.battery_mv_normalized < 4500);  /* guard: below critical */
-    CHECK_REGRESSION(q2.time_to_target_h == -1, "STAB-08");
-  }
-}
+/* PWR-SIMPLIFY (2026-08-24): R2-10 (#114), R2-11 (#115), R2-17 (#121) and
+ * STAB-08 (#155) guarded the deleted ladder's mechanisms (normalized-voltage
+ * slope, no-history fallback, time-to-target prediction). Their regression
+ * tests are excised with the ladder; the R10 stale-temperature regression is
+ * preserved in test_decide_transmit_plan above. */
 
 /* STAB-06 (#153) + STAB-07 (#154): pure launch/float detectors (mission_logic.c) */
 static void test_mission_logic(void) {
@@ -1179,9 +985,6 @@ int main(void) {
   test_decide_transmit_plan();
   test_nmea_checksum_guard();
   test_gnss_parser();
-  test_r2_10_slope_temperature_contamination();
-  test_r2_11_no_history_default_uses_raw_voltage();
-  test_r2_17_already_critical_never_reports_stable();
   test_r2_30_rmc_valid_clears_on_void();
   test_r2_19_dma_overrun_blind_spot();
   test_mission_logic();

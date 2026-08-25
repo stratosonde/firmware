@@ -28,8 +28,9 @@ that (DDR-0003).
 ## The Transmit Cycle
 
 1. **Admission**: read fresh temperature and raw battery voltage. Below the
-   configured minimum (`gps_temperature_lockout`, default −55 °C;
-   `battery_critical_threshold`, default/hard floor 4300 mV), or on
+   configured minimum (`gps_temperature_lockout`, default −60 °C —
+   PWR-SIMPLIFY Gate A; `battery_critical_threshold`, default/hard floor
+   3800 mV — Gate B), or on
    stale/invalid input,
    schedule `tx_interval_survival` and return to sleep without GNSS, archive,
    probe, or live telemetry.

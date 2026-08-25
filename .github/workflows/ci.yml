@@ -194,14 +194,16 @@ jobs:
       - name: EXPECT_UNFIXED gates limited to the documented set
         run: |
           # The characterization target may only contain the documented
-          # LT-06 (#248) and PWR-02 (#297) gates; any new EXPECT_UNFIXED
-          # gate redirects the release to red. (Template readers are
-          # vacuous; only these gates set the env and mask failures.)
+          # LT-06 (#248) gate; PWR-02 (#297) was resolved 2026-08-24 by
+          # PWR-SIMPLIFY excision and the pwr suite is now a hard `check`
+          # gate. Any new EXPECT_UNFIXED gate redirects the release to red.
+          # (Template readers are vacuous; only these gates set the env
+          # and mask failures.)
           chars=$(sed -n 's/^characterization: //p' tests/host/Makefile)
           # geo-gate is a member of the documented set but must be EXPECT_UNFIXED-free
-          # (its reader retired with GEO-04/0c31029); lt0813/pwr are the only
-          # sanctioned env gates.
-          if [ "$chars" != "lt0813-gate geo-gate pwr-gate" ]; then
+          # (its reader retired with GEO-04/0c31029); lt0813 is the only
+          # sanctioned env gate.
+          if [ "$chars" != "lt0813-gate geo-gate" ]; then
             echo "FATAL: characterization gates drifted: [$chars]"; exit 1
           fi
           bad=$(awk '/^geo-gate:/{f=1} /^[a-z][^ :]*:/ && !/^geo-gate:/{f=0} f && /EXPECT_UNFIXED/{print}' tests/host/Makefile)

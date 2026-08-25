@@ -195,7 +195,13 @@ typedef struct __attribute__((packed)) {
 #define BULK_V6_RECORD_WIRE 38              // seq u32 LE + 34B record
 #define BULK_V6_MAX_RECORDS 5               // 6 + 38*5 = 196 <= 198 (v2 parity)
 
-/* Note: OperatingMode_t and VoltageSlope_t are defined in lora_app.h to avoid conflicts */
+/* Note: OperatingMode_t is defined in power_model.h to avoid conflicts */
+
+/* PWR-SIMPLIFY (2026-08-24): the voltage-slope ladder is deleted, but the
+ * archive record v6 layout is UNCHANGED — voltage_slope (offset 24) becomes
+ * a reserved field. Writers put this sentinel; decoders must read -32768 as
+ * "not computed", never as a slope. */
+#define SLOPE_MV_H_NOT_COMPUTED ((int16_t)-32768)
 
 /* Exported functions --------------------------------------------------------*/
 

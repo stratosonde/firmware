@@ -57,11 +57,13 @@ extern "C" {
 #define BKP_REG_TS_WRAP RTC_BKP_DR13          /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
 #define BKP_REG_GPS_LOSS_EPOCH RTC_BKP_DR14   /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
 #define BKP_REG_LAUNCH_REF RTC_BKP_DR15       /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
-/* H-12 (#288): packed for WLE5 (the HAL driver has no DR20/DR21). */
-#define BKP_REG_SLOPE_VALID_LAST RTC_BKP_DR16 /* magic | last_slope (u16|u16) */
-#define BKP_REG_SLOPE_MV RTC_BKP_DR17         /* base_mv | cur_mv packed        */
-#define BKP_REG_SLOPE_BASE_TS RTC_BKP_DR18    /* baseline_timestamp             */
-#define BKP_REG_SLOPE_CUR_TS RTC_BKP_DR19     /* current_timestamp              */
+/* PWR-SIMPLIFY (2026-08-24): the voltage-slope ladder (and H-12/#288
+ * persistence) is deleted; DR16-DR19 are FREE. Do not reassign without
+ * mirroring the map in config.h and multiregion_context.c. */
+#define BKP_REG_FREED_DR16 RTC_BKP_DR16 /* was BKP_REG_SLOPE_VALID_LAST (slope ladder) */
+#define BKP_REG_FREED_DR17 RTC_BKP_DR17 /* was BKP_REG_SLOPE_MV                      */
+#define BKP_REG_FREED_DR18 RTC_BKP_DR18 /* was BKP_REG_SLOPE_BASE_TS                 */
+#define BKP_REG_FREED_DR19 RTC_BKP_DR19 /* was BKP_REG_SLOPE_CUR_TS                  */
 
 #ifdef __cplusplus
 }

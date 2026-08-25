@@ -37,9 +37,9 @@ write is rejected *after* erase if the length isn't 64-bit aligned, so the
 |-------|--------|--------|
 | TX intervals | `tx_interval_{normal,conservative,reduced,recovery,survival}` (ms; 5/10/15/30/60 min) | **ACTIVE** — power-model cadence inputs; ceiling `CONFIG_MAX_TX_INTERVAL_MS` = 2 h (DR-04/#240) |
 | LoRaWAN params | datarate, txpower, ADR, confirmed, class-B timeout | **RESERVED** (R12/#197) — no consumer; session radio params persist per-region in the Tier-2 bank (R11/#196) |
-| Power thresholds | `battery_low_threshold`, `battery_critical_threshold`, hysteresis | `battery_critical_threshold` is **ACTIVE** as the first-flight raw-battery admission minimum (default/effective floor 4300 mV). A legacy lower persisted value still loads but is clamped to 4300 mV at use; stricter values remain effective. Other legacy fields retain layout. |
+| Power thresholds | `battery_low_threshold`, `battery_critical_threshold`, hysteresis | `battery_critical_threshold` is **ACTIVE** as the first-flight raw-battery admission minimum (default/effective floor 3800 mV, PWR-SIMPLIFY Gate B 2026-08-24). A legacy lower persisted value still loads but is clamped to 3800 mV at use; stricter values remain effective. Other legacy fields retain layout. |
 | Bulk gate | `bulk_battery_min_mv` (default 5000), `max_bulk_packets` (20), `bulk_timeout_ms` (60 s) | **ACTIVE** (§6b) |
-| GPS admission | `gps_temperature_lockout` | **ACTIVE** as the first-flight minimum temperature (default −55 °C); it is an admission threshold, not a GNSS runtime lockout |
+| GPS admission | `gps_temperature_lockout` | **ACTIVE** as the first-flight minimum temperature (default −60 °C, PWR-SIMPLIFY Gate A 2026-08-24); it is an admission threshold, not a GNSS runtime lockout |
 | GPS | `gps_timeout_{normal,conservative}`, `gps_min_satellites` (4), `gps_max_hdop_x10` (25), `gps_standby_power_ua` (15) | Active/quality knobs — see #286 (def-val entry points must agree) and #284 (acceptance predicate) |
 | Adaptive TX | `link_margin_threshold` (15 dB), `gateway_count_threshold` (2) | SF7 elevation gates |
 | Counters | `frame_counter_save_interval` (default 10) | **ACTIVE** (`CfgFrameCounterSaveInterval`) — H-02: the restore margin must follow the configured value, so `Config_Init` runs **before** `MX_LoRaWAN_Init` (#273) |

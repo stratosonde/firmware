@@ -183,6 +183,8 @@ uint16_t ConfigGetFirstFlightBatteryMinMv(void) {
   const SystemConfig_t *c = Config_Get();
   uint16_t configured = (c != NULL) ? c->battery_critical_threshold
                                     : CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV;
+  /* PWR-SIMPLIFY Gate B: the persisted threshold can only be stricter than
+   * the 3800 mV bench-derived floor, never weaker. */
   return (configured < CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV)
              ? CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV
              : configured;
@@ -318,7 +320,11 @@ ConfigStatus_t Config_LoadDefaults(void) {
   g_config.battery_low_threshold = 4500; // 4.5V low threshold
   g_config.battery_critical_threshold = CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV;
   g_config.bulk_battery_min_mv = 5000;    // 5.0V for bulk transfer
-  g_config.gps_temperature_lockout = -55; // -55°C first-flight admission minimum
+  /* PWR-SIMPLIFY Gate A (2026-08-24): -60°C. Corrected bench CSV (the -55/-60
+   * GNSS-loaded readings were swapped) shows the knee between -60 (passes,
+   * +0.14 V loaded margin, full charge) and -65 (fails). Revisit after the
+   * low-SoC sag re-measurement. */
+  g_config.gps_temperature_lockout = -60; // -60°C first-flight admission minimum
   g_config.power_mode_hysteresis = 10;    // 10% hysteresis
   /* F19 FIX: solar_charging_threshold default removed (field deleted -
    * 6000 mV could never trip on the ~1.1 V two-wafer panel; zero consumers) */

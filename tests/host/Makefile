@@ -102,7 +102,10 @@ DR_SRCS := test_dr_20260812.c ../../Core/Src/power_model.c ../../Core/Src/transm
 GEO_SRCS := test_geo_20260814.c
 GEO_INCLUDES := $(INCLUDES) -I../../Middlewares/Third_Party/h3lite/include
 
-PWR_SRCS := test_pwr_20260814.c ../../Core/Src/power_model.c
+#PWR-SIMPLIFY (2026-08-24): Gate A (temperature) / Gate B (3800 mV floor)
+#behavioural against the real first_flight_policy.c. PWR-02 (#297) resolved
+#by excision - the pwr suite is now a HARD gate in `check`, not characterization.
+PWR_SRCS := test_pwr_20260814.c ../../Core/Src/first_flight_policy.c
 FIRST_FLIGHT_SRCS := test_first_flight_policy.c ../../Core/Src/first_flight_policy.c
 
 #Refactor stage 1 : module contract for the extracted PacketQueue ADT
@@ -318,16 +321,16 @@ review0812: $(BUILD_DIR)/test_review0812$(EXE)
 	./$(BUILD_DIR)/test_review0812$(EXE)
 
 # 2026-08-14 review (PWR-02 bench-gated; GEO-01 dataset + GEO-04 guards both
-# landed): pwr runs red until the Nichicon characterization lands and uses
-# the EXPECT_UNFIXED pre-fix gate; geo is fully green since h3lite 0c31029.
+# landed): PWR-SIMPLIFY (2026-08-24) made pwr a HARD gate (PWR-02 resolved by
+# excision); geo is fully green since h3lite 0c31029.
 pwr: $(BUILD_DIR)/test_pwr$(EXE)
 	./$(BUILD_DIR)/test_pwr$(EXE)
 
 geo: $(BUILD_DIR)/test_geo$(EXE)
 	./$(BUILD_DIR)/test_geo$(EXE)
 
-pwr-gate: $(BUILD_DIR)/test_pwr$(EXE)
-	EXPECT_UNFIXED=1 ./$(BUILD_DIR)/test_pwr$(EXE)
+# PWR-SIMPLIFY (2026-08-24): pwr-gate removed - no EXPECT_UNFIXED masking
+# remains for the pwr suite (hard gate in `check` above).
 
 # geo-gate: EXPECT_UNFIXED retired 2026-08-16 with the GEO-04 landing
 # (h3lite 0c31029) - the suite is a plain hard gate now.
@@ -489,10 +492,10 @@ sanitize: $(SAN_EXES)
 #                  build/artifact legs arrive with the Phase-6 CI restructure
 # all              check + characterization (the CI gate, STAB-09/#156)
 # ---------------------------------------------------------------------------
-check: test flight findings burst stability multiregion multiregion-subset timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters ddrmanifest arminventory wire
+check: test flight findings burst stability multiregion multiregion-subset timerif review0812 deep config dr sp0813 first-flight pq nvm region gnssacq txshadow txadapter gnssfix gpsloss arming appadapters pwr ddrmanifest arminventory wire
 
-characterization: lt0813-gate geo-gate pwr-gate
-	@echo "characterization: 5 documented open failures awaited - LT-06 x2 (#248), PWR-02 x3 (#297)"
+characterization: lt0813-gate geo-gate
+	@echo "characterization: 2 documented open failures awaited - LT-06 x2 (#248); PWR-02 x3 (#297) resolved by PWR-SIMPLIFY excision (2026-08-24)"
 
 integration: test flight multiregion multiregion-subset timerif config txadapter gnssfix gpsloss
 

@@ -1,43 +1,29 @@
-/* ARCHIVE — regression record for the 2026-08-14 PWR review. Module contracts
- * live in test_<module>.c (see R2_TEST_MAP.md). Do not extend; extend the
- * contract suite for the owning module instead. (Refactor stage 7.) */
+/* ARCHIVE — PWR admission-gate suite (PWR-SIMPLIFY 2026-08-24). Module
+ * contracts live in test_<module>.c (see R2_TEST_MAP.md). (Refactor stage 7.) */
 
 /**
   ******************************************************************************
   * @file    test_pwr_20260814.c
-  * @brief   Red-first regressions for the 2026-08-14 review PWR series
-  *          (docs/temp/stratosonde-review-20260814.md).
-  ******************************************************************************
-  *   PWR-02 (P0): SelectModeFromPredictions opens with a temperature-blind
-  *     raw floor (4300 mV). Per the firmware's OWN comp_table, the implied
-  *     terminal voltage of a FULLY CHARGED pack crosses 4300 mV at -62.33 C;
-  *     below that a full battery selects SURVIVAL unconditionally (GNSS off,
-  *     60 min cadence, feeding the 24 h GPS-loss silence), and the STAB-03
-  *     carve-out declines to force GNSS back on in SURVIVAL - an
-  *     unrecoverable-while-cold mission-ender with a healthy pack. The fix is
-  *     bench-gated: characterize the actual Nichicon flight pack, derive a
-  *     temperature-scheduled floor(T) from that dataset (#261, #248). The
-  *     checks below pin the desired post-fix shape and the R10 (#37) guard
-  *     against over-correction; they are EXPECT_UNFIXED until the bench
-  *     campaign lands.
+  * @brief   Power admission gates. Gate A = temperature (-60 C default),
+  *          Gate B = raw-battery floor (3800 mV). PWR-02 (#297) RESOLVED: the
+  *          temperature-blind 4300 mV ladder floor is gone with the ladder;
+  *          behavioural checks exercise FirstFlightPolicy_Decide directly,
+  *          structural scans verify the shipped defaults and the empty seam.
   *
-  *   PWR-01 (P1): compensation-table non-monotonicity (-40=700 -> -50=450 ->
-  *     -55=430 -> -56=660). ALREADY red-gated as the LT-06 pair in
-  *     test_lt_20260813.c; tracked as #248. Not duplicated here.
+  *   PWR-01 (P1): compensation-table non-monotonicity remains red-gated as
+  *     the LT-06 pair in test_lt_20260813.c (#248). Not duplicated here.
   *
   *   Run:
-  *   make -C tests/host pwr          (red until the bench-gated fix lands)
-  *   EXPECT_UNFIXED=1 ./test_pwr     (green pre-fix gate; CI shape via pwr-gate)
-  ******************************************************************************
-  */
-
+  *   make -C tests/host pwr
+  ******************************************************************************  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "power_model.h"
+#include "first_flight_policy.h"
+#include <math.h>
 
 static int g_failures = 0;
 static int g_checks = 0;
@@ -60,8 +46,8 @@ static int g_expected_failures = 0;
     } \
 } while (0)
 
-/* Source-scan helpers (same shape as test_lt_20260813.c) */
-/* Phase 3 (#263): the ASan gate runs the scan suites too. Scan buffers live
+/* Source-scan helpers (same shape as test_lt_20260813.c)
+ * Phase 3 (#263): the ASan gate runs the scan suites too. Scan buffers live
  * until process exit, so pool them and free once via atexit instead of
  * hand-freeing (or leaking) on individual return paths. */
 #define SCAN_POOL_MAX 48
@@ -125,212 +111,110 @@ static char *strip_comments(const char *src)
     return out;
 }
 
-/* True when token appears in the function whose DEFINITION matches sig,
- * bounded by the next function's name (prototype-vs-definition lesson from
- * the FR wave). */
-static bool in_function(const char *src, const char *sig, const char *next_fn,
-                        const char *token)
-{
-    const char *def = strstr(src, sig);
-    if (!def) { printf("FATAL: anchor not found: %s\n", sig); exit(2); }
-    const char *end = strstr(def, next_fn);
-    if (!end) { printf("FATAL: bound not found: %s\n", next_fn); exit(2); }
-    size_t len = (size_t)(end - def);
-    char *body = (char *)malloc(len + 1);
-    memcpy(body, def, len);
-    body[len] = '\0';
-    bool found = strstr(body, token) != NULL;
-    free(body);
-    return found;
-}
-
-#define PWR_MODEL_SIG  "OperatingMode_t SelectModeFromPredictions(int16_t current_slope"
-#define PWR_MODEL_NEXT "GetModeName"
-
-
 /* ========================================================================== */
-/* PWR-02 - BEHAVIOURAL: a fully charged pack must not select SURVIVAL just    */
-/* because it is cold                                                          */
+/* GATE-A (temperature): -60 C default in config, -60 NULL fallback in the     */
+/* application, reject below the threshold or on a stale/invalid sample.       */
 /* ========================================================================== */
-
-static void test_pwr02_cold_full_not_survival(void)
+static void test_gate_a_temperature(void)
 {
-    printf("PWR-02: full pack at deep cold must not select SURVIVAL\n");
+    printf("-- GATE-A: temperature admission (default -60 C)\n");
 
-    /* Implied FULL-pack terminal voltages, per power_model.c's own comp_table
-     * (each row: Vmax_full = 5500 - compensation_mv). These constants describe
-     * the OLD pack; when the Nichicon bench dataset lands, re-derive them from
-     * that data (PWR-02 tracker issue). */
-    static const struct { float temp_c; uint16_t raw_full_mv; } rows[] = {
-        { -61.0f, 4550U },
-        { -62.0f, 4400U },
-        { -62.5f, 4250U },
-        { -63.0f, 4100U },
-        { -64.0f, 3810U },
-        { -65.0f, 3330U },
-    };
+    /* Behavioural (policy runs on first_flight_policy.c): */
+    const FirstFlightPolicyConfig_t policy = { -60, 3800 };
+    const FirstFlightAdmissionInput_t warm = { -59.9f, true, 5000, true };
+    const FirstFlightAdmissionInput_t edge = { -60.0f, true, 5000, true };
+    const FirstFlightAdmissionInput_t cold = { -60.1f, true, 5000, true };
+    const FirstFlightAdmissionInput_t stale = { -20.0f, false, 5000, true };
+    const FirstFlightAdmissionInput_t nan_t = { NAN, true, 5000, true };
+    CHECK(FirstFlightPolicy_Decide(&policy, &warm) == FIRST_FLIGHT_RUN_FULL);
+    CHECK(FirstFlightPolicy_Decide(&policy, &edge) == FIRST_FLIGHT_RUN_FULL);
+    CHECK(FirstFlightPolicy_Decide(&policy, &cold) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+    CHECK(FirstFlightPolicy_Decide(&policy, &stale) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+    CHECK(FirstFlightPolicy_Decide(&policy, &nan_t) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
 
-    int survival_count = 0;
-    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
-        /* Flat slope, normalized 5500 mV, no predicted depletion: nothing but
-         * the raw floor can justify SURVIVAL for a full pack. */
-        OperatingMode_t m = SelectModeFromPredictions(
-            0, 5500U, 0xFFFFU, rows[i].raw_full_mv);
-        printf("  full pack @ %5.1f C (%u mV raw) -> %s\n",
-               (double)rows[i].temp_c, rows[i].raw_full_mv, GetModeName(m));
-        if (m == MODE_SURVIVAL) survival_count++;
-    }
-
-    /* Rows above the -62.33 C crossover pass today (ungated - also pins that
-     * the floor is not absurdly LOW at shallower cold). */
-    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 4550U) != MODE_SURVIVAL);
-    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 4400U) != MODE_SURVIVAL);
-
-    /* The finding itself: below -62.3 C every full-pack row latches SURVIVAL
-     * with the fixed 4300 mV floor. Green only with a temperature-scheduled
-     * floor(T) derived from the flight pack's bench data. */
-    CHECK_REGRESSION(survival_count == 0, "PWR-02-cold-full-not-survival");
+    /* Structural: the shipped default and the NULL-config fallback agree. */
+    char *config = strip_comments(slurp("../../Core/Src/config.c"));
+    CHECK(strstr(config, "g_config.gps_temperature_lockout = -60") != NULL);
+    char *app = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
+    CHECK(strstr(app, "gps_temperature_lockout : -60") != NULL);
 }
 
 /* ========================================================================== */
-/* PWR-02 - GUARD (ungated): a genuinely depleted pack must STILL select       */
-/* SURVIVAL. The fix must not be a blanket floor reduction - that resurrects   */
-/* the R10 (#37) brownout-masking bug. 2000 mV is below any plausible          */
-/* discharge-cutoff floor(T) for an operating pack.                            */
+/* GATE-B (raw battery floor): 3800 mV, accessor clamps persisted values UP    */
+/* (never weaker), rejected ADC sample (0) rejects.                            */
 /* ========================================================================== */
-
-static void test_pwr02_survival_still_catches_brownout(void)
+static void test_gate_b_voltage_floor(void)
 {
-    printf("PWR-02 guard: genuinely depleted pack still selects SURVIVAL\n");
-    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 2000U) == MODE_SURVIVAL);
+    printf("-- GATE-B: raw battery admission (3800 mV floor)\n");
+
+    const FirstFlightPolicyConfig_t policy = { -60, 3800 };
+    const FirstFlightAdmissionInput_t above = { 25.0f, true, 3801, true };
+    const FirstFlightAdmissionInput_t edge = { 25.0f, true, 3800, true };
+    const FirstFlightAdmissionInput_t below = { 25.0f, true, 3799, true };
+    const FirstFlightAdmissionInput_t stale = { 25.0f, true, 5000, false };
+    const FirstFlightAdmissionInput_t zero = { 25.0f, true, 0, true };
+    CHECK(FirstFlightPolicy_Decide(&policy, &above) == FIRST_FLIGHT_RUN_FULL);
+    CHECK(FirstFlightPolicy_Decide(&policy, &edge) == FIRST_FLIGHT_RUN_FULL);
+    CHECK(FirstFlightPolicy_Decide(&policy, &below) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+    CHECK(FirstFlightPolicy_Decide(&policy, &stale) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+    CHECK(FirstFlightPolicy_Decide(&policy, &zero) == FIRST_FLIGHT_RETRY_LOW_ENERGY);
+
+    /* Structural: the floor macro is 3800, and the persisted threshold can
+     * only be stricter (clamped up in ConfigGetFirstFlightBatteryMinMv). */
+    char *ch = slurp("../../Core/Inc/config.h");
+    CHECK(strstr(ch, "#define CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV 3800U") != NULL);
+    char *cc = strip_comments(slurp("../../Core/Src/config.c"));
+    CHECK(strstr(cc, "configured < CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV") != NULL);
 }
 
 /* ========================================================================== */
-/* PWR-02 - STRUCTURAL: the raw floor must become temperature-scheduled, not   */
-/* remain a bare constant. Red until the bench-derived floor(T) lands (the     */
-/* signature is expected to gain a temperature parameter).                     */
+/* EXCISE: no mode ladder remains in the decide seam or the plan. The archive  */
+/* record's reserved slope slot carries the named sentinel, not a zero.        */
 /* ========================================================================== */
-
-static void test_pwr02_floor_temp_scheduled(const char *pm)
+static void test_ladder_excision(void)
 {
-    printf("PWR-02: structural - floor must be temperature-scheduled\n");
-    CHECK_REGRESSION(
-        !in_function(pm, PWR_MODEL_SIG, PWR_MODEL_NEXT, "< 4300"),
-        "PWR-02-floor-fixed-constant");
-    CHECK_REGRESSION(
-        in_function(pm, PWR_MODEL_SIG, PWR_MODEL_NEXT, "temp"),
-        "PWR-02-floor-references-temp");
-}
+    printf("-- EXCISE: mode ladder, slope tracking, hysteresis gone\n");
 
-/* ========================================================================== */
-/* BEH-06 (#297) — versioned PowerProfile: structure, consumption, fallback    */
-/* ========================================================================== */
-/* Separate policy from characterized data BEFORE the cold bench campaign: one
- * immutable, versioned profile carries the temperature knots, thresholds and
- * hysteresis; the decision code consumes it; the current unmeasured values
- * live in the explicitly named UNQUALIFIED_LEGACY profile. These tests pin
- * the structure. They are written against the new API, so this suite does not
- * even BUILD until the fix commit lands (red-by-construction). */
-static void test_beh06_power_profile(const char *pm, const char *tp)
-{
-    printf("BEH-06 (#297): versioned PowerProfile structure\n");
+    char *ph = slurp("../../Core/Inc/power_model.h");
+    CHECK(strstr(ph, "NormalizeBatteryVoltage") != NULL); /* SoC helper remains */
+    CHECK(strstr(ph, "CalculateVoltageSlope") == NULL);
+    CHECK(strstr(ph, "PredictTimeToLowerThreshold") == NULL);
+    CHECK(strstr(ph, "SelectModeFromPredictions") == NULL);
 
-    const PowerProfile_t *legacy = PowerProfile_Legacy();
-    CHECK(legacy != NULL);
-    CHECK(legacy->profile_id == POWER_PROFILE_UNQUALIFIED_LEGACY_ID);
-    CHECK(legacy->schema_version == POWER_PROFILE_SCHEMA_VERSION);
-    CHECK(PowerProfile_Validate(legacy));
-    CHECK(legacy->raw_floor_mv == 4300U);   /* preserved, named, unqualified */
-    CHECK(legacy->upgrade_confirm == 3U);
+    char *tp = slurp("../../Core/Inc/transmit_plan.h");
+    CHECK(strstr(tp, "DecideTransmitPlan") != NULL);
+    CHECK(strstr(tp, "VoltageSlope_t") == NULL);
+    char *tc = strip_comments(slurp("../../Core/Src/transmit_plan.c"));
+    CHECK(strstr(tc, "SelectModeFromPredictions") == NULL);
+    CHECK(strstr(tc, "CalculateVoltageSlope") == NULL);
+    CHECK(strstr(tc, "tx_interval_normal") != NULL); /* the fixed cadence source */
 
-    /* value preservation: the legacy profile reproduces the current table
-     * exactly (knot + midpoint samples) */
-    CHECK(PowerModel_Normalize(legacy, 4000U, 30.0f) == 4000U);   /* above top knot */
-    CHECK(PowerModel_Normalize(legacy, 4000U, 25.0f) == 4000U);
-    CHECK(PowerModel_Normalize(legacy, 4000U, -55.0f) == 4430U);  /* knot */
-    CHECK(PowerModel_Normalize(legacy, 4000U, -45.0f) == 4575U);  /* midpoint -50/-40 */
-    CHECK(PowerModel_Normalize(legacy, 4000U, -70.0f) == 6700U);  /* below bottom knot: max */
+    char *app = strip_comments(slurp("../../LoRaWAN/App/lora_app.c"));
+    CHECK(strstr(app, "VoltageSlope_t") == NULL);
+    CHECK(strstr(app, "SlopePersistToBackup") == NULL);
+    /* Sentinel-not-zero: reserved slope slot writes the named invalid value. */
+    CHECK(strstr(app, "SLOPE_MV_H_NOT_COMPUTED") != NULL);
 
-    /* monotonic interpolation inside a knot pair (0 -> -10: 200 -> 350 mV) */
-    {
-        uint16_t prev = 0;
-        for (int t = 0; t >= -10; t--) {
-            uint16_t v = PowerModel_Normalize(legacy, 4000U, (float)t);
-            CHECK(v >= prev);
-            prev = v;
-        }
-    }
-
-    /* the decision consumes the profile floor (both transition directions) */
-    CHECK(PowerModel_SelectMode(legacy, 0, 5500U, 0xFFFFU, 4400U) != MODE_SURVIVAL);
-    CHECK(PowerModel_SelectMode(legacy, 0, 5500U, 0xFFFFU, 4200U) == MODE_SURVIVAL);
-
-    /* a custom profile moves the floor - proving consumption, not embedding */
-    static const PowerProfileTempKnot_t warm_knots[] = { {25, 0}, {-40, 300} };
-    const PowerProfile_t custom = {
-        POWER_PROFILE_UNQUALIFIED_LEGACY_ID + 1U, POWER_PROFILE_SCHEMA_VERSION,
-        2U, warm_knots,
-        3000U, -30, -15, -5, 20, 6U, 12U, 3U
-    };
-    CHECK(PowerProfile_Validate(&custom));
-    CHECK(PowerModel_SelectMode(&custom, 0, 5500U, 0xFFFFU, 3500U) != MODE_SURVIVAL);
-    CHECK(PowerModel_Normalize(&custom, 4000U, -40.0f) == 4300U);
-
-    /* corrupt/missing profile fallback selects the legacy profile */
-    CHECK(PowerProfile_Select(NULL) == legacy);
-    CHECK(PowerProfile_Select(&custom) == &custom);
-    {
-        PowerProfile_t bad = custom;
-        bad.schema_version = 999U;
-        CHECK(!PowerProfile_Validate(&bad));
-        CHECK(PowerProfile_Select(&bad) == legacy);
-        bad = custom;
-        bad.knots = NULL;
-        CHECK(PowerProfile_Select(&bad) == legacy);
-        PowerProfile_t bad2 = custom;
-        bad2.knot_count = 0U;
-        CHECK(PowerProfile_Select(&bad2) == legacy);
-    }
-
-    /* selection drives the active profile the decision path consumes */
-    PowerProfile_SetActive(&custom);
-    CHECK(PowerProfile_Active() == &custom);
-    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 3500U) != MODE_SURVIVAL);
-    PowerProfile_SetActive(NULL);   /* missing -> legacy fallback */
-    CHECK(PowerProfile_Active() == legacy);
-    CHECK(SelectModeFromPredictions(0, 5500U, 0xFFFFU, 3500U) == MODE_SURVIVAL);
-
-    /* scan pins: the decision function carries no bare floor literal, and the
-     * hysteresis count is profile data consumed by transmit_plan */
-    CHECK(strstr(pm, "PowerProfile") != NULL);
-    CHECK(strstr(tp, "upgrade_confirm") != NULL);
-    CHECK(strstr(tp, "F8_UPGRADE_CONFIRM") == NULL);
+    /* Wire layout unchanged: the archive record's voltage_slope field stays
+     * at offset 24 (sentinel semantics documented in the schema). */
+    char *schema = slurp("../../wire/wire_schema.json");
+    CHECK(strstr(schema, "\"voltage_slope\"") != NULL);
+    CHECK(strstr(schema, "-32768") != NULL);
 }
 
 int main(void)
 {
-    char *pm = strip_comments(slurp("../../Core/Src/power_model.c"));
-    char *tp = strip_comments(slurp("../../Core/Src/transmit_plan.c"));
+    printf("=== Power admission gates (PWR-SIMPLIFY 2026-08-24) ===\n\n");
 
-    printf("=== PWR-series review regressions (2026-08-14) ===\n\n");
-
-    test_pwr02_cold_full_not_survival();
+    test_gate_a_temperature();
     printf("\n");
-    test_pwr02_survival_still_catches_brownout();
+    test_gate_b_voltage_floor();
     printf("\n");
-    test_pwr02_floor_temp_scheduled(pm);
-    printf("\n");
-    test_beh06_power_profile(pm, tp);
-    printf("\n");
+    test_ladder_excision();
 
     /* pooled scan buffers: freed at exit (scan_pool_track) */
 
     printf("\n%d checks, %d failures (%d expected pre-fix)\n",
            g_checks, g_failures, g_expected_failures);
-
-    if (getenv("EXPECT_UNFIXED") && g_failures == g_expected_failures) {
-        printf("BASELINE OK (all failures are known-unfixed findings)\n");
-        return 0;
-    }
     return g_failures ? 1 : 0;
 }

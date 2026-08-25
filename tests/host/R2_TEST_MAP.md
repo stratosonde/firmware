@@ -55,7 +55,9 @@ what each pure module promises.
 Red-by-design gates (owner-gated, EXPECT_UNFIXED=1): LT-06 ×2
 (`test_lt_20260813.c`), GEO-04 ×2 (`test_geo_20260814.c` — GEO-01's dataset
 landed 2026-08-15 @ `9fdcccc` and is now a hard gate with Pyongyang/Sanaa
-resolve probes), PWR-02 ×3 (`test_pwr_20260814.c`).
+resolve probes). PWR-02 ×3 (`test_pwr_20260814.c`) was RESOLVED 2026-08-24
+by PWR-SIMPLIFY excision: the pwr suite is now a hard `check` gate testing
+the two admission gates directly (Gate A −60 °C, Gate B 3800 mV).
 
 ---
 
@@ -67,9 +69,9 @@ resolve probes), PWR-02 ×3 (`test_pwr_20260814.c`).
 | #106 R2-02 watermark over-advance | test_flightreadiness.c `test_r2_02_watermark_overadvance_on_wrap` | Wrapped ring + stale watermark + the exact lora_app.c caller composition -> watermark lands past untransmitted records |
 | #107 R2-03 sequence identity | test_flightreadiness.c `test_r2_03_sequence_identity_crosscheck` | CRC-valid wrong-sequence record is packed instead of skipped |
 | #118 R2-14 TS_WRAP false latch | test_flightreadiness.c `test_r2_14_ts_wrap_false_latch` | Undisciplined->disciplined clock jump latches wrap bit |
-| #114 R2-10 slope on normalized V | test_main.c `test_r2_10_slope_temperature_contamination` | Constant raw V, -55->-65C: slope reads +1740 mV/h, mode flips NORMAL |
-| #115 R2-11 RAM-only slope state | test_main.c `test_r2_11_no_history_default_uses_raw_voltage` | No-history + 4400 mV raw -> CONSERVATIVE with GPS on |
-| #121 R2-17 "Stable" at critical | test_main.c `test_r2_17_already_critical_never_reports_stable` | Discharging at 4400 mV -> time_to_target_h == 0 (renders Stable) |
+| #114 R2-10 slope on normalized V | test_main.c `test_r2_10_slope_temperature_contamination` | Constant raw V, -55->-65C: slope reads +1740 mV/h, mode flips NORMAL — **excised (PWR-SIMPLIFY 2026-08-24: slope computation deleted)** |
+| #115 R2-11 RAM-only slope state | test_main.c `test_r2_11_no_history_default_uses_raw_voltage` | No-history + 4400 mV raw -> CONSERVATIVE with GPS on — **excised (PWR-SIMPLIFY: slope state deleted)** |
+| #121 R2-17 "Stable" at critical | test_main.c `test_r2_17_already_critical_never_reports_stable` | Discharging at 4400 mV -> time_to_target_h == 0 (renders Stable) — **excised (PWR-SIMPLIFY: prediction deleted)** |
 | #130 R2-30 RMC valid latch | test_main.c `test_r2_30_rmc_valid_clears_on_void` | A then V leaves valid set |
 | #123 R2-19 DMA overrun blind spot | test_main.c `test_r2_19_dma_overrun_blind_spot` | produced==512, consumed==0 -> overrun not counted |
 

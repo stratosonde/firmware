@@ -808,12 +808,11 @@ static uint16_t EncodeGNSSDetailPacket(uint8_t *buffer, uint16_t max_size) {
 }
 #endif /* ENABLE_GNSS_DETAIL_PACKET */
 
-/* ========== VOLTAGE-BASED PREDICTIVE POWER MANAGEMENT ========== */
-/* R49 (#46): NormalizeBatteryVoltage, CalculateVoltageSlope, PredictTimeToVoltage,
- * SelectModeFromPredictions and GetModeName moved verbatim to Core/Src/power_model.c
- * (declared in Core/Inc/power_model.h) so the pure decision logic is host-testable.
- * R47 (#44): ApplyOperatingMode + the whole decide block moved to
- * Core/Src/transmit_plan.c (DecideTransmitPlan). */
+/* ========== POWER MANAGEMENT (PWR-SIMPLIFY 2026-08-24) ========== */
+/* The predictive ladder lived here once; what remains: the two hard
+ * admission gates (first_flight_policy.c), the fixed-cadence decide half
+ * (transmit_plan.c), and SoC normalization (power_model.c). The archive
+ * record's voltage_slope field is written as SLOPE_MV_H_NOT_COMPUTED. */
 
 /* USER CODE END PrFD */
 
@@ -2173,7 +2172,7 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
                                     uint16_t battery_mv_raw) {
   const SystemConfig_t *cfg = Config_Get();
   FirstFlightPolicyConfig_t policy = {
-      (int16_t)(cfg != NULL ? cfg->gps_temperature_lockout : -55),
+      (int16_t)(cfg != NULL ? cfg->gps_temperature_lockout : -60),
       ConfigGetFirstFlightBatteryMinMv()};
   /* MAINT-01: the stale->fresh polarity mapping lives in the linked-tested
    * adapter module; this snapshot carries the RAW staleness counters. */
@@ -2215,35 +2214,9 @@ static bool FirstFlightWakeAdmitted(const sensor_t *sample,
 /* FirstFlightVoltsToMvOrZero moved verbatim to Core/Src/first_flight_policy.c
  * (refactor stage 6) as FirstFlightPolicy_VoltsToMvOrZero. */
 
-/* H-12 (#288): the function-static VoltageSlope_t in SendTxData is RAM-only,
- * so a reset erased the trend and rederived the no-history CONSERVATIVE
- * fallback. Persist the 4-word slope state (base mv/ts, cur mv/ts, last
- * slope) in DR16-21 across resets; the magic sentinel makes a stale or
- * zeroed backup slot harmless. Pure: only HAL_RTCEx_BKUPWrite/Read calls. */
-#define SLOPE_PERSIST_MAGIC 0x53504F57U /* 'SPOW' */
-
-static void SlopeRestoreFromBackup(VoltageSlope_t *slope) {
-  uint32_t vl = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_VALID_LAST);
-  if ((vl >> 16) == (SLOPE_PERSIST_MAGIC & 0xFFFFU)) { /* H-12: low 16b = last_slope */
-    uint32_t mv = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_MV);
-    slope->baseline_voltage_mv = (uint16_t)(mv >> 16);
-    slope->current_voltage_mv = (uint16_t)(mv & 0xFFFFU);
-    slope->baseline_timestamp = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_BASE_TS);
-    slope->current_timestamp = HAL_RTCEx_BKUPRead(&hrtc, BKP_REG_SLOPE_CUR_TS);
-    slope->last_slope_mv_per_hour = (int16_t)(vl & 0xFFFFU);
-  }
-}
-
-static void SlopePersistToBackup(const VoltageSlope_t *slope) {
-  uint32_t packed_mv = ((uint32_t)slope->baseline_voltage_mv << 16) |
-                       (uint32_t)slope->current_voltage_mv;
-  uint32_t packed_valid_last = ((SLOPE_PERSIST_MAGIC << 16) |
-                                ((uint32_t)slope->last_slope_mv_per_hour & 0xFFFFU));
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_MV, packed_mv);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_VALID_LAST, packed_valid_last);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_BASE_TS, slope->baseline_timestamp);
-  HAL_RTCEx_BKUPWrite(&hrtc, BKP_REG_SLOPE_CUR_TS, slope->current_timestamp);
-}
+/* PWR-SIMPLIFY (2026-08-24): voltage-slope backup-register persistence
+ * (DR16-DR19, H-12/#288) deleted with the ladder. Those registers are
+ * freed in backup_regs.h. */
 
 static void SendTxData(void) {
   /* USER CODE BEGIN SendTxData_1 */
@@ -2269,14 +2242,6 @@ static void SendTxData(void) {
   }
 
   /* ========== POWER MANAGEMENT — decide half (R47, #44) ========== */
-  static VoltageSlope_t voltage_slope = {0};
-  /* H-12 (#288): restore the persisted slope once per boot, before the first
-   * slope consult; idempotent and harmless if the backup slot is stale. */
-  static bool slope_restored = false;
-  if (!slope_restored) {
-    slope_restored = true;
-    SlopeRestoreFromBackup(&voltage_slope);
-  }
 
   // Read current sensor data for temperature
   sensor_t sensor_data = {0}; /* #35: zero-init — uninitialized members were archived as authentic */
@@ -2305,23 +2270,21 @@ static void SendTxData(void) {
   if (!FirstFlightWakeAdmitted(&sensor_data, battery_mv_raw))
     return;
 
-  /* R47: mode selection, slope/prediction, cadence and the
+  /* R47 (+PWR-SIMPLIFY): fixed cadence and the
    * RF-silence veto all live in the pure decide half (transmit_plan.c) —
    * host-testable with zero hardware. The plan records WHY, not just THAT. */
-  TransmitPlan_t plan = DecideTransmitPlan(&voltage_slope, battery_mv_raw,
-                                           temperature_c, sensor_data.temp_stale != 0,
-                                           now_timestamp,
+  TransmitPlan_t plan = DecideTransmitPlan(battery_mv_raw,
+                                           temperature_c,
+                                           sensor_data.temp_stale != 0,
                                            LmHandlerJoinStatus() == LORAMAC_HANDLER_SET,
-                                           MissionState_IsCommissioning(),
-                                           sensor_data.batt_stale);
-  /* H-12 (#288): park the freshly-consumed slope in the backup domain so a
-   * reset does not rederive the no-history CONSERVATIVE fallback. */
-  SlopePersistToBackup(&voltage_slope);
+                                           MissionState_IsCommissioning());
   /* DDR-0002 mission cadence (finding #7, 2026-08-10) — the consumer that was
    * missing: ASCENT = MISSION_ASCENT_TX_INTERVAL_MS (10 s), FLOAT =
    * MISSION_FLOAT_TX_INTERVAL_MS (5 min). Only when the battery is healthy
    * (NORMAL/CONSERVATIVE); REDUCED/RECOVERY/SURVIVAL keep their longer,
-   * power-protective intervals (never toward higher power).
+   * power-protective intervals (never toward higher power). PWR-SIMPLIFY:
+   * the mode field is pinned MODE_NORMAL, so this gate always passes; the
+   * mission-phase target still decides the cadence.
    * MISSION-01a (#142, maintainer decision): ASCENT keeps GNSS powered and
    * tracking continuously — a fresh position is always available and cycles
    * run nearly back-to-back by design (the 10 s period is measured from cycle
@@ -2374,8 +2337,6 @@ static void SendTxData(void) {
   bool gps_enabled_by_power_mgmt = plan.gps_enabled;
   uint32_t gps_timeout_ms = plan.gps_timeout_ms;
   OperatingMode_t current_mode = plan.power_mode;
-  int16_t slope_mv_per_hour = plan.voltage_slope_mv_per_hour;
-  int16_t time_to_target_signed = plan.time_to_target_h;
   uint16_t battery_mv_normalized = plan.battery_mv_normalized;
   (void)battery_mv_normalized; /* FR-19: log-only in flight */
 
@@ -2390,17 +2351,9 @@ static void SendTxData(void) {
   int temp_deci_pm = (int)(temperature_c * 10.0f);
   (void)temp_deci_pm; /* FR-19: log-only in flight */
   /* FR-16 (#97): ungated snprintf+STR pairs still executed in flight builds */
-  SONDE_LOG("\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV Slope=%+dmV/h ",
+  SONDE_LOG("\r\n=== POWER MGMT: Temp=%d.%dC Bat_raw=%dmV Bat_norm=%dmV Solar=%dmV ",
             temp_deci_pm / 10, abs(temp_deci_pm % 10),
-            battery_mv_raw, battery_mv_normalized, solar_mv, slope_mv_per_hour);
-
-  if (time_to_target_signed < 0) {
-    SONDE_LOG("Critical_in=%dh ", abs(time_to_target_signed));
-  } else if (time_to_target_signed > 0) {
-    SONDE_LOG("Full_in=%dh ", time_to_target_signed);
-  } else {
-    SONDE_LOG_STR("Stable ");
-  }
+            battery_mv_raw, battery_mv_normalized, solar_mv);
 
   MissionState_t mission = MissionState_Get();
   (void)mission; /* FR-19: log-only in flight */
@@ -2445,7 +2398,7 @@ static void SendTxData(void) {
      * (the EnterFlight call deliberately lives there, not in this file). */
     ArmingInput_Poll();
     CommissioningTelemetryCycle(&sensor_data, gps_timeout_ms,
-                                slope_mv_per_hour, current_mode);
+                                SLOPE_MV_H_NOT_COMPUTED, current_mode);
     ResetCause_ClearBootAttempts();
     return;
   }
@@ -2730,14 +2683,14 @@ static void SendTxData(void) {
     }
   }
 
-  ArchiveSample(&sensor_data, slope_mv_per_hour, current_mode,
+  ArchiveSample(&sensor_data, SLOPE_MV_H_NOT_COMPUTED, current_mode,
                 (uint8_t)plan.veto);
 
 #if ENABLE_DEBUG_LPP
-  BuildDebugLppPayload(&sensor_data, ttf_ms, slope_mv_per_hour, time_to_target_signed, current_mode);
+  BuildDebugLppPayload(&sensor_data, ttf_ms, SLOPE_MV_H_NOT_COMPUTED, SLOPE_MV_H_NOT_COMPUTED, current_mode);
 #endif
 
-  RunTxStateMachine(&sensor_data, slope_mv_per_hour, current_mode, rf_silence);
+  RunTxStateMachine(&sensor_data, SLOPE_MV_H_NOT_COMPUTED, current_mode, rf_silence);
 /* ========== LEGACY: Also send CayenneLPP for debug (during development) ========== */
 #if ENABLE_DEBUG_LPP
   static uint32_t tx_count = 0;

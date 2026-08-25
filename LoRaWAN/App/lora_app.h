@@ -32,13 +32,11 @@ extern "C" {
 #include <stdbool.h>
 #include "LoRaMacInterfaces.h"
 #include "LmHandler.h"   /* F-01 (#245): LmHandlerErrorStatus_t used in prototypes below */
-#include "power_model.h"  /* R49: OperatingMode_t + VoltageSlope_t live here now */
+#include "power_model.h"  /* R49: OperatingMode_t lives here now (PWR-SIMPLIFY: VoltageSlope_t deleted) */
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
-/* R49: VoltageSlope_t moved to power_model.h (included above) */
 
 /* USER CODE END ET */
 
@@ -169,7 +167,10 @@ extern "C" {
 /* R49: OperatingMode_t moved to power_model.h (included above) */
 
 /* Power Management - Temperature Constraints */
-#define GPS_TEMPERATURE_LOCKOUT  -55  // °C - Supercap fails below this temperature
+/* PWR-SIMPLIFY Gate A (2026-08-24): the LIVE source is config's
+ * gps_temperature_lockout (default -60 C). This macro is documentation
+ * only; no consumer remains. */
+#define GPS_TEMPERATURE_LOCKOUT  -60  // °C - pack reaches the 3.3 V GPS floor under a 30 s fix near -65 C
 
 /* Adaptive Transmission Strategy */
 typedef enum {
@@ -207,13 +208,13 @@ typedef enum {
 #endif
 
 /* S-A (#211, 2026-08-12 review): acquisition budget for the #141
- * GPS-loss-silence forced retry. The forced retry runs in modes whose
- * ApplyOperatingMode budget is 0 ms (REDUCED/RECOVERY), so it MUST carry
- * its own timeout or the retry is a power-cycle with zero acquisition
- * iterations and the silence can never clear. Deliberately shorter than
- * the 60 s NORMAL/CONSERVATIVE budget: this fires in energy-constrained
- * modes. Decision: constant, not config-authoritative (30 s covers a
- * warm start after the dark period with margin). */
+ * GPS-loss-silence forced retry. The forced retry MUST carry its own
+ * timeout or it is a power-cycle with zero acquisition iterations and the
+ * silence can never clear. Deliberately shorter than the 60 s normal
+ * budget: this fires in energy-constrained corners. Decision: constant,
+ * not config-authoritative (30 s covers a warm start after the dark
+ * period with margin). (PWR-SIMPLIFY: the ApplyOperatingMode budget map
+ * is gone; the retry-budget argument stands.) */
 #ifndef GPS_LOSS_RETRY_TIMEOUT_MS
 #define GPS_LOSS_RETRY_TIMEOUT_MS  30000U   /* 30 s */
 #endif

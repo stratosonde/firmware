@@ -1,17 +1,25 @@
 /**
  ******************************************************************************
  * @file    power_model.h
- * @brief   Voltage-based predictive power management — pure decision logic
+ * @brief   Operating-mode enum + battery temperature normalization (SoC only)
  ******************************************************************************
  * @attention
  *
- * R49 (#46): extracted from lora_app.c so the power model is host-testable
- * with zero hardware. These functions touch NO peripherals — feed them fake
- * battery/temp values and assert the outputs. This is the decide-half
- * pattern that R47 (#44) generalizes to the whole transmit cycle.
+ * PWR-SIMPLIFY (2026-08-24, docs/temp/stratosonde-power-simplification.md):
+ * the voltage-slope predictive ladder is DELETED. Safety decisions are now
+ * made by exactly two hard admission gates in first_flight_policy.c:
  *
- ******************************************************************************
- */
+ *   Gate A — fresh temperature >= configured minimum (default -60 C)
+ *   Gate B — fresh raw battery   >= CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV
+ *             (default 3800 mV)
+ *
+ * What remains here is deliberate:
+ *   - OperatingMode_t / GetModeName: the telemetry mode field's value space.
+ *     An admitted plan always reports MODE_NORMAL.
+ *   - NormalizeBatteryVoltage: 25 C-equivalent SoC for telemetry only. It is
+ *     deliberately NOT an input to any safety decision.
+ *
+ ******************************************************************************/
 
 #ifndef POWER_MODEL_H
 #define POWER_MODEL_H
@@ -32,39 +40,11 @@ typedef enum {
   MODE_SURVIVAL = 4      // 60 min retry cadence
 } OperatingMode_t;
 
-/* Simplified voltage tracking for slope calculation (2-hour window) */
-typedef struct {
-  uint16_t baseline_voltage_mv;   // Voltage at baseline (updated every 2 hours)
-  uint32_t baseline_timestamp;    // Timestamp at baseline
-  uint16_t current_voltage_mv;    // Most recent voltage reading
-  uint32_t current_timestamp;     // Most recent timestamp
-  int16_t last_slope_mv_per_hour; // FW-6: last valid slope (returned when dt < MIN_SLOPE_DT)
-  /* F8 (#172): mode-change hysteresis (RAM-only, like the slope history).
-   * One ADC sample of noise (~10 mV) over the ~600 s slope window is
-   * ~60 mV/h — larger than every mode threshold — so raw mode selection
-   * chatters. Upgrades (toward higher power) need consecutive confirmation;
-   * downgrades apply immediately. */
-  uint8_t mode_hyst_valid; // committed_mode is meaningful
-  uint8_t committed_mode;  // OperatingMode_t last handed out
-  uint8_t upgrade_streak;  // consecutive cycles proposing a higher-power mode
-  /* F-4 (#179): timestamp of the last hysteresis evaluation. The streak
-   * counts observations SEPARATED IN TIME, not calls - a bulk-burst re-arm
-   * re-runs DecideTransmitPlan up to 20x with the same now_timestamp and
-   * must not be able to confirm an upgrade within seconds. */
-  uint32_t hyst_last_ts;
-  /* S-E (#214): the upgrade target of the current streak. Without it the
-   * streak counted ANY upgrade proposal, so a mixed
-   * NORMAL->CONSERVATIVE->NORMAL sequence confirmed NORMAL on cycle 3 -
-   * a two-level jump on mixed evidence. A changed target restarts the
-   * streak. */
-  uint8_t hyst_last_proposal;
-} VoltageSlope_t;
-
-/* BEH-06 (#297): one immutable, versioned power profile. The decision code
- * consumes it; the values are DATA, reviewable in one place, and the bench
- * campaign (#248) changes a profile, not control flow. The current
- * unmeasured values live in the explicitly named UNQUALIFIED_LEGACY profile
- * until the Nichicon cold bench data replaces them. */
+/* Identity of the temperature-normalization table below. PWR-SIMPLIFY keeps
+ * both macros: the release-manifest evidence and the CI identity gate read
+ * them, and the table itself remains (SoC telemetry only). The predictive
+ * PowerProfile_t apparatus (validate/select/active, slope fields) is deleted
+ * with the ladder. */
 #define POWER_PROFILE_SCHEMA_VERSION 1U
 #define POWER_PROFILE_UNQUALIFIED_LEGACY_ID 0x554C4547U /* "ULEG" */
 
@@ -73,63 +53,8 @@ typedef struct {
   int16_t compensation_mv;
 } PowerProfileTempKnot_t;
 
-typedef struct {
-  uint32_t profile_id;     /* identity (release-manifest input) */
-  uint16_t schema_version; /* POWER_PROFILE_SCHEMA_VERSION */
-  uint16_t knot_count;
-  const PowerProfileTempKnot_t *knots;
-  uint16_t raw_floor_mv;        /* LTO-critical raw floor (SURVIVAL gate) */
-  int16_t slope_emergency_mv_h; /* < this AND hours_emergency -> SURVIVAL */
-  int16_t slope_warning_mv_h;   /* < this AND hours_warning -> RECOVERY */
-  int16_t slope_caution_mv_h;   /* < this -> REDUCED */
-  int16_t slope_charging_mv_h;  /* > this -> NORMAL */
-  uint16_t hours_emergency;     /* time-to-critical gates */
-  uint16_t hours_warning;
-  uint8_t upgrade_confirm; /* F8 hysteresis: consecutive upgrade confirms */
-} PowerProfile_t;
-
-/** The UNQUALIFIED_LEGACY singleton: today's unmeasured values, named. */
-const PowerProfile_t *PowerProfile_Legacy(void);
-/** Validation: schema version, knot table shape/order, plausible fields. */
-bool PowerProfile_Validate(const PowerProfile_t *profile);
-/** Corrupt/missing profile fallback: an invalid candidate yields the
- *  UNQUALIFIED_LEGACY profile (the conservative current behavior). */
-const PowerProfile_t *PowerProfile_Select(const PowerProfile_t *candidate);
-/** The active profile the decision path consumes; legacy until a validated
- *  profile is installed. SetActive(NULL or invalid) falls back to legacy. */
-const PowerProfile_t *PowerProfile_Active(void);
-void PowerProfile_SetActive(const PowerProfile_t *candidate);
-
-uint16_t PowerModel_Normalize(const PowerProfile_t *profile,
-                              uint16_t measured_mv, float temp_c);
-OperatingMode_t PowerModel_SelectMode(const PowerProfile_t *profile,
-                                      int16_t current_slope,
-                                      uint16_t current_voltage,
-                                      uint16_t time_to_critical,
-                                      uint16_t raw_voltage_mv);
-
+/** 25 C-equivalent battery voltage for SoC telemetry. NOT a safety input. */
 uint16_t NormalizeBatteryVoltage(uint16_t measured_mv, float temp_c);
-int16_t CalculateVoltageSlope(VoltageSlope_t *slope, uint16_t battery_mv, uint32_t now_timestamp);
-/* STAB-08 (#155): direction-aware threshold prediction. The old
- * PredictTimeToVoltage had logically dead boundary tests and folded
- * "already past" into the same 0xFFFF as "stable/never". These return an
- * explicit state; hours are meaningful only for PRED_REACHABLE. */
-typedef enum {
-  PRED_AT_OR_PAST,  /* current already at/beyond the threshold */
-  PRED_STABLE,      /* slope == 0: never reaches it */
-  PRED_MOVING_AWAY, /* slope points away from the threshold */
-  PRED_REACHABLE    /* hours_out = hours to the threshold (clamped 9999) */
-} PredictionState_t;
-
-PredictionState_t PredictTimeToLowerThreshold(uint16_t current_voltage_mv,
-                                              int16_t slope_mv_per_hour,
-                                              uint16_t lower_mv,
-                                              uint16_t *hours_out);
-PredictionState_t PredictTimeToUpperThreshold(uint16_t current_voltage_mv,
-                                              int16_t slope_mv_per_hour,
-                                              uint16_t upper_mv,
-                                              uint16_t *hours_out);
-OperatingMode_t SelectModeFromPredictions(int16_t current_slope, uint16_t current_voltage, uint16_t time_to_critical, uint16_t raw_voltage_mv);
 const char *GetModeName(OperatingMode_t mode);
 
 #ifdef __cplusplus

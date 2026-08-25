@@ -69,7 +69,7 @@
         { "name": "pressure_raw", "offset": 18, "type": "u16", "scale": "x*0.1", "unit": "hPa" },
         { "name": "battery_mv", "offset": 20, "type": "u16", "unit": "mV" },
         { "name": "solar_mv", "offset": 22, "type": "u16", "unit": "mV" },
-        { "name": "voltage_slope", "offset": 24, "type": "i16", "unit": "mV/h" },
+        { "name": "voltage_slope", "offset": 24, "type": "i16", "unit": "mV/h", "sentinel": { "value": -32768, "meaning": "not computed (PWR-SIMPLIFY 2026-08-24: ladder deleted; field reserved, layout unchanged)" } },
         { "name": "satellites", "offset": 26, "type": "u8", "comment": "AUTHORITATIVE satellite count" },
         { "name": "hdop_raw", "offset": 27, "type": "u8", "scale": "x*0.1", "unit": "HDOP" },
         { "name": "power_mode", "offset": 28, "type": "u8", "comment": "AUTHORITATIVE operating mode enum" },

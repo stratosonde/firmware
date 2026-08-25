@@ -77,12 +77,16 @@ typedef struct __attribute__((packed)) {
   uint16_t size;    // Structure size for validation
   uint32_t crc32;   // CRC32 of configuration data
 
-  /* Transmission settings (16 bytes) */
-  uint32_t tx_interval_normal;       // Normal mode interval (ms) - default 300000 (5 min)
-  uint32_t tx_interval_conservative; // Conservative interval (ms) - default 600000 (10 min)
-  uint32_t tx_interval_reduced;      // Reduced interval (ms) - default 900000 (15 min)
-  uint32_t tx_interval_recovery;     // Recovery interval (ms) - default 1800000 (30 min)
-  uint32_t tx_interval_survival;     // Survival interval (ms) - default 3600000 (60 min)
+  /* Transmission settings (16 bytes). PWR-SIMPLIFY (2026-08-24): the mode
+   * ladder is deleted — tx_interval_normal is THE science cadence target,
+   * tx_interval_survival is the admission-reject retry (and deadman
+   * derivation) cadence. conservative/reduced/recovery are RESERVED for
+   * layout compatibility; nothing reads them. */
+  uint32_t tx_interval_normal;       // Science cadence target (ms) - default 300000 (5 min)
+  uint32_t tx_interval_conservative; // RESERVED (layout preserved; mode ladder deleted)
+  uint32_t tx_interval_reduced;      // RESERVED (layout preserved; mode ladder deleted)
+  uint32_t tx_interval_recovery;     // RESERVED (layout preserved; mode ladder deleted)
+  uint32_t tx_interval_survival;     // Admission-reject retry cadence (ms) - default 3600000 (60 min)
 
   /* LoRaWAN parameters (8 bytes). R12 (#197) class: RESERVED - no in-tree
    * consumer (the session's radio params persist per-region in the
@@ -97,7 +101,7 @@ typedef struct __attribute__((packed)) {
   uint16_t battery_low_threshold;      // Legacy power-model threshold (layout preserved)
   uint16_t battery_critical_threshold; // First-flight minimum raw battery admission (mV), default 4300
   uint16_t bulk_battery_min_mv;        // Min battery for bulk transfer (mV) - default 5000. R12: ACTIVE (CfgBulkBattMin)
-  int8_t gps_temperature_lockout;      // First-flight minimum admission temperature (C), default -55
+  int8_t gps_temperature_lockout;      // First-flight minimum admission temperature (C), default -60
   uint8_t power_mode_hysteresis;       // R12 (#197) RESERVED - no consumer; the live hysteresis is PowerProfile upgrade_confirm (BEH-06/#297: power_model.c, #172/#179)
   /* F19 FIX: solar_charging_threshold deleted. The 6000 mV default could
    * never trip on the real ~1.1 V two-wafer panel, and the field had zero
@@ -220,9 +224,16 @@ uint16_t ConfigGetFirstFlightBatteryMinMv(void);
  *        always-true above the 3 h floor and cannot serve as the ceiling). */
 #define CONFIG_MAX_TX_INTERVAL_MS 7200000UL
 
-/** First-flight raw battery floor. Provisioning may choose a stricter
- * threshold, but never one below the existing LTO brownout-protection floor. */
-#define CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV 4300U
+/** First-flight raw battery floor (PWR-SIMPLIFY Gate B, 2026-08-24).
+ * Provisioning may choose a stricter threshold, never a weaker one.
+ * Provenance: bench CSV for the 2S LTO pack (corrected -55/-60 swap) plus
+ * the operator's max-runtime choice. 3800 mV is a brownout-protection /
+ * GPS-admission number just above the LTO discharge cutoff (~1.8 V/cell):
+ * it does NOT guarantee a GNSS fix in the cold+low-SoC corner — a fix that
+ * browns the receiver there returns an honest no-fix record. Pending the
+ * low-SoC sag re-measurement before flight lock. See
+ * docs/temp/ddr-0016-amendment-power-simplification.md for the evidence. */
+#define CONFIG_FIRST_FLIGHT_BATTERY_FLOOR_MV 3800U
 
 /**
  * @brief Reset to factory defaults

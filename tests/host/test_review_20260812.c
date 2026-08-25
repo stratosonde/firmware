@@ -9,8 +9,7 @@
  ******************************************************************************
  * S-A and S-C are SOURCE SCANS (the invariant lives in HAL-bound lora_app.c /
  * main.c), following the R2-13 "grep-proof" precedent in R2_TEST_MAP.md.
- * S-B is BEHAVIOURAL — CalculateVoltageSlope is pure, so the backward-time
- * sign flip is provable by calling it.
+ * S-B was BEHAVIOURAL — excised (PWR-SIMPLIFY 2026-08-24: ladder deleted).
  *
  *   make -C tests/host review0812        (red until the fixes land)
  *   EXPECT_UNFIXED=1 ./test_review0812   (green pre-fix gate)
@@ -179,34 +178,8 @@ static void test_sc_uart_dma_error_recovery(const char *mainc, const char *usart
   CHECK_REGRESSION(!no_init_left || err_cb, "S-C-noinit");
 }
 
-/* ========================================================================== */
-/* S-B (P2) — CalculateVoltageSlope must not evaluate a backward time delta   */
-/* ========================================================================== */
-/* RV-06 (#162) added this guard to Deadman_Check, LaunchDetector_Update and
- * FloatDetector_Update. CalculateVoltageSlope was missed. Its state is RAM-only
- * and survives an LSE->LSI failover (no MCU reset), so baseline_timestamp
- * outlives the RTC restart. A SMALL backward step casts to a small negative
- * int32_t and (dv * 3600) / -dt sign-flips AND magnifies. */
-static void test_sb_slope_backward_time(void) {
-  printf("-- S-B (P2): backward RTC step must not invert the voltage slope\n");
-
-  VoltageSlope_t s;
-  memset(&s, 0, sizeof(s));
-  CalculateVoltageSlope(&s, 5200, 1000);
-  int16_t healthy = CalculateVoltageSlope(&s, 5170, 2000);
-  printf("   healthy slope (discharging): %+d mV/h\n", healthy);
-  CHECK_REGRESSION(healthy < 0, "S-B-setup");
-
-  /* RTC restarts: now steps backward from 2000 to 990, battery still falling. */
-  int16_t after = CalculateVoltageSlope(&s, 5160, 990);
-  printf("   after backward step to t=990: %+d mV/h (must NOT be positive)\n", after);
-  CHECK_REGRESSION(after <= 0, "S-B");
-
-  /* And the poisoned value must not be republished by the FW-6 sticky path. */
-  int16_t sticky = CalculateVoltageSlope(&s, 5159, 1000);
-  printf("   next cycle (FW-6 sticky window): %+d mV/h (must NOT be positive)\n", sticky);
-  CHECK_REGRESSION(sticky <= 0, "S-B-sticky");
-}
+/* PWR-SIMPLIFY (2026-08-24): S-B guarded the backward-time guard in
+ * CalculateVoltageSlope — deleted with the ladder. Excised. */
 
 /* ========================================================================== */
 /* SP-06 (#256) — commissioning chunk bound (flight bound stays 20 s)          */
@@ -235,7 +208,7 @@ int main(void) {
   printf("\n");
   test_sc_uart_dma_error_recovery(mainc, usart, gnss);
   printf("\n");
-  test_sb_slope_backward_time();
+  /* test_sb_slope_backward_time excised (PWR-SIMPLIFY: ladder deleted) */
 
   printf("\n%d checks, %d failures (%d expected pre-fix)\n",
          g_checks, g_failures, g_expected_failures);

@@ -323,58 +323,8 @@ static void test_f3_stale_autoswitch(const char *app) {
   CHECK_REGRESSION(switch_consults_freshness, "F-3");
 }
 
-/* ========================================================================== */
-/* F-4 (P2) — bulk bursts defeat the F8 mode hysteresis (BEHAVIOURAL)          */
-/* ========================================================================== */
-/* OnTxData re-arms SendTxData once per archive packet (up to 20), and
- * DecideTransmitPlan runs on every one of them. CalculateVoltageSlope is
- * protected by the FW-6 dt >= 600 s guard, so the slope is FROZEN across the
- * burst — the same mode is therefore proposed 20 times within a few seconds
- * and upgrade_streak reaches F8_UPGRADE_CONFIRM (3) on the third packet.
- * "Three consecutive work cycles" becomes "three seconds".
- *
- * Invariant: an upgrade must require confirmation across REAL elapsed time,
- * not merely across repeated calls.
- */
-static void test_f4_hysteresis_burst(void) {
-  printf("-- F-4 (P2): mode upgrade must not confirm on same-timestamp calls\n");
-
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-
-  /* Establish history and commit a low-power mode: seed, then a discharging
-   * sample 700 s later (dt > 600 so the slope is real and negative). */
-  (void)DecideTransmitPlan(&vs, 5200, 25.0f, false, 1000, true, false, false);
-  TransmitPlan_t p = DecideTransmitPlan(&vs, 5100, 25.0f, false, 1700, true, false, false);
-  printf("   after discharge sample: committed mode=%s\n", GetModeName(p.power_mode));
-
-  /* Now replay a bulk burst: the SAME timestamp, over and over. The slope is
-   * frozen (dt < 600), so every call proposes whatever the frozen slope
-   * implies — an upgrade must NOT be confirmable by repetition alone. */
-  OperatingMode_t before = p.power_mode;
-  OperatingMode_t after = before;
-  for (int i = 0; i < 20; i++) {
-    TransmitPlan_t b = DecideTransmitPlan(&vs, 5400, 25.0f, false, 1700, true, false, false);
-    after = b.power_mode;
-  }
-  printf("   after 20 same-timestamp burst calls: %s -> %s (streak=%u)\n",
-         GetModeName(before), GetModeName(after), vs.upgrade_streak);
-
-  /* An upgrade is a numerically LOWER OperatingMode_t. */
-  CHECK_REGRESSION(!(after < before), "F-4a");
-
-  /* Directly: the confirmation counter must not advance without elapsed time. */
-  VoltageSlope_t vs2;
-  memset(&vs2, 0, sizeof(vs2));
-  (void)DecideTransmitPlan(&vs2, 5200, 25.0f, false, 1000, true, false, false);
-  (void)DecideTransmitPlan(&vs2, 5100, 25.0f, false, 1700, true, false, false);
-  uint8_t streak_before = vs2.upgrade_streak;
-  (void)DecideTransmitPlan(&vs2, 5400, 25.0f, false, 1700, true, false, false);
-  (void)DecideTransmitPlan(&vs2, 5400, 25.0f, false, 1700, true, false, false);
-  printf("   upgrade_streak across two zero-dt calls: %u -> %u\n",
-         streak_before, vs2.upgrade_streak);
-  CHECK_REGRESSION(vs2.upgrade_streak == streak_before, "F-4b");
-}
+/* PWR-SIMPLIFY (2026-08-24): F-4 (#179) guarded the F8 mode hysteresis in
+ * the deleted ladder. Excised with the ladder. */
 
 /* ========================================================================== */
 /* F-5 (P3) — sync_deferred latches when rf_silence interrupts a burst         */
@@ -922,58 +872,8 @@ static void test_f014_capability_flags(const char *mainsrc, const char *sysapp, 
 }
 
 /* ========================================================================== */
-/* S-E (P3) — F8 streak must count a CONSISTENT upgrade proposal (2026-08-12)  */
-/* ========================================================================== */
-/* Previously upgrade_streak advanced on ANY upgrade proposal, so a mixed
- * NORMAL->CONSERVATIVE->NORMAL sequence confirmed NORMAL on cycle 3 - a
- * two-level jump on mixed evidence. A changed target must restart the
- * streak. Behavioral: drive alternating upgrade targets and check the
- * streak state + committed mode directly.
- */
-static void test_se_streak_consistency(void) {
-  printf("-- S-E (P3): mixed upgrade proposals must not confirm\n");
-
-  VoltageSlope_t vs;
-  memset(&vs, 0, sizeof(vs));
-  /* Seed, then a 700 s discharge: slope ~-514 mV/h -> commits SURVIVAL
-   * (the FW-6 window recomputes at dt >= 600 and rebases each time). */
-  (void)DecideTransmitPlan(&vs, 5200, 25.0f, false, 1000, true, false, false);
-  TransmitPlan_t p0 = DecideTransmitPlan(&vs, 5100, 25.0f, false, 1700, true, false, false);
-  OperatingMode_t committed = p0.power_mode;
-  printf("   committed after discharge: %s\n", GetModeName(committed));
-
-  /* Two DIFFERENT upgrade targets on successive, time-separated cycles.
-   * The baseline rebases only every 7200 s, so both evaluate against the
-   * 5200@1000 seed: 5210@2400 -> slope +25 -> NORMAL; 5210@3100 -> slope
-   * +17 -> CONSERVATIVE. Both are upgrades from SURVIVAL but to DIFFERENT
-   * targets, so the streak must RESTART at 1 (pre-fix it counted 2 -
-   * mixed evidence advancing toward confirm). */
-  TransmitPlan_t p1 = DecideTransmitPlan(&vs, 5210, 25.0f, false, 2400, true, false, false);
-  TransmitPlan_t p2 = DecideTransmitPlan(&vs, 5210, 25.0f, false, 3100, true, false, false);
-  printf("   held modes: %s then %s, streak=%u (want held, streak 1)\n",
-         GetModeName(p1.power_mode), GetModeName(p2.power_mode), vs.upgrade_streak);
-
-  bool held = (p2.power_mode == committed);
-  bool streak_restarted = (vs.upgrade_streak == 1);
-  printf("   committed held: %s, streak restarted to 1: %s\n",
-         held ? "yes" : "no", streak_restarted ? "yes" : "no");
-  CHECK_REGRESSION(held && streak_restarted, "S-E");
-
-  /* A CONSISTENT target still confirms after F8_UPGRADE_CONFIRM cycles:
-   * rising voltage against the fixed seed keeps the slope > +20, so
-   * NORMAL is proposed every cycle and confirms on cycle 3. */
-  VoltageSlope_t vs2;
-  memset(&vs2, 0, sizeof(vs2));
-  (void)DecideTransmitPlan(&vs2, 5200, 25.0f, false, 1000, true, false, false);
-  TransmitPlan_t q0 = DecideTransmitPlan(&vs2, 5100, 25.0f, false, 1700, true, false, false);
-  TransmitPlan_t q = q0;
-  q = DecideTransmitPlan(&vs2, 5210, 25.0f, false, 2400, true, false, false); /* slope +25 */
-  q = DecideTransmitPlan(&vs2, 5215, 25.0f, false, 3100, true, false, false); /* slope +25 */
-  q = DecideTransmitPlan(&vs2, 5220, 25.0f, false, 3800, true, false, false); /* slope +25 */
-  printf("   consistent NORMAL x3: %s -> %s\n",
-         GetModeName(q0.power_mode), GetModeName(q.power_mode));
-  CHECK_REGRESSION(q.power_mode == MODE_NORMAL, "S-E-consistent");
-}
+/* PWR-SIMPLIFY (2026-08-24): S-E (#214) guarded the F8 streak consistency
+ * in the deleted ladder. Excised with the ladder. */
 
 /* ========================================================================== */
 /* S-D (P3) — TTF printf must dereference the pointer (2026-08-12)             */
@@ -1137,7 +1037,7 @@ int main(void) {
   printf("\n");
   test_f3_stale_autoswitch(app);
   printf("\n");
-  test_f4_hysteresis_burst();
+  /* test_f4_hysteresis_burst excised (PWR-SIMPLIFY: ladder deleted) */
   printf("\n");
   test_f5_deferred_sync_latch(app);
   printf("\n");
@@ -1180,7 +1080,7 @@ int main(void) {
   printf("\n");
   test_f014_capability_flags(mainsrc, sysapp, msp);
   printf("\n");
-  test_se_streak_consistency();
+  /* test_se_streak_consistency excised (PWR-SIMPLIFY: ladder deleted) */
   printf("\n");
   test_sd_ttf_printf(app);
   printf("\n");

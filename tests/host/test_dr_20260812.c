@@ -13,7 +13,7 @@
   *   STAB-P1#1 / DR-02 (#237): GNSS_IsFixGoodQuality does not require
   *     position_present; GNSS_HasPosition does not range-check;
   *     GeofenceRestricted fails open on invalid coordinates.
-  *   DR-03: F8 mode-hysteresis hyst_last_ts has no backward-time-step re-seed
+  *   DR-03: excised (PWR-SIMPLIFY 2026-08-24: F8 hysteresis deleted with the ladder).
   *     (the one RV-06/#162 consumer that was missed).
   *
   *   Run:
@@ -220,39 +220,8 @@ static void test_dr02_geofence_not_fail_open(void)
     free(src);
 }
 
-/* ========================================================================== */
-/* DR-03 — F8 hysteresis must re-seed on a backward time step (LSE->LSI)       */
-/* ========================================================================== */
-static void test_dr03_hysteresis_backward_step(void)
-{
-    printf("-- DR-03: LSE->LSI failover must re-seed the F8 hysteresis epoch\n");
-
-    VoltageSlope_t vs;
-    memset(&vs, 0, sizeof(vs));
-
-    /* Seed, then a 700 s discharge: slope ~-514 mV/h -> commits SURVIVAL
-     * (same setup as test_stability_review.c F-4). */
-    (void)DecideTransmitPlan(&vs, 5200, 25.0f, false, 1000, true, false, false);
-    TransmitPlan_t p0 = DecideTransmitPlan(&vs, 5100, 25.0f, false, 1700, true, false, false);
-    OperatingMode_t committed = p0.power_mode;
-    printf("   committed after discharge: %d\n", (int)committed);
-    CHECK(committed != MODE_NORMAL);           /* guard: a downgrade committed */
-
-    /* LSE->LSI failover: the RTC counter restarts near zero, voltage_slope
-     * (and hyst_last_ts) survives in RAM. Charging resumes. */
-    (void)DecideTransmitPlan(&vs, 5210, 25.0f, false, 100, true, false, false);
-    CHECK_REGRESSION(vs.hyst_last_ts == 100, "DR-03-reseed");
-
-    /* Three consistent upgrade proposals separated in time must confirm the
-     * upgrade (F8_UPGRADE_CONFIRM=3). Pre-fix the streak stays frozen until
-     * now_timestamp passes the stale pre-failover epoch. */
-    (void)DecideTransmitPlan(&vs, 5215, 25.0f, false, 800, true, false, false);
-    (void)DecideTransmitPlan(&vs, 5220, 25.0f, false, 1500, true, false, false);
-    TransmitPlan_t p = DecideTransmitPlan(&vs, 5225, 25.0f, false, 2200, true, false, false);
-    printf("   post-failover mode after 3 upgrade proposals: %d (committed was %d)\n",
-           (int)p.power_mode, (int)committed);
-    CHECK_REGRESSION(p.power_mode == MODE_NORMAL, "DR-03");
-}
+/* PWR-SIMPLIFY (2026-08-24): DR-03 guarded the F8 hysteresis re-seed in the
+ * deleted mode ladder. Excised with the ladder. */
 
 /* Count non-overlapping occurrences of needle. */
 static int count_occurrences(const char *hay, const char *needle)
@@ -401,7 +370,7 @@ int main(void)
     test_stab_p1_positionless_never_good_quality();
     test_dr02_has_position_range_checks();
     test_dr02_geofence_not_fail_open();
-    test_dr03_hysteresis_backward_step();
+    /* test_dr03_hysteresis_backward_step excised (PWR-SIMPLIFY: ladder deleted) */
     test_dr06_silence_records_why();
     test_dr17_hrtc_instance_early();
     test_stab_p3_queue_peek_before_send();
