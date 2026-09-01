@@ -206,7 +206,17 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
   record->pressure = (uint16_t)(sensors->pressure * 10.0f);      // 0.1hPa resolution
 
   // Store voltage data
-  record->battery_voltage = (uint16_t)(sensors->battery_voltage * 1000.0f); // mV
+  record->battery_voltage = (uint16_t)(sensors->battery_voltage * 1000.0f); // mV (LOADED: post-GNSS)
+  /* Dual battery (v7): the resting sample set before GNSS. NaN/out-of-range
+   * clamps to 0 (mirrors battery_mv). */
+  {
+    float rest_mv_f = sensors->battery_rest_voltage * 1000.0f;
+    if (!(rest_mv_f > 0.0f))
+      rest_mv_f = 0.0f;
+    if (rest_mv_f > 65535.0f)
+      rest_mv_f = 65535.0f;
+    record->battery_rest_mv = (uint16_t)(rest_mv_f + 0.5f);
+  }
   record->solar_voltage = (uint16_t)(sensors->solar_voltage * 1000.0f);     // mV
   record->voltage_slope = voltage_slope;                                    // Already in mV/hour
 
@@ -224,13 +234,18 @@ bool EncodeHighResTelemetryRecord(HighResTelemetryRecord_t *record,
 
   /* STAB-04 (#151): live-path provenance mirrors the flash-record layout
    * (b0 press, b1 temp, b2 hum, b3 gnss, b4 batt); veto is 0 here — the
-   * veto is decided at the flash-write site, not in the encoder. */
+   * veto is decided at the flash-write site, not in the encoder.
+   * v7: b5-b6 carry battery load-phase. This encoder runs on the post-GNSS
+   * (loaded) sample with a resting value carried in, so BOTH phases are
+   * present whenever the loaded battery read itself is fresh. */
   record->sensor_quality =
       (uint8_t)((sensors->press_stale ? 0x01 : 0) |
                 (sensors->temp_stale ? 0x02 : 0) |
                 (sensors->hum_stale ? 0x04 : 0) |
                 (sensors->gnss_stale ? 0x08 : 0) |
-                (sensors->batt_stale ? 0x10 : 0));
+                (sensors->batt_stale ? 0x10 : 0) |
+                (sensors->batt_stale ? SENSOR_QUALITY_LOAD_LOADED_ONLY
+                                     : SENSOR_QUALITY_LOAD_BOTH));
   record->veto_reason = 0;
 
   // Calculate CRC16 for data integrity
@@ -323,7 +338,7 @@ uint16_t SerializeCompactLE(uint8_t *out, const CompactTelemetryPacket_t *p) {
  *        Field order matches HighResTelemetryRecord_t; crc16 covers bytes 0-31.
  * @retval number of bytes written (always 34)
  */
-static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t *r) {
+static uint16_t SerializeRecordV4LE(uint8_t *out, const HighResTelemetryRecord_t *r) {
   PutU32LE(out + 0, r->timestamp);
   PutU32LE(out + 4, (uint32_t)r->latitude);
   PutU32LE(out + 8, (uint32_t)r->longitude);
@@ -331,29 +346,31 @@ static uint16_t SerializeRecordV3LE(uint8_t *out, const HighResTelemetryRecord_t
   PutU16LE(out + 14, (uint16_t)r->temperature);
   PutU16LE(out + 16, r->humidity);
   PutU16LE(out + 18, r->pressure);
-  PutU16LE(out + 20, r->battery_voltage);
-  PutU16LE(out + 22, r->solar_voltage);
-  PutU16LE(out + 24, (uint16_t)r->voltage_slope);
-  out[26] = r->satellites;
-  out[27] = r->hdop;
-  out[28] = r->power_mode;
-  out[29] = r->flags;
-  out[30] = r->sensor_quality; /* STAB-04 (#151): v6 provenance */
-  out[31] = r->veto_reason;
-  PutU16LE(out + 32, CalculateCRC16(out, 32));
-  return 34;
+  PutU16LE(out + 20, r->battery_voltage);   /* LOADED: post-GNSS */
+  PutU16LE(out + 22, r->battery_rest_mv);   /* v7: RESTING: pre-GNSS */
+  PutU16LE(out + 24, r->solar_voltage);
+  PutU16LE(out + 26, (uint16_t)r->voltage_slope);
+  out[28] = r->satellites;
+  out[29] = r->hdop;
+  out[30] = r->power_mode;
+  out[31] = r->flags;
+  out[32] = r->sensor_quality; /* STAB-04 (#151): v6 provenance; v7: b5-b6 load-phase */
+  out[33] = r->veto_reason;
+  PutU16LE(out + 34, CalculateCRC16(out, 34));
+  return 36;
 }
 
 /**
- * @brief Encode a variable-length bulk packet (wire v6, packet_type 0x06) — STAB-04 (#151)
+ * @brief Encode a variable-length bulk packet (wire v7, packet_type 0x07) — dual battery
  *
- * v5 (FR-07/#87) with the 34-byte provenance record: identity is explicit per
- * record (seq u32 LE preceding each record), so a non-contiguous candidate
- * array — corrupt-skip in the FIFO read, or a failed conversion — can no
- * longer misattribute every record after the gap, and the record's
- * sensor_quality/veto_reason provenance survives the archive hop.
+ * v7 carries the 36-byte record (adds battery_rest_mv after battery_voltage):
+ * identity is explicit per record (seq u32 LE preceding each record), so a
+ * non-contiguous candidate array — corrupt-skip in the FIFO read, or a failed
+ * conversion — can no longer misattribute every record after the gap, and the
+ * record's sensor_quality/veto_reason provenance survives the archive hop.
+ * sensor_quality b5-b6 carry the battery load-phase (SENSOR_QUALITY_LOAD_*).
  */
-bool EncodeBulkPacketV6(uint8_t *buf,
+bool EncodeBulkPacketV7(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,
@@ -372,29 +389,29 @@ bool EncodeBulkPacketV6(uint8_t *buf,
    * subtraction from unsigned underflow, but a future type change would
    * turn it into a record count far past the buffer, and the old n==0
    * refusal left *out_len unwritten - caller-visible garbage. */
-  if (budget < (uint16_t)(BULK_V6_OVERHEAD + BULK_V6_RECORD_WIRE)) {
+  if (budget < (uint16_t)(BULK_V7_OVERHEAD + BULK_V7_RECORD_WIRE)) {
     *packed_count = 0;
     *out_len = 0;
     return false;
   }
-  uint8_t n = (uint8_t)((budget - BULK_V6_OVERHEAD) / BULK_V6_RECORD_WIRE);
+  uint8_t n = (uint8_t)((budget - BULK_V7_OVERHEAD) / BULK_V7_RECORD_WIRE);
   if (n > record_count)
     n = record_count;
-  if (n > BULK_V6_MAX_RECORDS)
-    n = BULK_V6_MAX_RECORDS;
+  if (n > BULK_V7_MAX_RECORDS)
+    n = BULK_V7_MAX_RECORDS;
   if (n == 0) {
     *packed_count = 0;
     *out_len = 0;
     return false;
   }
 
-  buf[0] = BULK_PACKET_TYPE_V6_PROVENANCE;
+  buf[0] = BULK_PACKET_TYPE_V7_DUAL_BATT;
   buf[1] = n;
   uint16_t off = 2;
   for (uint8_t i = 0; i < n; i++) {
     PutU32LE(buf + off, record_seqs[i]); /* DDR-0005: explicit identity */
     off += 4;
-    off += SerializeRecordV3LE(buf + off, &records[i]);
+    off += SerializeRecordV4LE(buf + off, &records[i]);
   }
   PutU32LE(buf + off, CalculateCRC32(buf, off));
   off += 4;
@@ -402,7 +419,7 @@ bool EncodeBulkPacketV6(uint8_t *buf,
   *packed_count = n;
   *out_len = off;
 
-  SONDE_LOG("Bulk v6: Records=%d FirstSeq=%lu Len=%u\r\n",
+  SONDE_LOG("Bulk v7: Records=%d FirstSeq=%lu Len=%u\r\n",
             n, (unsigned long)record_seqs[0], off);
   return true;
 }
@@ -435,6 +452,8 @@ bool ConvertFlashLogToHighRes(const void *flash_record,
 
   // Battery voltage
   highres_record->battery_voltage = flash_rec->battery_mv;
+  /* v7: the resting (pre-GNSS) sample archived alongside the loaded one. */
+  highres_record->battery_rest_mv = flash_rec->battery_rest_mv;
   /* D5/F-025/R19 (#35): history is self-describing — solar/slope/mode come
    * from the flash record itself (record v4), not from the current cycle's
    * live values passed as parameters. */

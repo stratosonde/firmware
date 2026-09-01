@@ -150,9 +150,9 @@ static HighResTelemetryRecord_t make_highres(uint16_t marker) {
   return r;
 }
 
-/* v5 wire contract: record i's sequence is the u32 LE at 2 + i*36. */
+/* v7 wire contract: record i's sequence is the u32 LE at 2 + i*40. */
 static uint32_t decoded_identity_of(const uint8_t *pkt, uint8_t index) {
-  const uint8_t *p = pkt + 2 + (uint32_t)index * BULK_V6_RECORD_WIRE;
+  const uint8_t *p = pkt + 2 + (uint32_t)index * BULK_V7_RECORD_WIRE;
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
@@ -167,10 +167,10 @@ static void test_bulk_identity_with_skips(void) {
       recs[i] = make_highres((uint16_t)(5000 + i));
     }
 
-    uint8_t buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
+    uint8_t buf[BULK_V7_OVERHEAD + BULK_V7_MAX_RECORDS * BULK_V7_RECORD_WIRE];
     uint8_t packed = 0;
     uint16_t len = 0;
-    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+    CHECK(EncodeBulkPacketV7(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
                              &packed, &len));
     CHECK_EQ_I(packed, 3);
     for (uint8_t i = 0; i < packed; i++) {
@@ -180,7 +180,7 @@ static void test_bulk_identity_with_skips(void) {
 
   /* Non-contiguous batch: record 101 was corrupt and skipped by
    * FlashLog_GetRecoveryRecords, so the array holds sequences
-   * {100, 102, 103}. v5 must report exactly {100, 102, 103}. */
+   * {100, 102, 103}. v7 must report exactly {100, 102, 103}. */
   {
     HighResTelemetryRecord_t recs[3];
     uint32_t true_seq[3] = {100, 102, 103}; /* 101 skipped */
@@ -188,10 +188,10 @@ static void test_bulk_identity_with_skips(void) {
       recs[i] = make_highres((uint16_t)(5000 + i));
     }
 
-    uint8_t buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
+    uint8_t buf[BULK_V7_OVERHEAD + BULK_V7_MAX_RECORDS * BULK_V7_RECORD_WIRE];
     uint8_t packed = 0;
     uint16_t len = 0;
-    CHECK(EncodeBulkPacketV6(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
+    CHECK(EncodeBulkPacketV7(buf, sizeof(buf), sizeof(buf), recs, true_seq, 3,
                              &packed, &len));
     CHECK_EQ_I(packed, 3);
 

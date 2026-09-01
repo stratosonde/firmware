@@ -330,9 +330,9 @@ static void test_dr_p3_hygiene(void)
     CHECK_REGRESSION(count_occurrences(app, "SysTimeSyncFromGnss();") == 3, "DR-13");
     /* DR-15: the GPS-skip memset is paired with a stale mark. */
     CHECK_REGRESSION(strstr(app, "sizeof(hgnss.data));\n    EnvSensors_MarkGnssStale(true);") != NULL, "DR-15");
-    /* DR-18: BULK_V6_MAX_RECORDS, not a magic 6. */
-    CHECK_REGRESSION(strstr(app, "highres_records[BULK_V6_MAX_RECORDS]") != NULL, "DR-18-array");
-    CHECK_REGRESSION(strstr(app, "i < BULK_V6_MAX_RECORDS") != NULL, "DR-18-loop");
+    /* DR-18: BULK_V7_MAX_RECORDS, not a magic 6. */
+    CHECK_REGRESSION(strstr(app, "highres_records[BULK_V7_MAX_RECORDS]") != NULL, "DR-18-array");
+    CHECK_REGRESSION(strstr(app, "i < BULK_V7_MAX_RECORDS") != NULL, "DR-18-loop");
     CHECK_REGRESSION(strstr(app, "highres_records[6]") == NULL, "DR-18-magic-gone");
     free(app);
 

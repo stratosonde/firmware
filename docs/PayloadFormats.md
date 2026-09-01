@@ -13,7 +13,7 @@ The Stratosonde firmware transmits data using multiple LoRaWAN packet formats op
 | **2** | CayenneLPP | Variable | Human-readable debug format | Development only |
 | **3** | GNSS Detail | Variable | Satellite tracking data | Development only |
 | **10** | Compact Binary | 11 bytes | Production telemetry (SF10) | **PRODUCTION** |
-| **11** | Bulk Binary | Variable (v6, `0x06`: `6 + 38n`) | Core science archive transfer (SF7) | **PRODUCTION** |
+| **11** | Bulk Binary | Variable (v7, `0x07`: `6 + 40n`) | Core science archive transfer (SF7) | **PRODUCTION** |
 
 ### Debug Packet Control
 
@@ -244,21 +244,22 @@ Bulk transfer of historical high-resolution records at SF7, sent when link quali
 | `0x03` | Variable, no record identity (CI-only <1 day, never deployed — superseded) | 2+32n+4 |
 | `0x04` | v4, variable `6 + 32n + 4` with base sequence (never deployed — superseded by v5, FR-07/#87) | 42-202 |
 | `0x05` | v5, variable `6 + 36n` with per-record explicit sequence (FR-07/#87; **never deployed** — superseded by v6 before the first real burst, STAB-04/#151) | 42-186 |
-| `0x06` | **Current v6, variable** `6 + 38n` with per-record sequence + data-honesty provenance (STAB-04/#151) | 44-196 |
+| `0x06` | v6, variable `6 + 38n` with per-record sequence + data-honesty provenance (STAB-04/#151; superseded by v7) | 44-196 |
+| `0x07` | **Current v7, variable** `6 + 40n` with per-record sequence + provenance + dual battery (resting + loaded) | 46-166 |
 
-### Packet Structure v6 (variable length)
+### Packet Structure v7 (variable length)
 
 #### Header (2 bytes)
 
 | Offset | Field | Type | Size | Description |
 |--------|-------|------|------|-------------|
-| 0 | Packet Type | uint8 | 1 | 0x06 = variable-length + per-record identity + provenance |
-| 1 | Record Count | uint8 | 1 | n records (1-5) |
+| 0 | Packet Type | uint8 | 1 | 0x07 = variable-length + per-record identity + provenance + dual battery |
+| 1 | Record Count | uint8 | 1 | n records (1-4) |
 
-n complete 38-byte wire records follow immediately at offset 2, each being
-`sequence uint32 LE` + the 34-byte v6 high-resolution record (layout below,
+n complete 40-byte wire records follow immediately at offset 2, each being
+`sequence uint32 LE` + the 36-byte v7 high-resolution record (layout below,
 explicitly little-endian on the wire). The packet ends with a 4-byte CRC32
-(LE) over all preceding bytes: total length `6 + 38n`.
+(LE) over all preceding bytes: total length `6 + 40n`.
 
 **Identity is explicit per record (FR-07, #87).** v4 derived identity
 implicitly (`base_seq + i`), which misattributed every record after a skipped
@@ -288,9 +289,9 @@ The firmware queries the runtime payload budget before each packet (`LoRaMacQuer
 
 n complete 32-byte records follow immediately at offset 6 (layout below, explicitly little-endian on the wire). The packet ends with a 4-byte CRC32 (LE) over all preceding bytes: total length `6 + 32n + 4`.
 
-#### High-Resolution Records (n × 34 bytes in v6; n × 32 bytes in v5 and earlier)
+#### High-Resolution Records (n × 36 bytes in v7; n × 34 bytes in v6; n × 32 bytes in v5 and earlier)
 
-Each v6 record is 34 bytes, little-endian:
+Each v7 record is 36 bytes, little-endian:
 
 | Offset | Field | Type | Size | Resolution | Range | Description |
 |--------|-------|------|------|------------|-------|-------------|
@@ -301,16 +302,26 @@ Each v6 record is 34 bytes, little-endian:
 | 14 | Temperature | int16 LE | 2 | 0.1°C | ±3276.7°C | temp × 10 |
 | 16 | Humidity | uint16 LE | 2 | 0.1% | 0-6553.5% | humidity × 10 |
 | 18 | Pressure | uint16 LE | 2 | 0.1 hPa | 0-6553.5 hPa | pressure × 10 |
-| 20 | Battery Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | Millivolts |
-| 22 | Solar Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | Millivolts |
-| 24 | Voltage Slope | int16 LE | 2 | 1 mV/hour | ±32.767 V/h | Charge rate |
-| 26 | Satellites | uint8 | 1 | 1 | 0-255 | GPS satellite count |
-| 27 | HDOP | uint8 | 1 | 0.1 | 0-25.5 | HDOP × 10 |
-| 28 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode at write time |
-| 29 | Flags | uint8 | 1 | bitfield | - | Status flags (table below) |
-| 30 | Sensor Quality | uint8 | 1 | bitfield | - | **v6**: per-sensor staleness at acquisition (table below) |
-| 31 | Veto Reason | uint8 | 1 | enum | 0-6 | **v6**: TransmitVeto_t at write time (0 = none) |
-| 32 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-31 (v5 and earlier: bytes 0-29, CRC at 30) |
+| 20 | Battery Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | **LOADED** — post-GNSS, receiver hot |
+| 22 | Battery Rest | uint16 LE | 2 | 1 mV | 0-65.535V | **v7: RESTING** — pre-GNSS, receiver off |
+| 24 | Solar Voltage | uint16 LE | 2 | 1 mV | 0-65.535V | Millivolts |
+| 26 | Voltage Slope | int16 LE | 2 | 1 mV/hour | ±32.767 V/h | Reserved (sentinel −32768, PWR-SIMPLIFY) |
+| 28 | Satellites | uint8 | 1 | 1 | 0-255 | GPS satellite count |
+| 29 | HDOP | uint8 | 1 | 0.1 | 0-25.5 | HDOP × 10 |
+| 30 | Power Mode | uint8 | 1 | enum | 0-7 | Operating mode at write time |
+| 31 | Flags | uint8 | 1 | bitfield | - | Status flags (table below) |
+| 32 | Sensor Quality | uint8 | 1 | bitfield | - | per-sensor staleness (b0-b4) + battery load-phase (b5-b6) |
+| 33 | Veto Reason | uint8 | 1 | enum | 0-6 | TransmitVeto_t at write time (0 = none) |
+| 34 | CRC16 | uint16 LE | 2 | - | - | CRC16/MODBUS over record bytes 0-33 (v6: bytes 0-31, CRC at 32) |
+
+**Dual battery load phases.** `Battery Voltage` (offset 20) is the *loaded*
+sample taken after GNSS acquisition (receiver hot, the heaviest real load);
+`Battery Rest` (offset 22) is the *resting* sample taken at cycle start before
+GNSS (receiver off, no TX) — the value Gate A/B admission decides on. Together
+they yield the sag-vs-temperature curve used to derive the Gate B floor. The
+`sensor_quality` byte carries the load-phase provenance in bits 5-6: `0` = rest
+only, `1` = loaded only, `2` = both (expected). See
+`SENSOR_QUALITY_LOAD_*` in `Core/Inc/payload_format.h`.
 
 #### Status Flags (byte 29 of each record)
 

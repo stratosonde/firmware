@@ -1646,7 +1646,7 @@ static void ArchiveSample(sensor_t *sensor_data,
  * region switch (the joined home session is used as-is). There is no
  * firmware "experiment mode": privacy grouping is a backend concern - the
  * firmware rule is simply "commissioning X/Y never leaves the device". */
-static uint8_t s_comm_live_buf[BULK_V6_OVERHEAD + BULK_V6_RECORD_WIRE];
+static uint8_t s_comm_live_buf[BULK_V7_OVERHEAD + BULK_V7_RECORD_WIRE];
 static uint16_t s_comm_live_len = 0;
 
 /* A-005/STAB-11/F-09 (#79/#158/#266): version-report announce. The heartbeat
@@ -1728,7 +1728,7 @@ static void CommissioningTelemetryCycle(const sensor_t *sensor_data_pre,
     uint32_t live_seq = live_record.timestamp;
     uint8_t packed_count = 0;
     uint16_t out_len = 0;
-    if (EncodeBulkPacketV6(s_comm_live_buf, (uint16_t)sizeof(s_comm_live_buf),
+    if (EncodeBulkPacketV7(s_comm_live_buf, (uint16_t)sizeof(s_comm_live_buf),
                            (uint16_t)sizeof(s_comm_live_buf), &live_record,
                            &live_seq, 1, &packed_count, &out_len) &&
         packed_count == 1U) {
@@ -1872,9 +1872,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
   uint16_t max_payload = 0;
   uint32_t record_count = 0;
   uint32_t skipped_count = 0; /* F-006/R13 (#51): corrupt skips are explicit */
-  FlashLog_Record_t flash_records[BULK_V6_MAX_RECORDS];
-  HighResTelemetryRecord_t highres_records[BULK_V6_MAX_RECORDS];
-  uint32_t highres_seqs[BULK_V6_MAX_RECORDS]; /* FR-07 (#87): per-record explicit identity */
+  FlashLog_Record_t flash_records[BULK_V7_MAX_RECORDS];
+  HighResTelemetryRecord_t highres_records[BULK_V7_MAX_RECORDS];
+  uint32_t highres_seqs[BULK_V7_MAX_RECORDS]; /* FR-07 (#87): per-record explicit identity */
   uint8_t packed_count = 0;
 
   TxFsmState_t pre_state = g_tx_fsm.state;
@@ -1895,7 +1895,7 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
        * packs at most 5. */
       FlashLog_StatusTypeDef flash_status = FlashLog_GetRecoveryRecords(&hflashlog,
                                                                         flash_records,
-                                                                        BULK_V6_MAX_RECORDS,
+                                                                        BULK_V7_MAX_RECORDS,
                                                                         &record_count,
                                                                         &skipped_count);
       if (skipped_count > 0) {
@@ -1912,10 +1912,10 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
          * Previously the loop logged a warning and still packed the record
          * (zero-filled) — fabricated data transmitted as science.
          * A gap is honest; fabricated data is not.
-         * DR-18: BULK_V6_MAX_RECORDS, not a magic 6 - flash_records[] is
+         * DR-18: BULK_V7_MAX_RECORDS, not a magic 6 - flash_records[] is
          * sized by the constant, so a raise otherwise made THESE arrays
          * the overflow. */
-        for (uint32_t i = 0; i < record_count && i < BULK_V6_MAX_RECORDS; i++) {
+        for (uint32_t i = 0; i < record_count && i < BULK_V7_MAX_RECORDS; i++) {
           if (!ConvertFlashLogToHighRes(&flash_records[i], &highres_records[packed_count])) {
             SONDE_LOG("Warning: Failed to convert flash record %lu - skipped\r\n", i);
             continue; /* Skip bad record, keep packing the rest */
@@ -1933,9 +1933,9 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
            * for the next cycle (stable identity, DDR-0005). */
           LoRaMacTxInfo_t txInfo;
           for (uint8_t try_n = packed_count; try_n > 0; try_n--) {
-            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE),
+            if (LoRaMacQueryTxPossible((uint8_t)(BULK_V7_OVERHEAD + try_n * BULK_V7_RECORD_WIRE),
                                        &txInfo) == LORAMAC_STATUS_OK) {
-              max_payload = (uint16_t)(BULK_V6_OVERHEAD + try_n * BULK_V6_RECORD_WIRE);
+              max_payload = (uint16_t)(BULK_V7_OVERHEAD + try_n * BULK_V7_RECORD_WIRE);
               break;
             }
           }
@@ -2075,13 +2075,13 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
     // F16 FIX: Send at SF7, resolved per-region (was hardcoded DR_3)
     LmHandlerSetTxDatarate(DatarateFromSF(7)); // SF7 in ANY region
 
-    uint8_t v6_buf[BULK_V6_OVERHEAD + BULK_V6_MAX_RECORDS * BULK_V6_RECORD_WIRE];
-    uint8_t v5_packed = 0;
-    uint16_t v5_len = 0;
+    uint8_t v7_buf[BULK_V7_OVERHEAD + BULK_V7_MAX_RECORDS * BULK_V7_RECORD_WIRE];
+    uint8_t v7_packed = 0;
+    uint16_t v7_len = 0;
 
-    if (EncodeBulkPacketV6(v6_buf, sizeof(v6_buf), max_payload,
+    if (EncodeBulkPacketV7(v7_buf, sizeof(v7_buf), max_payload,
                            highres_records, highres_seqs, packed_count,
-                           &v5_packed, &v5_len)) {
+                           &v7_packed, &v7_len)) {
 
       /* DDR-0005 (#34): archive packets are CONFIRMED uplinks. The FIRST
        * archive packet of a burst carries LinkCheckReq (protocol §5.2);
@@ -2094,11 +2094,11 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
 
       LmHandlerAppData_t bulkData;
       bulkData.Port = LORAWAN_BULK_PORT; // Port 11
-      bulkData.BufferSize = v5_len;
-      bulkData.Buffer = v6_buf;
+      bulkData.BufferSize = v7_len;
+      bulkData.Buffer = v7_buf;
 
-      SONDE_LOG("Sending %u-byte bulk v6 packet at SF7 on port %d with %u records\r\n",
-                v5_len, LORAWAN_BULK_PORT, v5_packed);
+      SONDE_LOG("Sending %u-byte bulk v7 packet at SF7 on port %d with %u records\r\n",
+                v7_len, LORAWAN_BULK_PORT, v7_packed);
 
       /* R3-04 (#218, DDR-0005 BR-TX-011): archive recovery is
        * UNCONFIRMED one-pass - no per-record ACK is awaited and a lost
@@ -2110,12 +2110,12 @@ static void RunTxStateMachine(const sensor_t *sensor_data,
         /* R3-04 (#218, BR-TX-009/010): the watermark advances AT SEND
          * TIME, per packed record (newest-first as read). Records read
          * but cut by the payload budget stay sendable. */
-        for (uint8_t i = 0; i < v5_packed; i++) {
+        for (uint8_t i = 0; i < v7_packed; i++) {
           FlashLog_MarkRecoverySent(&hflashlog, highres_seqs[i]);
         }
-        if (v5_packed != record_count) {
+        if (v7_packed != record_count) {
           SONDE_LOG("WARN: packed %u of %lu read - rest stay sendable\r\n",
-                    v5_packed, (unsigned long)record_count);
+                    v7_packed, (unsigned long)record_count);
         }
 
         /* The step counts the packet and decides stay-vs-complete from
@@ -2246,6 +2246,11 @@ static void SendTxData(void) {
   // Read current sensor data for temperature
   sensor_t sensor_data = {0}; /* #35: zero-init — uninitialized members were archived as authentic */
   EnvSensors_Read(&sensor_data);
+  /* v7 (dual battery): latch the RESTING sample — pre-GNSS, receiver off, no
+   * TX. EnvSensors_Read never writes battery_rest_voltage, so this value
+   * survives the post-GNSS re-reads below (loaded sample) intact and reaches
+   * the archive + wire alongside it. */
+  sensor_data.battery_rest_voltage = sensor_data.battery_voltage;
   float temperature_c = sensor_data.temperature;
 
   // Use RTC-based time that continues during STOP2 sleep

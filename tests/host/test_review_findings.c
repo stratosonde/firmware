@@ -510,7 +510,7 @@ static void test_protocol_docs_match_code(void) {
 
   char *proto = slurp("../../docs/LoRaWANApplicationProtocol.md");
   CHECK_REGRESSION(strstr(proto, "1=ASCENT, 2=FLOAT") != NULL, "STAB-10-proto-mission");
-  CHECK_REGRESSION(strstr(proto, "Archive v6 (current firmware") != NULL, "STAB-10-proto-v6");
+  CHECK_REGRESSION(strstr(proto, "Archive v7 (current firmware") != NULL, "STAB-10-proto-v7");
   free(proto);
 }
 

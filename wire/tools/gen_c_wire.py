@@ -29,9 +29,9 @@ def main():
         schema = json.load(f)
     fr = schema["frames"]
     hb = find(fr, "heartbeat")
-    rec = find(fr, "archive_record_v6")
+    rec = find(fr, "archive_record_v7")
     vr = find(fr, "version_report")
-    bulk = find(fr, "bulk_packet_v6")
+    bulk = find(fr, "bulk_packet_v7")
 
     ph = field(hb, "press_hum")
     press_bf = ph["bitfield"][0]
@@ -67,7 +67,7 @@ def main():
     out.append("#define WIRE_HB_HUM_BITS %dU" % hum_bf["bits"])
     out.append("#define WIRE_HB_HUM_INVALID %dU" % hum_bf["sentinel"]["value"])
     out.append("")
-    out.append("/* archive record v6 (port 11) */")
+    out.append("/* archive record v7 (port 11) */")
     out.append("#define WIRE_ARCHIVE_RECORD_LEN %dU" % rec["record_length"])
     out.append("#define WIRE_REC_OFF_SQ %dU" % field(rec, "sensor_quality")["offset"])
     out.append("#define WIRE_REC_OFF_VETO %dU" % field(rec, "veto_reason")["offset"])
@@ -75,10 +75,10 @@ def main():
     out.append("#define WIRE_REC_CRC_COVER %dU /* bytes covered by record crc16 */" % (int(rec_integ["cover"].split("..")[1]) + 1))
     out.append("#define WIRE_REC_CRC_ALGO %dU /* 0=modbus */" % crcsel(rec_integ["algo"]))
     out.append("")
-    out.append("/* bulk envelope v6 (port 11) */")
+    out.append("/* bulk envelope v7 (port 11) */")
     out.append("#define WIRE_BULK_TYPE %dU" % field(bulk, "packet_type")["const"])
     out.append("#define WIRE_BULK_OVERHEAD 6U /* type+count+crc32 */")
-    out.append("#define WIRE_BULK_RECORD_STRIDE 38U /* seq u32 + 34B record */")
+    out.append("#define WIRE_BULK_RECORD_STRIDE 40U /* seq u32 + 36B record */")
     out.append("#define WIRE_BULK_CRC_ALGO %dU /* 2=crc32-iso-hdlc */" % crcsel(bulk_integ["algo"]))
     out.append("")
     out.append("/* version report (port 20) */")

@@ -172,38 +172,52 @@ In US915/AU915 the heartbeat is sent at SF9 (DR1): the SF10/DR0 11-byte budget i
 
 ## 7. FPort 11 — core science archive
 
-The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = variable-length with base sequence (never deployed — superseded), `0x05` = variable with per-record sequence (never deployed — superseded), `0x06` = current variable-length with per-record sequence and provenance.
+The decoder branches on `payload[0]`: `0x01` = legacy 222-byte fixed (historical only), `0x02` = legacy 198-byte fixed, `0x03` = variable without record identity (shipped in CI <1 day, never deployed — superseded), `0x04` = variable-length with base sequence (never deployed — superseded), `0x05` = variable with per-record sequence (never deployed — superseded), `0x06` = variable-length with per-record sequence and provenance (superseded by v7), `0x07` = current variable-length with per-record sequence, provenance, and dual battery.
 
-### 7.1 Archive v6 (current firmware, STAB-04/STAB-05, issues #151/#152)
+### 7.1 Archive v7 (current firmware, dual battery)
 
-STAB-10 (#157) audit note: this section documented v4 as "current" while the
-firmware had already moved on — v4 and v5 never flew; v6 is the first archive
-format that will.
-
-Variable length: `6 + 38n` bytes. Header:
+Variable length: `6 + 40n` bytes. Header:
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 1 | Packet type, `0x06` |
-| 1 | 1 | Record count n, 1-5 |
+| 0 | 1 | Packet type, `0x07` |
+| 1 | 1 | Record count n, 1-4 |
 
-n complete 38-byte wire records follow: `sequence uint32 LE` + the 34-byte v6
+n complete 40-byte wire records follow: `sequence uint32 LE` + the 36-byte v7
 record, explicitly little-endian serialized (§3). Identity is explicit per
 record (FR-07/#87): the ground-side `(DevEUI, sequence)` dedup key (DDR-0005)
 is correct for ANY subset of the archive, and the sender's watermark commit
 point is `sequence_of(last packed record) + 1` (FR-08/#91). The packet ends
-with a 4-byte CRC32/IEEE (LE) over all preceding bytes.
+with a 4-byte CRC32/IEEE (LE) over all preceding bytes. Max records per packet
+drops 5 → 4 (5 × 40 = 206 > the 198-byte budget).
 
-The v6 record layout equals the 32-byte layout in §7.2 plus two provenance
-bytes inserted before the CRC16: offset 30 = `sensor_quality` (b0 pressure
-stale, b1 temperature stale, b2 humidity stale, b3 GNSS stale, b4 battery
-stale), offset 31 = `veto_reason` (TransmitVeto_t at write time, 0 = none),
-CRC16/MODBUS at offset 32 over bytes 0-31. In v6 the flags byte's power-mode
-field (b5-b7) is the HISTORICAL mode from the flash record (STAB-05/#152).
+**Dual battery (the reason for v7).** The v7 record carries two battery samples
+for the same wake cycle so the ground can reconstruct the sag-vs-temperature
+curve that the Gate B floor is built from:
+
+| Record offset | Size | Field | Load phase |
+|---:|---:|---|---|
+| 20 | 2 | `battery_voltage` | **LOADED** — sampled after GNSS acquisition (receiver hot up to `gps_timeout_ms`, the heaviest real load) |
+| 22 | 2 | `battery_rest_mv` | **RESTING** — sampled at cycle start before GNSS (receiver off, no TX); the value Gate A/B admission decides on |
+
+The resting value is latched in `SendTxData` (`lora_app.c`) immediately after the
+pre-GNSS `EnvSensors_Read`; `EnvSensors_Read` never writes `battery_rest_voltage`,
+so it survives the post-GNSS re-reads intact and reaches both the flash archive
+and the wire. `sensor_quality` b5-b6 carry the load-phase provenance: `0` = rest
+only, `1` = loaded only, `2` = both (expected). The v6 layout shifts by +2 bytes
+from `solar_voltage` onward; `sensor_quality` moves to offset 32, `veto_reason`
+to 33, CRC16/MODBUS to offset 34 over bytes 0-33.
 
 The serializer queries the runtime payload budget before each packet (`LoRaMacQueryTxPossible` — current DR plus pending FOpts, §11) and packs as many complete records as fit, walking newest-to-oldest. Records cut by the budget remain pending with stable identity (§4, §7.3).
 
-### 7.1a Archive v4/v5 (SUPERSEDED — never deployed)
+### 7.1a Archive v6 (SUPERSEDED — superseded by v7)
+
+v6 (`0x06`): `6 + 38n` with the 34-byte record — `sensor_quality` (b0-b4 staleness)
+at offset 30, `veto_reason` at 31, CRC16 at 32. Single battery field (loaded,
+post-GNSS). Retained here for capture interpretation only; decoders must branch
+on `payload[0]` and never parse a v7 frame with v6 offsets.
+
+### 7.1b Archive v4/v5 (SUPERSEDED — never deployed)
 
 v4 (`0x04`): `6 + 32n + 4` with a `base_seq` header — identity broke on any
 skipped record. v5 (`0x05`): `6 + 36n` with per-record sequence — identity

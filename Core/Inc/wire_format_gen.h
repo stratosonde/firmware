@@ -21,18 +21,18 @@
 #define WIRE_HB_HUM_BITS 5U
 #define WIRE_HB_HUM_INVALID 31U
 
-/* archive record v6 (port 11) */
-#define WIRE_ARCHIVE_RECORD_LEN 34U
-#define WIRE_REC_OFF_SQ 30U
-#define WIRE_REC_OFF_VETO 31U
-#define WIRE_REC_OFF_CRC16 32U
-#define WIRE_REC_CRC_COVER 32U /* bytes covered by record crc16 */
+/* archive record v7 (port 11) */
+#define WIRE_ARCHIVE_RECORD_LEN 36U
+#define WIRE_REC_OFF_SQ 32U
+#define WIRE_REC_OFF_VETO 33U
+#define WIRE_REC_OFF_CRC16 34U
+#define WIRE_REC_CRC_COVER 34U /* bytes covered by record crc16 */
 #define WIRE_REC_CRC_ALGO 0U /* 0=modbus */
 
-/* bulk envelope v6 (port 11) */
-#define WIRE_BULK_TYPE 6U
+/* bulk envelope v7 (port 11) */
+#define WIRE_BULK_TYPE 7U
 #define WIRE_BULK_OVERHEAD 6U /* type+count+crc32 */
-#define WIRE_BULK_RECORD_STRIDE 38U /* seq u32 + 34B record */
+#define WIRE_BULK_RECORD_STRIDE 40U /* seq u32 + 36B record */
 #define WIRE_BULK_CRC_ALGO 2U /* 2=crc32-iso-hdlc */
 
 /* version report (port 20) */

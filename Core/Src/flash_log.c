@@ -997,6 +997,14 @@ FlashLog_StatusTypeDef FlashLog_WriteRecord(FlashLog_HandleTypeDef *hlog,
       batt_mv_f = 65535.0f;
     record.battery_mv = (uint16_t)(batt_mv_f + 0.5f);
   }
+  { /* v7: the resting (pre-GNSS) sample. Same clamp discipline. */
+    float rest_mv_f = sensor_data->battery_rest_voltage * 1000.0f;
+    if (!(rest_mv_f > 0.0f))
+      rest_mv_f = 0.0f;
+    if (rest_mv_f > 65535.0f)
+      rest_mv_f = 65535.0f;
+    record.battery_rest_mv = (uint16_t)(rest_mv_f + 0.5f);
+  }
   {
     float solar_mv_f = sensor_data->solar_voltage * 1000.0f;
     if (solar_mv_f < 0.0f)

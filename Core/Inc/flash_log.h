@@ -137,14 +137,16 @@ typedef struct __attribute__((packed)) {
   uint8_t gnss_valid;       /**< GNSS valid flag */
 
   /* Power and status (8 bytes) */
-  uint16_t battery_mv;   /**< Battery voltage in millivolts */
+  uint16_t battery_mv;   /**< Battery voltage in millivolts (LOADED: post-GNSS, receiver hot) */
+  uint16_t battery_rest_mv; /**< Battery voltage in millivolts (RESTING: pre-GNSS, receiver off).
+                              *  Set per cycle before GNSS; survives the post-GNSS re-read. */
   uint16_t solar_mv;     /**< Solar panel voltage in millivolts (D5/F-025: was never archived) */
   int16_t voltage_slope; /**< Battery slope mV/hour at write time (D5: honest history) */
   uint8_t power_mode;    /**< Operating mode enum at write time (D5) */
   uint8_t flags;         /**< Data-honesty flags (FW-7): b0 press_stale, b1 temp_stale, b2 hum_stale, b3 gnss_stale, b4 batt_stale (#136), b5-b7 TransmitVeto_t (2026-08-11 §6a: record WHY, DDR-0003) */
 
-  /* Reserved for expansion (12 bytes) */
-  uint8_t reserved[12]; /**< Future expansion space */
+  /* Reserved for expansion (10 bytes — 2 taken by battery_rest_mv) */
+  uint8_t reserved[10]; /**< Future expansion space */
 
   /* Integrity (4 bytes) */
   uint32_t crc32; /**< CRC32 of all preceding bytes (60 bytes) */

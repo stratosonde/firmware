@@ -138,7 +138,8 @@ typedef struct __attribute__((packed)) {
   int16_t temperature;      // 0.1°C resolution (2 bytes) - -3276.8 to +3276.7°C
   uint16_t humidity;        // 0.1% resolution (2 bytes) - 0-655.35%
   uint16_t pressure;        // 0.1hPa resolution (2 bytes) - 0-6553.5 hPa
-  uint16_t battery_voltage; // mV (2 bytes) - 0-65.535V
+  uint16_t battery_voltage; // mV (2 bytes) - 0-65.535V  (LOADED: post-GNSS, receiver hot)
+  uint16_t battery_rest_mv; // mV (2 bytes) - 0-65.535V  (RESTING: pre-GNSS, receiver off)
   uint16_t solar_voltage;   // mV (2 bytes) - 0-65.535V
   int16_t voltage_slope;    // mV/hour (2 bytes) - ±32.767 V/hour
   uint8_t satellites;       // GPS satellite count (1 byte) - AUTHORITATIVE (flags b1-b4 is a redundant copy)
@@ -146,10 +147,21 @@ typedef struct __attribute__((packed)) {
   uint8_t power_mode;       // Operating mode enum (1 byte) - AUTHORITATIVE (flags b5-b7 is a redundant copy)
   uint8_t flags;            // Redundant copy of sats (b1-b4) + power mode (b5-b7); b0 gps_fix_valid. Prefer fields above.
   uint8_t sensor_quality;   // STAB-04 (#151): b0 press_stale, b1 temp_stale, b2 hum_stale,
-                            // b3 gnss_stale, b4 batt_stale, b5-b7 reserved
+                            // b3 gnss_stale, b4 batt_stale; b5-b6 load-phase (see SENSOR_QUALITY_LOAD_*),
+                            // b7 reserved
   uint8_t veto_reason;      // STAB-04 (#151): TransmitVeto_t at write time (0 = none)
   uint16_t crc16;           // Data integrity (2 bytes)
-} HighResTelemetryRecord_t; // Total: 34 bytes (v6, was 32)
+} HighResTelemetryRecord_t; // Total: 36 bytes (v7, was 34 in v6)
+
+/* Battery load-phase provenance (sensor_quality b5-b6). "Resting" = sampled at
+ * cycle start before GNSS (receiver off, no TX) — the value Gate A/B admits on.
+ * "Loaded" = sampled after GNSS acquisition (receiver hot up to gps_timeout_ms) —
+ * the sag point. Both are needed to reconstruct the sag-vs-temperature curve. */
+#define SENSOR_QUALITY_LOAD_SHIFT 5
+#define SENSOR_QUALITY_LOAD_MASK 0x60       // bits 5-6
+#define SENSOR_QUALITY_LOAD_REST_ONLY 0x00  // only the resting sample is valid
+#define SENSOR_QUALITY_LOAD_LOADED_ONLY 0x20 // only the loaded sample is valid
+#define SENSOR_QUALITY_LOAD_BOTH 0x40       // resting + loaded both valid (expected)
 
 /* ---- Historical bulk v2 (packet_type 0x02): 198 B fixed, 6 x 32B records ----
  * The v2 struct/encoder (BulkTelemetryPacket_t, EncodeBulkPacketFromRecords)
@@ -194,6 +206,17 @@ typedef struct __attribute__((packed)) {
 #define BULK_V6_OVERHEAD 6                  // type + count + crc32
 #define BULK_V6_RECORD_WIRE 38              // seq u32 LE + 34B record
 #define BULK_V6_MAX_RECORDS 5               // 6 + 38*5 = 196 <= 198 (v2 parity)
+
+/* ---- Bulk wire format v7 (dual battery: resting + loaded) ----
+ * Same envelope as v6 but the record is the 36-byte v7 layout (adds
+ * battery_rest_mv after battery_voltage): [0x07][n][n × (seq u32 LE + 36B)][crc32].
+ * Length = 6 + 40n. Battery load-phase provenance rides in sensor_quality b5-b6
+ * (SENSOR_QUALITY_LOAD_*). Type bumped so no decoder can misparse size.
+ * Max records drops 5 -> 4 (5 x 40 = 206 > 198 budget). */
+#define BULK_PACKET_TYPE_V7_DUAL_BATT 0x07 // v7: variable + per-record seq + dual battery
+#define BULK_V7_OVERHEAD 6                 // type + count + crc32
+#define BULK_V7_RECORD_WIRE 40             // seq u32 LE + 36B record
+#define BULK_V7_MAX_RECORDS 4              // 6 + 40*4 = 166 <= 198 (v2 parity)
 
 /* Note: OperatingMode_t is defined in power_model.h to avoid conflicts */
 
@@ -274,7 +297,7 @@ bool EncodeCommissioningLiveRecord(HighResTelemetryRecord_t *record,
                                    OperatingMode_t power_mode);
 
 /**
- * @brief Encode a variable-length bulk packet (wire v6, packet_type 0x06) — STAB-04 (#151)
+ * @brief Encode a variable-length bulk packet (wire v7, packet_type 0x07) — dual battery
  * @param buf: output buffer
  * @param buf_cap: output buffer capacity in bytes
  * @param max_payload: runtime payload budget (LoRaMacQueryTxPossible), bytes
@@ -282,13 +305,15 @@ bool EncodeCommissioningLiveRecord(HighResTelemetryRecord_t *record,
  * @param record_seqs: parallel array — each record's own flash sequence (DDR-0005)
  * @param record_count: number of candidate records
  * @param packed_count: out — records actually encoded (<= record_count)
- * @param out_len: out — encoded packet length (6 + 38n)
+ * @param out_len: out — encoded packet length (6 + 40n)
  * @retval bool: true if at least one record was encoded
  * @note Identity is explicit per record, so skips (corrupt or unconvertible
  *       records) can never corrupt the ground-side (device, seq) dedup key.
  *       The watermark commit point is record_seqs[packed_count-1] + 1.
+ *       v7 carries battery_rest_mv alongside battery_voltage (see
+ *       SENSOR_QUALITY_LOAD_*); the record is 36 bytes.
  */
-bool EncodeBulkPacketV6(uint8_t *buf,
+bool EncodeBulkPacketV7(uint8_t *buf,
                         uint16_t buf_cap,
                         uint16_t max_payload,
                         const HighResTelemetryRecord_t *records,

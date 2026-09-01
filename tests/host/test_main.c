@@ -145,6 +145,7 @@ static sensor_t make_nominal_sensors(void) {
   s.gnss_hdop = 1.1f;
   s.gnss_valid = true;
   s.battery_voltage = 5.0f;
+  s.battery_rest_voltage = 5.1f; /* v7: resting (pre-GNSS) sample — distinct from loaded */
   s.regulator_voltage = 3.3f;
   s.solar_voltage = 5.5f;
   return s;
@@ -271,13 +272,14 @@ static void test_highres_record(void) {
   HighResTelemetryRecord_t rec;
   sensor_t s = make_nominal_sensors();
 
-  CHECK_EQ_I(sizeof(HighResTelemetryRecord_t), 34); /* STAB-04 (#151): v6 */
+  CHECK_EQ_I(sizeof(HighResTelemetryRecord_t), 36); /* v7 dual battery */
   CHECK(EncodeHighResTelemetryRecord(&rec, &s, 1754500123U, -12, MODE_CONSERVATIVE));
   CHECK_EQ_I(rec.timestamp, 1754500123u);
   CHECK_EQ_I(rec.temperature, 250);
   CHECK_EQ_I(rec.humidity, 450);
   CHECK_EQ_I(rec.pressure, 10132);
   CHECK_EQ_I(rec.battery_voltage, 5000);
+  CHECK_EQ_I(rec.battery_rest_mv, 5100); /* v7: resting sample */
   CHECK_EQ_I(rec.solar_voltage, 5500);
   CHECK_EQ_I(rec.voltage_slope, -12);
   CHECK_EQ_I(rec.satellites, 9);
@@ -373,14 +375,16 @@ static void test_gnss_parser(void) {
 }
 
 static void test_bulk_v3(void) {
-  /* D3 (#33) + DDR-0005 (#34) + FR-07 (#87) + STAB-04 (#151): variable-length
-   * bulk v6, packet_type 0x06, per-record explicit sequence identity,
-   * explicit LE (D9), 34-byte records with sensor_quality + veto_reason. */
+  /* D3 (#33) + DDR-0005 (#34) + FR-07 (#87) + STAB-04 (#151) + v7 dual battery:
+   * variable-length bulk v7, packet_type 0x07, per-record explicit sequence
+   * identity, explicit LE (D9), 36-byte records with battery_rest_mv. */
   sensor_t s = make_nominal_sensors();
   HighResTelemetryRecord_t recs[3];
   for (int i = 0; i < 3; i++) {
     CHECK(EncodeHighResTelemetryRecord(&recs[i], &s, 1754500123U + (uint32_t)i * 60,
                                        -12, MODE_NORMAL));
+    /* v7: the resting (pre-GNSS) sample must be encoded per record. */
+    CHECK_EQ_I(recs[i].battery_rest_mv, 5100);
   }
   /* STAB-04 (#151): give record 1 historical provenance (stale pressure,
    * veto reason 2) — it must appear ON THE WIRE at the new record offsets. */
@@ -393,19 +397,19 @@ static void test_bulk_v3(void) {
   uint16_t len = 0;
   const uint32_t seqs[3] = {256, 257, 258};
 
-  /* Full budget: 3 records -> 2 + 3*38 + 4 = 120 bytes */
-  CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 198, recs, seqs, 3, &packed, &len));
+  /* Full budget: 3 records -> 2 + 3*40 + 4 = 126 bytes */
+  CHECK(EncodeBulkPacketV7(buf, sizeof(buf), 198, recs, seqs, 3, &packed, &len));
   CHECK_EQ_I(packed, 3);
-  CHECK_EQ_I(len, 120);
-  CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_V6_PROVENANCE); /* 0x06 */
+  CHECK_EQ_I(len, 126);
+  CHECK_EQ_I(buf[0], BULK_PACKET_TYPE_V7_DUAL_BATT); /* 0x07 */
   CHECK_EQ_I(buf[1], 3);
   /* record 0 sequence u32 LE at bytes 2-5 (DDR-0005 explicit identity) */
   CHECK_EQ_I((uint32_t)buf[2] | ((uint32_t)buf[3] << 8) |
                  ((uint32_t)buf[4] << 16) | ((uint32_t)buf[5] << 24),
              256u);
-  /* record 1 sequence at bytes 40-43 (2 + 38) */
-  CHECK_EQ_I((uint32_t)buf[40] | ((uint32_t)buf[41] << 8) |
-                 ((uint32_t)buf[42] << 16) | ((uint32_t)buf[43] << 24),
+  /* record 1 sequence at bytes 42-45 (2 + 40) */
+  CHECK_EQ_I((uint32_t)buf[42] | ((uint32_t)buf[43] << 8) |
+                 ((uint32_t)buf[44] << 16) | ((uint32_t)buf[45] << 24),
              257u);
   /* Record 0 payload at buf[6]: timestamp LE */
   CHECK_EQ_I((uint32_t)buf[6] | ((uint32_t)buf[7] << 8) |
@@ -418,11 +422,13 @@ static void test_bulk_v3(void) {
     int p = buf[24] | (buf[25] << 8);
     CHECK(p == 10132 || p == 10133);
   }
-  /* STAB-04: record 1 quality/veto at record offsets 30/31 -> buf[40+4+30..] */
-  CHECK_REGRESSION(buf[74] == 0x01, "STAB-04"); /* sensor_quality */
-  CHECK_REGRESSION(buf[75] == 0x02, "STAB-04"); /* veto_reason */
-  /* per-record crc16 at record offset 32 -> buf[6+32] over 32 bytes from buf[6] */
-  CHECK_EQ_I(buf[38] | (buf[39] << 8), CalculateCRC16(buf + 6, 32));
+  /* v7: battery_rest_mv (u16) at record offset 22 -> buf[6+22]=buf[28]: 5100 = 0x13EC */
+  CHECK_EQ_I(buf[28] | (buf[29] << 8), 5100);
+  /* STAB-04: record 1 quality/veto at record offsets 32/33 -> buf[42+4+32..] */
+  CHECK_REGRESSION(buf[78] == 0x01, "STAB-04"); /* sensor_quality */
+  CHECK_REGRESSION(buf[79] == 0x02, "STAB-04"); /* veto_reason */
+  /* per-record crc16 at record offset 34 -> buf[6+34] over 34 bytes from buf[6] */
+  CHECK_EQ_I(buf[40] | (buf[41] << 8), CalculateCRC16(buf + 6, 34));
   /* packet crc32 LE over [0, len-4) */
   {
     uint32_t wire_crc = (uint32_t)buf[len - 4] | ((uint32_t)buf[len - 3] << 8) |
@@ -430,18 +436,18 @@ static void test_bulk_v3(void) {
     CHECK_EQ_I((long)wire_crc, (long)CalculateCRC32(buf, (uint32_t)(len - 4)));
   }
 
-  /* Budget for exactly 2 records (82 B): packs 2, third stays pending */
-  CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 82, recs, seqs, 3, &packed, &len));
+  /* Budget for exactly 2 records (86 B): packs 2, third stays pending */
+  CHECK(EncodeBulkPacketV7(buf, sizeof(buf), 86, recs, seqs, 3, &packed, &len));
   CHECK_EQ_I(packed, 2);
-  CHECK_EQ_I(len, 82);
+  CHECK_EQ_I(len, 86);
 
-  /* Budget for 1 record (44 B) */
-  CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 44, recs, seqs, 3, &packed, &len));
+  /* Budget for 1 record (46 B) */
+  CHECK(EncodeBulkPacketV7(buf, sizeof(buf), 46, recs, seqs, 3, &packed, &len));
   CHECK_EQ_I(packed, 1);
-  CHECK_EQ_I(len, 44);
+  CHECK_EQ_I(len, 46);
 
-  /* Budget too small for even one record (43 B): fails, packs nothing */
-  CHECK(!EncodeBulkPacketV6(buf, sizeof(buf), 43, recs, seqs, 3, &packed, &len));
+  /* Budget too small for even one record (45 B): fails, packs nothing */
+  CHECK(!EncodeBulkPacketV7(buf, sizeof(buf), 45, recs, seqs, 3, &packed, &len));
   CHECK_EQ_I(packed, 0);
 
   /* STAB-P3#8 (#243): budget BELOW the overhead - the unsigned subtraction
@@ -449,20 +455,20 @@ static void test_bulk_v3(void) {
    * with zeroed outputs. */
   packed = 99;
   len = 999;
-  CHECK_REGRESSION(!EncodeBulkPacketV6(buf, sizeof(buf), 4, recs, seqs, 3, &packed, &len), "STAB-P3-8");
+  CHECK_REGRESSION(!EncodeBulkPacketV7(buf, sizeof(buf), 4, recs, seqs, 3, &packed, &len), "STAB-P3-8");
   CHECK_REGRESSION(packed == 0 && len == 0, "STAB-P3-8-zeroed");
   packed = 99;
   len = 999;
-  CHECK_REGRESSION(!EncodeBulkPacketV6(buf, 2, 198, recs, seqs, 3, &packed, &len), "STAB-P3-8-bufcap");
+  CHECK_REGRESSION(!EncodeBulkPacketV7(buf, 2, 198, recs, seqs, 3, &packed, &len), "STAB-P3-8-bufcap");
 
   /* Buffer cap smaller than budget: buf_cap wins */
-  CHECK(EncodeBulkPacketV6(buf, 82, 198, recs, seqs, 3, &packed, &len));
+  CHECK(EncodeBulkPacketV7(buf, 86, 198, recs, seqs, 3, &packed, &len));
   CHECK_EQ_I(packed, 2);
-  CHECK_EQ_I(len, 82);
+  CHECK_EQ_I(len, 86);
 
   /* Golden vector (D9/§13): exact LE bytes, 2-record packet */
-  CHECK(EncodeBulkPacketV6(buf, sizeof(buf), 82, recs, seqs, 3, &packed, &len));
-  printf("GOLDEN bulk-v6 (2 records, seqs=256,257):");
+  CHECK(EncodeBulkPacketV7(buf, sizeof(buf), 86, recs, seqs, 3, &packed, &len));
+  printf("GOLDEN bulk-v7 (2 records, seqs=256,257):");
   for (uint16_t i = 0; i < len; i++)
     printf(" %02X", buf[i]);
   printf("\n");
@@ -487,6 +493,9 @@ static void test_commissioning_live_record(void) {
   CHECK_EQ_I(live.pressure, full.pressure);
   CHECK_EQ_I(live.timestamp, full.timestamp);
   CHECK_EQ_I(live.satellites, full.satellites);
+  /* v7: resting battery survives the commissioning encode */
+  CHECK_EQ_I(live.battery_rest_mv, 5100);
+  CHECK_EQ_I(full.battery_rest_mv, 5100);
   /* the CRC covers the zeroed record, not the un-zeroed one */
   CHECK(live.crc16 != full.crc16);
   CHECK_EQ_I(live.crc16, CalculateCRC16((const uint8_t *)&live, sizeof(live) - 2));
@@ -502,6 +511,7 @@ static void test_flashlog_conversion(void) {
   fr.humidity = 12.3f;
   fr.pressure = 250.0f;
   fr.battery_mv = 4800;
+  fr.battery_rest_mv = 4900;    /* v7: resting (pre-GNSS) sample */
   fr.solar_mv = 5100;           /* D5/F-025 (#35): archived solar */
   fr.voltage_slope = -7;        /* D5 (#35): archived slope */
   fr.power_mode = MODE_REDUCED; /* D5 (#35): archived mode */
@@ -519,6 +529,7 @@ static void test_flashlog_conversion(void) {
   CHECK_EQ_I(hr.altitude, 9000);
   CHECK_EQ_I(hr.temperature, -455);
   CHECK_EQ_I(hr.battery_voltage, 4800);
+  CHECK_EQ_I(hr.battery_rest_mv, 4900); /* v7: resting sample survives conversion */
   CHECK_EQ_I(hr.solar_voltage, 5100); /* from the record, not 0 (F-025) */
   CHECK_EQ_I(hr.voltage_slope, -7);   /* from the record */
   CHECK_EQ_I(hr.hdop, 15);

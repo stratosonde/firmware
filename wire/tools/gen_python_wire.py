@@ -48,7 +48,7 @@ def gen_frame(fr):
     name = fr["name"]
     if "record_length" in fr:
         return ""
-    if name == "bulk_packet_v6":
+    if name == "bulk_packet_v7":
         return gen_bulk(fr)
     total = fr["total_length"]
     L = []
@@ -92,31 +92,31 @@ def gen_frame(fr):
 
 
 def gen_bulk(fr):
-    return '''def decode_bulk_packet_v6(data_base64):
-    """Decode a bulk archive burst (port 11, v6). Envelope [0x06][count][records][crc32]."""
+    return '''def decode_bulk_packet_v7(data_base64):
+    """Decode a bulk archive burst (port 11, v7). Envelope [0x07][count][records][crc32]."""
     try:
         p = base64.b64decode(data_base64)
     except Exception:
         return None
-    if len(p) < 6 or p[0] != 0x06:
+    if len(p) < 6 or p[0] != 0x07:
         return None
     count = p[1]
-    if len(p) != 6 + 38 * count:
+    if len(p) != 6 + 40 * count:
         return None
     body, crc_got = p[:-4], struct.unpack_from('<I', p, len(p) - 4)[0]
     r = {'packet_type': p[0], 'count': count,
          'crc32_valid': (_crc32(body) == crc_got), 'records': []}
     for i in range(count):
-        base = 2 + i * 38
+        base = 2 + i * 40
         seq = struct.unpack_from('<I', p, base)[0]
-        rec = _decode_archive_record_v6(p[base + 4: base + 38])
+        rec = _decode_archive_record_v7(p[base + 4: base + 40])
         rec['sequence'] = seq
         r['records'].append(rec)
     return r
 
 
-def _decode_archive_record_v6(b):
-    """Decode one 34-byte v6 archive record."""
+def _decode_archive_record_v7(b):
+    """Decode one 36-byte v7 archive record (dual battery)."""
     r = {}
     r['timestamp'] = struct.unpack_from('<I', b, 0)[0]
     r['latitude_deg'] = struct.unpack_from('<i', b, 4)[0] * 90.0 / 8388607.0
@@ -125,18 +125,20 @@ def _decode_archive_record_v6(b):
     r['temperature_degC'] = struct.unpack_from('<h', b, 14)[0] * 0.1
     r['humidity_pct'] = struct.unpack_from('<H', b, 16)[0] * 0.1
     r['pressure_hPa'] = struct.unpack_from('<H', b, 18)[0] * 0.1
-    r['battery_mV'] = struct.unpack_from('<H', b, 20)[0]
-    r['solar_mV'] = struct.unpack_from('<H', b, 22)[0]
-    r['voltage_slope_mVh'] = struct.unpack_from('<h', b, 24)[0]
-    r['satellites'] = b[26]
-    r['hdop'] = b[27] * 0.1
-    r['power_mode'] = b[28]
-    r['flags'] = b[29]
-    r['sensor_quality'] = b[30]
-    r['veto_reason'] = b[31]
-    crc_got = struct.unpack_from('<H', b, 32)[0]
+    r['battery_mV'] = struct.unpack_from('<H', b, 20)[0]       # LOADED: post-GNSS
+    r['battery_rest_mV'] = struct.unpack_from('<H', b, 22)[0]  # RESTING: pre-GNSS
+    r['solar_mV'] = struct.unpack_from('<H', b, 24)[0]
+    r['voltage_slope_mVh'] = struct.unpack_from('<h', b, 26)[0]
+    r['satellites'] = b[28]
+    r['hdop'] = b[29] * 0.1
+    r['power_mode'] = b[30]
+    r['flags'] = b[31]
+    r['sensor_quality'] = b[32]
+    r['battery_load_phase'] = (b[32] >> 5) & 0x3  # 0=rest only, 1=loaded only, 2=both
+    r['veto_reason'] = b[33]
+    crc_got = struct.unpack_from('<H', b, 34)[0]
     r['crc16'] = crc_got
-    r['crc16_valid'] = (_crc16_modbus(b[:32]) == crc_got)
+    r['crc16_valid'] = (_crc16_modbus(b[:34]) == crc_got)
     return r
 
 '''
