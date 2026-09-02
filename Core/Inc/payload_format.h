@@ -7,7 +7,8 @@
  *
  * This module defines efficient binary packet formats for LoRaWAN transmission:
  * - CompactTelemetryPacket_t: 11-byte heartbeat packet for SF10 (maximum range w/ LinkCheck)
- * - HighResTelemetryRecord_t: 34-byte record (v6, STAB-04/#151) for archive transfer
+ * - HighResTelemetryRecord_t: 36-byte record (v7 dual-battery; was 34 in v6,
+ *   STAB-04/#151) for archive transfer
  * - Bulk wire format: variable-length v6 packets for SF7 archive bursts (0x06)
  *
  ******************************************************************************

@@ -334,9 +334,11 @@ uint16_t SerializeCompactLE(uint8_t *out, const CompactTelemetryPacket_t *p) {
 }
 
 /**
- * @brief Serialize one high-res record as 34 LE bytes (wire v6, STAB-04/#151).
- *        Field order matches HighResTelemetryRecord_t; crc16 covers bytes 0-31.
- * @retval number of bytes written (always 34)
+ * @brief Serialize one high-res record as 36 LE bytes (wire v7 dual-battery).
+ *        Field order matches HighResTelemetryRecord_t (v7 adds battery_rest_mv
+ *        after battery_voltage at offset 22); crc16 is at offset 34 covering
+ *        bytes 0-33.
+ * @retval number of bytes written (always 36)
  */
 static uint16_t SerializeRecordV4LE(uint8_t *out, const HighResTelemetryRecord_t *r) {
   PutU32LE(out + 0, r->timestamp);
@@ -518,14 +520,14 @@ bool PayloadFormat_ValidateSizes(void) {
     valid = false;
   }
 
-  if (sizeof(HighResTelemetryRecord_t) != 34) { /* v6, STAB-04 (#151) */
-    SONDE_LOG("ERROR: HighResTelemetryRecord_t size = %d bytes (expected 34)\r\n",
+  if (sizeof(HighResTelemetryRecord_t) != 36) { /* v7 dual-battery (STAB-04/#151 + battery_rest_mv) */
+    SONDE_LOG("ERROR: HighResTelemetryRecord_t size = %d bytes (expected 36)\r\n",
               sizeof(HighResTelemetryRecord_t));
     valid = false;
   }
 
   if (valid) {
-    SONDE_LOG_STR("Payload format sizes validated: 11/34 bytes\r\n");
+    SONDE_LOG_STR("Payload format sizes validated: 11/36 bytes\r\n");
   }
 
   return valid;
