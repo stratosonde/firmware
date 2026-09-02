@@ -25,6 +25,10 @@ IDE/
 # GUI-created build-configuration output folders (e.g. US915/)
 /US915/
 
+# CubeIDE Release-configuration build output (only Debug/ is the tracked
+# build system, per the R49 note above; a Release/ tree is all artifacts)
+Release/
+
 # Temporary files
 *.tmp
 *.temp
