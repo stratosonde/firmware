@@ -348,8 +348,8 @@ static uint16_t SerializeRecordV4LE(uint8_t *out, const HighResTelemetryRecord_t
   PutU16LE(out + 14, (uint16_t)r->temperature);
   PutU16LE(out + 16, r->humidity);
   PutU16LE(out + 18, r->pressure);
-  PutU16LE(out + 20, r->battery_voltage);   /* LOADED: post-GNSS */
-  PutU16LE(out + 22, r->battery_rest_mv);   /* v7: RESTING: pre-GNSS */
+  PutU16LE(out + 20, r->battery_voltage); /* LOADED: post-GNSS */
+  PutU16LE(out + 22, r->battery_rest_mv); /* v7: RESTING: pre-GNSS */
   PutU16LE(out + 24, r->solar_voltage);
   PutU16LE(out + 26, (uint16_t)r->voltage_slope);
   out[28] = r->satellites;

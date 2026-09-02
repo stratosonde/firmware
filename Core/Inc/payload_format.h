@@ -159,10 +159,10 @@ typedef struct __attribute__((packed)) {
  * "Loaded" = sampled after GNSS acquisition (receiver hot up to gps_timeout_ms) —
  * the sag point. Both are needed to reconstruct the sag-vs-temperature curve. */
 #define SENSOR_QUALITY_LOAD_SHIFT 5
-#define SENSOR_QUALITY_LOAD_MASK 0x60       // bits 5-6
-#define SENSOR_QUALITY_LOAD_REST_ONLY 0x00  // only the resting sample is valid
+#define SENSOR_QUALITY_LOAD_MASK 0x60        // bits 5-6
+#define SENSOR_QUALITY_LOAD_REST_ONLY 0x00   // only the resting sample is valid
 #define SENSOR_QUALITY_LOAD_LOADED_ONLY 0x20 // only the loaded sample is valid
-#define SENSOR_QUALITY_LOAD_BOTH 0x40       // resting + loaded both valid (expected)
+#define SENSOR_QUALITY_LOAD_BOTH 0x40        // resting + loaded both valid (expected)
 
 /* ---- Historical bulk v2 (packet_type 0x02): 198 B fixed, 6 x 32B records ----
  * The v2 struct/encoder (BulkTelemetryPacket_t, EncodeBulkPacketFromRecords)
