@@ -36,6 +36,8 @@ typedef enum {
 /** @brief Breadcrumb magic: upper 16 bits of the breadcrumb register */
 #define RESET_CAUSE_FAULT_MAGIC 0xF17B0000UL
 #define RESET_CAUSE_FAULT_MASK 0xFFFF0000UL
+/** @brief F-DIAG: magic marking DR16-DR18 (fault context) valid this boot. */
+#define RESET_CAUSE_FAULT_CTX_MAGIC 0xC0FFEE01UL
 
 /**
  * @brief Capture and condense the reset cause. Call once, early in boot,
@@ -62,6 +64,21 @@ uint32_t ResetCause_GetBootAttempts(void);
 
 /** @brief Clear the consecutive-boot counter (call on proven progress). */
 void ResetCause_ClearBootAttempts(void);
+
+/**
+ * @brief F-DIAG: print the last fault's context (class, stacked PC, CFSR,
+ *        BFAR/MMFAR) captured by the fault handlers in stm32wlxx_it.c, if a
+ *        valid context marker is present. Clears the marker so it prints once.
+ *        Call once at boot (bench diagnosis of a repeating boot-loop fault).
+ */
+void ResetCause_PrintFaultContext(void);
+
+/** @brief F-DIAG: re-print the fault context cached by the first
+ * ResetCause_PrintFaultContext() call. Used at the reliably-visible "Reset
+ * cause" log point — the early print can be lost to the RTT host attach race
+ * and a later BDRST can wipe the TAMP source, so the cached copy in RAM is
+ * the only version guaranteed printable. No-op when nothing was cached. */
+void ResetCause_RepaintFaultContext(void);
 
 #ifdef __cplusplus
 }

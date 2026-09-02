@@ -68,7 +68,38 @@ extern DMA_HandleTypeDef hdma_usart1_rx;
 /******************************************************************************/
 /*           Cortex Processor Interruption and Exception Handlers          */
 /******************************************************************************/
-static void Fault_Reset(uint16_t code);  /* F1: defined below */
+static void Fault_Reset(uint16_t code); /* F1: defined below */
+
+/**
+ * F-DIAG: capture the fault CONTEXT into RTC backup (TAMP) registers before
+ * the breadcrumb-and-reset, so a repeating boot-loop fault can be localized
+ * on the next boot. Writes TAMP->BKPxxR DIRECTLY (not HAL_RTCEx_BKUPWrite):
+ * the latter read-modify-writes the RTC shadow registers, which are NOT
+ * reliable in fault context when the fault fires before HAL_RTC_Init. The
+ * TAMP battery-backed registers are single 32-bit stores -- atomic, no sync.
+ * SCB->CFSR is a plain system-register read (always safe). sp is the
+ * interrupted frame stack pointer (MSP or PSP per EXC_RETURN) passed by the
+ * naked handler; sp[6] is the stacked (faulting) PC.
+ */
+__attribute__((always_inline)) static inline void
+Fault_CaptureContext(const uint32_t *sp, uint16_t code) {
+  uint32_t pc = (sp != 0) ? sp[6] : 0U;
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_RTCAPB_CLK_ENABLE();
+  TAMP->BKP16R = pc;                          /* BKP_REG_FAULT_PC */
+  TAMP->BKP17R = (uint32_t)code;              /* BKP_REG_FAULT_CFSR: class */
+  TAMP->BKP18R = SCB->CFSR;                   /* BKP_REG_FAULT_BFAR: CFSR */
+  TAMP->BKP19R = RESET_CAUSE_FAULT_CTX_MAGIC; /* BKP_REG_FAULT_MAGIC */
+}
+
+/* F-DIAG: common tail for the naked fault handlers. r0 = interrupted frame
+ * SP, r1 = fault class. Captures context, then runs the F1 epilogue. Marked
+ * used + noinline: reached only via the asm trampolines. */
+__attribute__((used, noinline)) static void
+Fault_CaptureResetCommon(uint32_t *sp, uint16_t code) {
+  Fault_CaptureContext(sp, code);
+  Fault_Reset(code);
+}
 
 /**
   * @brief This function handles Non maskable interrupt.
@@ -107,50 +138,65 @@ static void Fault_Reset(uint16_t code)
 }
 
 /**
-  * @brief This function handles Hard fault interrupt.
-  */
-void HardFault_Handler(void)
-{
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-  Fault_Reset(1);  /* 1 = HardFault */
-  /* USER CODE END HardFault_IRQn 0 */
+ * @brief This function handles Hard fault interrupt.
+ *        Naked: grab the active SP, capture fault context, reset.
+ */
+__attribute__((naked)) void HardFault_Handler(void) {
+  __asm volatile(
+      "tst lr, #4          \n"
+      "ite eq              \n"
+      "mrseq r0, msp       \n"
+      "mrsne r0, psp       \n"
+      "movs r1, #1         \n" /* 1 = HardFault */
+      "b Fault_CaptureResetCommon \n");
 }
 
 /**
-  * @brief This function handles Memory management fault.
-  */
-void MemManage_Handler(void)
-{
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  Fault_Reset(2);  /* 2 = MemManage */
-  /* USER CODE END MemoryManagement_IRQn 0 */
+ * @brief This function handles Memory management fault.
+ *        Naked: grab the active SP, capture fault context, reset.
+ */
+__attribute__((naked)) void MemManage_Handler(void) {
+  __asm volatile(
+      "tst lr, #4          \n"
+      "ite eq              \n"
+      "mrseq r0, msp       \n"
+      "mrsne r0, psp       \n"
+      "movs r1, #2         \n" /* 2 = MemManage */
+      "b Fault_CaptureResetCommon \n");
 }
 
 /**
-  * @brief This function handles Prefetch fault, memory access fault.
-  */
-void BusFault_Handler(void)
-{
-  /* USER CODE BEGIN BusFault_IRQn 0 */
-  Fault_Reset(3);  /* 3 = BusFault */
-  /* USER CODE END BusFault_IRQn 0 */
+ * @brief This function handles Prefetch fault, memory access fault.
+ *        Naked: grab the active SP, capture fault context, reset.
+ */
+__attribute__((naked)) void BusFault_Handler(void) {
+  __asm volatile(
+      "tst lr, #4          \n"
+      "ite eq              \n"
+      "mrseq r0, msp       \n"
+      "mrsne r0, psp       \n"
+      "movs r1, #3         \n" /* 3 = BusFault */
+      "b Fault_CaptureResetCommon \n");
 }
 
 /**
-  * @brief This function handles Undefined instruction or illegal state.
-  */
-void UsageFault_Handler(void)
-{
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
-  Fault_Reset(4);  /* 4 = UsageFault */
-  /* USER CODE END UsageFault_IRQn 0 */
+ * @brief This function handles Undefined instruction or illegal state.
+ *        Naked: grab the active SP, capture fault context, reset.
+ */
+__attribute__((naked)) void UsageFault_Handler(void) {
+  __asm volatile(
+      "tst lr, #4          \n"
+      "ite eq              \n"
+      "mrseq r0, msp       \n"
+      "mrsne r0, psp       \n"
+      "movs r1, #4         \n" /* 4 = UsageFault */
+      "b Fault_CaptureResetCommon \n");
 }
 
 /**
-  * @brief This function handles System service call via SWI instruction.
-  */
-void SVC_Handler(void)
-{
+ * @brief This function handles System service call via SWI instruction.
+ */
+void SVC_Handler(void) {
   /* USER CODE BEGIN SVCall_IRQn 0 */
 
   /* USER CODE END SVCall_IRQn 0 */
@@ -160,10 +206,9 @@ void SVC_Handler(void)
 }
 
 /**
-  * @brief This function handles Debug monitor.
-  */
-void DebugMon_Handler(void)
-{
+ * @brief This function handles Debug monitor.
+ */
+void DebugMon_Handler(void) {
   /* USER CODE BEGIN DebugMonitor_IRQn 0 */
 
   /* USER CODE END DebugMonitor_IRQn 0 */

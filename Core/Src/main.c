@@ -186,6 +186,15 @@ int main(void) {
    * the boot-time breadcrumb lost. Idempotent; MX_RTC_Init sets it again. */
   hrtc.Instance = RTC;
 
+  /* F-DIAG: report the previous boot's fault context EARLY — BEFORE
+   * SystemClock_Config(). The LSE-CSS recovery inside clock config can force
+   * a backup-domain reset (LL_RCC_ForceBackupDomainReset) that wipes the TAMP
+   * breadcrumbs the fault handler captured, so printing must happen first.
+   * The print is pure TAMP reads + RTT: no clock-tree dependency. */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_RTCAPB_CLK_ENABLE();
+  ResetCause_PrintFaultContext();
+
   /* FW-5 / FR-01 (#83): arm the IWDG BEFORE clock config. HAL_RCC_OscConfig()
    * waits for the LSE with an HAL_GetTick()-based timeout, but the tick
    * override (sys_app.c) returns a constant 0 until SYS_TimerInitialisedFlag
@@ -213,6 +222,12 @@ int main(void) {
    * work cycle completes (F-03/#65). */
   SONDE_LOG("Reset cause: %u, boot attempt #%lu\r\n",
             (unsigned)ResetCause_Get(), (unsigned long)ResetCause_GetBootAttempts());
+  /* F-DIAG: fault-context print moved earlier (before SystemClock_Config) —
+   * see the ResetCause_PrintFaultContext() call above. The LSE-CSS recovery
+   * inside clock config can wipe the TAMP breadcrumbs before this point.
+   * The early print is often lost to the RTT attach race, so re-print the
+   * CACHED context here — this log region is visible in every capture. */
+  ResetCause_RepaintFaultContext();
 
   /* USER CODE BEGIN SysInit */
 
@@ -1109,6 +1124,13 @@ void Error_Handler_Fatal(uint16_t code) {
   SONDE_LOG("FATAL_ERROR %u: breadcrumb + system reset\r\n", code);
   HAL_RTCEx_BKUPWrite(&hrtc, RESET_CAUSE_BKP_FAULT_REG,
                       RESET_CAUSE_FAULT_MAGIC | (uint32_t)code);
+  /* F-DIAG: drain the RTT buffer before resetting. RTT is non-blocking and
+   * the control block is re-initialized by the next boot, so the FATAL_ERROR /
+   * "flash logging initialization failed (status)" lines above are lost
+   * without this pause. Busy-wait (not HAL_Delay): this path can run before
+   * the tick is alive. ~1M cycles ≈ 20 ms at 48 MHz. */
+  for (volatile uint32_t i = 0; i < 1000000UL; i++) {
+  }
   for (;;) {
     NVIC_SystemReset();
   }

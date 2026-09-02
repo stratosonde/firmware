@@ -57,13 +57,15 @@ extern "C" {
 #define BKP_REG_TS_WRAP RTC_BKP_DR13          /* lora_app.c timestamp-wrap latch magic (STAB-12/#159) */
 #define BKP_REG_GPS_LOSS_EPOCH RTC_BKP_DR14   /* lora_app.c GPS-loss grace epoch seconds (STAB-01/#148) */
 #define BKP_REG_LAUNCH_REF RTC_BKP_DR15       /* mission_state.c launch reference: magic|hPa x10 (F1/#167) */
-/* PWR-SIMPLIFY (2026-08-24): the voltage-slope ladder (and H-12/#288
- * persistence) is deleted; DR16-DR19 are FREE. Do not reassign without
- * mirroring the map in config.h and multiregion_context.c. */
-#define BKP_REG_FREED_DR16 RTC_BKP_DR16 /* was BKP_REG_SLOPE_VALID_LAST (slope ladder) */
-#define BKP_REG_FREED_DR17 RTC_BKP_DR17 /* was BKP_REG_SLOPE_MV                      */
-#define BKP_REG_FREED_DR18 RTC_BKP_DR18 /* was BKP_REG_SLOPE_BASE_TS                 */
-#define BKP_REG_FREED_DR19 RTC_BKP_DR19 /* was BKP_REG_SLOPE_CUR_TS                  */
+/* F-DIAG (boot-loop root cause): DR16-DR19 carry the fault CONTEXT captured by
+ * the fault handlers in stm32wlxx_it.c immediately before reset (the existing
+ * DR4 breadcrumb only stores the 0-4 fault class). On the next boot,
+ * main.c prints class + stacked PC + CFSR + BFAR/MMFAR so a repeating boot-loop
+ * fault can be localized to an exact instruction. Diagnostic only. */
+#define BKP_REG_FAULT_PC RTC_BKP_DR16    /* stacked PC (faulting instruction) */
+#define BKP_REG_FAULT_CFSR RTC_BKP_DR17  /* SCB->CFSR (configurable fault status) */
+#define BKP_REG_FAULT_BFAR RTC_BKP_DR18  /* SCB->BFAR (bus fault address) */
+#define BKP_REG_FAULT_MAGIC RTC_BKP_DR19 /* magic so boot knows DR16-18 are valid */
 
 #ifdef __cplusplus
 }
